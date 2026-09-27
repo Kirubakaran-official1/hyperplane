@@ -250,6 +250,7 @@ class SettingsIn(BaseModel):
     retention_days: int = 0
     manual_keep: str = "all"
     telegram_enabled: bool = True
+    nr_mother_body_pct: float = 60
 
 
 @app.get("/api/admin/settings")
@@ -268,6 +269,8 @@ def write_settings(body: SettingsIn, user=Depends(admin_user)):
         raise HTTPException(422, f"Check the times and dates: {e}")
     if body.manual_keep not in ("all", "latest"):
         raise HTTPException(422, "manual_keep must be 'all' or 'latest'")
+    if not 1 <= body.nr_mother_body_pct <= 100:
+        raise HTTPException(422, "Mother candle body % must be between 1 and 100")
     s = body.model_dump()
     s.update(schedule_times=times, skip_dates=skips, retention_days=max(0, body.retention_days),
              catch_up_minutes=max(0, min(body.catch_up_minutes, 720)))

@@ -73,6 +73,7 @@ DEFAULT_SETTINGS = {
     "retention_days": 0,                    # 0 = keep everything
     "manual_keep": "all",                   # all | latest  (manual syncs kept per day)
     "telegram_enabled": True,
+    "nr_mother_body_pct": 60,               # NR mother candle: body must be at least this % of high-low
 }
 
 

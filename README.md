@@ -134,7 +134,9 @@ From now on:
 ```
 edit on your computer  →  docker compose up -d --build  (check http://localhost)  →  git commit + git push
 
-
+git add .
+git commit -m "your message here"
+git push
 
 ```
 GitHub updates the server in about 1–2 minutes (see the repo's **Actions** tab). Only what changed is rebuilt:

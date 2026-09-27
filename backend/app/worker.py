@@ -101,6 +101,8 @@ def claim_job():
 def run_scanner(run_dir, settings):
     """Runs chartink_fast inside run_dir; returns the path of the Excel it wrote."""
     from scanner import chartink_fast as sc                      # imported late: heavy module
+    sc.NR_MOTHER_BODY_PCT = float(settings["nr_mother_body_pct"])
+    print(f"NR mother candle: body >= {sc.NR_MOTHER_BODY_PCT:g}% of the range")
     creds = config.telegram() if settings.get("telegram_enabled", True) else None
     send = creds is not None
     os.chdir(run_dir)

@@ -824,10 +824,10 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
   const [navOpen, setNavOpen] = useState(false);
   const [ctFilters, setCtFilters] = useState(0);
   const [healthAllow, setHealthAllowState] = useState(() => {
-    const v = loadPref("hp_health_allow", "HEALTHY,WEAK,POOR").split(",").filter(h=>HEALTH_LEVELS.includes(h));
-    return new Set(v.length ? v : HEALTH_LEVELS);
+    const v = loadPref("hp_health_allow_v2", HEALTH_DEFAULT.join(",")).split(",").filter(h=>HEALTH_LEVELS.includes(h));
+    return new Set(v.length ? v : HEALTH_DEFAULT);
   });
-  const setHealthAllow = upd => setHealthAllowState(prev => { const n = typeof upd==="function" ? upd(prev) : upd; savePref("hp_health_allow", [...n].join(",")); return n; });
+  const setHealthAllow = upd => setHealthAllowState(prev => { const n = typeof upd==="function" ? upd(prev) : upd; savePref("hp_health_allow_v2", [...n].join(",")); return n; });
   const healthMode = HEALTH_LEVELS.every(h=>healthAllow.has(h)) ? "all" : "custom";
   const hIdx = useMemo(() => healthIndex(rawVersions), [rawVersions]);
   const excluded = useMemo(() => {
@@ -1056,12 +1056,15 @@ function WatchlistBuilder({ db }) {
 function StrategyFlowPanel({ db }) {
   const tfData = useMemo(()=>{
     const m={};
+    FOCUS_TFS.forEach(t=>{ m[t]={tf:TF_NAME[t],LONG:0,SHORT:0,MIXED:0,RETRACEMENT:0,total:0}; });
     db.flat.forEach(r=>{
-      const tf=r.Timeframe||"Unknown", bias=r.Trading_Bias;
-      if(!m[tf])m[tf]={tf,LONG:0,SHORT:0,MIXED:0,RETRACEMENT:0,total:0};
-      m[tf][bias]=(m[tf][bias]||0)+1; m[tf].total++;
+      if (r.Signal_Category!=="ZONE" && r.Signal_Category!=="NR_PATTERN") return;
+      const c=classifySignal(r), t=m[c.tf];
+      if (!t) return;
+      const b = r.Signal_Type==="RETRACEMENT" ? "RETRACEMENT" : c.dir>0 ? "LONG" : c.dir<0 ? "SHORT" : "MIXED";
+      t[b]++; t.total++;
     });
-    return Object.values(m).sort((a,b)=>b.total-a.total).slice(0,8);
+    return FOCUS_TFS.map(t=>m[t]).filter(t=>t.total);
   },[db.flat]);
   const maxTotal=Math.max(...tfData.map(t=>t.total),1);
   return (
@@ -4147,6 +4150,8 @@ function mergeDBs(dbs) {
 
 // ─── STOCK QUALITY (Price_Health) — global filter applied to every page ───────
 const HEALTH_LEVELS = ["HEALTHY","WEAK","POOR"];
+const HEALTH_DEFAULT = ["HEALTHY"];
+const isHealthDefault = allow => allow.size===HEALTH_DEFAULT.length && HEALTH_DEFAULT.every(h=>allow.has(h));
 const HEALTH_C = { POOR:"var(--short)", WEAK:"var(--mixed)", HEALTHY:"var(--long)" };
 const HEALTH_LABEL = { HEALTHY:"Healthy", WEAK:"Weak", POOR:"Poor" };
 
@@ -4246,10 +4251,10 @@ const CT_NAV = [
   { group:"Trade ideas", items:[
     ["ct-opps","🔮","Opportunities"], ["ct-returns","💰","Return expectations"], ["ct-watch","📌","Watchlist builder"] ]},
 ];
-const CAP_OPTS = [["all","All caps"],["large","Large 100"],["mid","Mid 150"],["small","Small 250"]];
+const CAP_OPTS = [["all","All stocks"],["n500","Nifty 500"],["large","Large 100"],["mid","Mid 150"],["small","Small 250"]];
 
-const ctFilterCount = (f, health) => (f.dir!=="ALL") + f.fno + !!f.n500 + (f.cap!=="all") + !!f.sector
-  + !!(health && health.hIdx.available && !HEALTH_LEVELS.every(h=>health.allow.has(h)));
+const ctFilterCount = (f, health) => (f.dir!=="ALL") + f.fno + (f.cap!=="all") + !!f.sector
+  + !!(health && health.hIdx.available && !isHealthDefault(health.allow));
 
 function CTSideNav({ open, setOpen, f, setF, sectors, health, onShowList, active, counts }) {
   const jump = id => { const el=document.getElementById(id); if (el) el.scrollIntoView({behavior:"smooth",block:"start"}); };
@@ -4266,7 +4271,7 @@ function CTSideNav({ open, setOpen, f, setF, sectors, health, onShowList, active
     <aside className={`ct-nav ${open?"open":""}`} aria-hidden={!open}>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
         <span style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>Filters</span>
-        {nOn>0 && <button onClick={()=>{ setF({dir:"ALL",fno:false,n500:false,cap:"all",sector:""}); health.setAllow(new Set(HEALTH_LEVELS)); }} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>Reset ({nOn})</button>}
+        {nOn>0 && <button onClick={()=>{ setF({dir:"ALL",fno:false,cap:"all",sector:""}); health.setAllow(new Set(HEALTH_DEFAULT)); }} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>Reset ({nOn})</button>}
         <button onClick={()=>setOpen(false)} title="Close (Esc)" style={{marginLeft:"auto",fontSize:14,width:26,height:26,borderRadius:6,border:"1px solid var(--b2)",background:"var(--s2)",color:"var(--t2)",lineHeight:1}}>✕</button>
       </div>
 
@@ -4292,7 +4297,6 @@ function CTSideNav({ open, setOpen, f, setF, sectors, health, onShowList, active
       <Lbl>Segment</Lbl>
       <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
         <div onClick={()=>setF(p=>({...p,fno:!p.fno}))} style={chip(f.fno,"var(--long)")}>{f.fno?"✓ ":""}F&amp;O only</div>
-        <div onClick={()=>setF(p=>({...p,n500:!p.n500}))} style={chip(f.n500,"var(--ret)")}>{f.n500?"✓ ":""}Nifty 500</div>
         {CAP_OPTS.map(([k,l])=><div key={k} onClick={()=>setF(p=>({...p,cap:k}))} style={chip(f.cap===k)}>{l}</div>)}
       </div>
       <Lbl>Sector</Lbl>
@@ -4347,7 +4351,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
   const mode = safeIdx.length===1 && safeIdx[0]===n-1 ? "latest" : safeIdx.length===n ? "all" : "custom";
 
   // side-nav filters (Control Tower only; stock quality is global and lives in App)
-  const [f, setF] = useState({ dir:"ALL", fno:false, n500:false, cap:"all", sector:"" });
+  const [f, setF] = useState({ dir:"ALL", fno:false, cap:"all", sector:"" });
   const [healthList, setHealthList] = useState(null);
   const [active, setActive] = useState("ct-market");
 
@@ -4355,12 +4359,13 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
   const sectors = useMemo(()=>[...new Set(Object.values(attrs).map(x=>x.sector).filter(Boolean))].sort(), [attrs]);
   const scopeEx = useMemo(()=>{
     const ex = new Set();
-    if (!f.fno && !f.n500 && f.cap==="all" && !f.sector) return ex;
+    if (!f.fno && f.cap==="all" && !f.sector) return ex;
     Object.entries(attrs).forEach(([sym,x]) => {
-      if ((f.fno && !x.fno) || (f.n500 && !x.n500) || (f.cap!=="all" && x.cap!==f.cap) || (f.sector && x.sector!==f.sector)) ex.add(sym);
+      const capOk = f.cap==="all" || (f.cap==="n500" ? x.n500 : x.cap===f.cap);
+      if ((f.fno && !x.fno) || !capOk || (f.sector && x.sector!==f.sector)) ex.add(sym);
     });
     return ex;
-  }, [attrs, f.fno, f.n500, f.cap, f.sector]);
+  }, [attrs, f.fno, f.cap, f.sector]);
   const db = useMemo(()=>filterDB(merged.db, scopeEx), [merged, scopeEx]);
   const model = useMemo(()=>buildFocusModel(db, merged.presence, merged.nFiles), [db, merged]);
   const modelBySym = useMemo(()=>{ const m={}; model.list.forEach(s=>{ m[s.symbol]=s; }); return m; }, [model]);
@@ -4449,7 +4454,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
               Showing <strong style={{color:"var(--t1)"}}>{safeIdx.length===1?"a single file":`${safeIdx.length} files combined`}</strong> ({rangeText}) · {shownN.toLocaleString()} stocks after filters.
               {safeIdx.length>1 && <span style={{color:"var(--t3)"}}> Combining rules: each stock+signal pair counted once, stock details and lists from the newest selected file, sector/industry scores averaged, and a <span style={{color:"#38bdf8"}}>persistence</span> bonus for stocks that show up in more of the selected files.</span>}
               {n===1 && <span style={{color:"var(--t3)"}}> Upload several dated files together to unlock multi-file scopes.</span>}
-              {(f.dir!=="ALL"||f.fno||f.n500||f.cap!=="all"||f.sector) && <span style={{color:"var(--acc)"}}> Filters on: {[f.dir!=="ALL"&&(f.dir==="LONG"?"Long":"Short"), f.fno&&"F&O only", f.n500&&"Nifty 500", f.cap!=="all"&&CAP_OPTS.find(c=>c[0]===f.cap)[1], f.sector].filter(Boolean).join(" · ")}. Sector and industry scores come from the Excel and are not re-computed.</span>}
+              {(f.dir!=="ALL"||f.fno||f.cap!=="all"||f.sector) && <span style={{color:"var(--acc)"}}> Filters on: {[f.dir!=="ALL"&&(f.dir==="LONG"?"Long":"Short"), f.fno&&"F&O only", f.cap!=="all"&&CAP_OPTS.find(c=>c[0]===f.cap)[1], f.sector].filter(Boolean).join(" · ")}. Sector and industry scores come from the Excel and are not re-computed.</span>}
             </div>
           </div>
         </div>

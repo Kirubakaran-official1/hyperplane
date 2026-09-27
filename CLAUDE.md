@@ -115,7 +115,9 @@ Zone vocabulary per timeframe (from raw-data-5): **top band** = `top_near .. top
 
 ### NR / mother candle — CONFIRMED from the owner's scans
 - Mother = the candle **N bars ago** (N = 4..12, TFs D W M Q Y; names like `W_NR_5W_BO`, `M_N_4M_HN`).
-- Mother must have a real body: `(H-L)/2 + |O-C|/2 >= (H-L)/2 * NR_MOTHER_BODY_FACTOR` with **1.5 for every scan**.
+- Mother must have a real body: `|O-C| >= (H-L) * NR_MOTHER_BODY_PCT/100`. The % is an **Admin setting**
+  (`nr_mother_body_pct`, default 60, owner's choice); the worker sets it on the scanner before each run.
+  The old ChartInk "1.5" factor equals 50%.
 - Bars 1..N-1: **body only** (open AND close) inside mother High..Low. **Wicks may go outside.** (Owner: "I want only
   the body inside the mother candle, not wick".)
 - Latest close decides: **BO** close ≥ mother High · **BD** close ≤ mother Low · **HN** inside and close ≥ High×0.95
@@ -164,13 +166,14 @@ Price_Health, Failed_NR. Symbols in Flat_Data_For_Slicers are TradingView style 
   Tabs: Control Tower, Sector & Industry, Slicer, Opportunities, Horizon, Conviction, Multi-TF NR, Virgin BO/BD,
   Signals, Master List, (+ Trend & Versions when >1 version), + extraTabs from server.jsx (Intraday Compare, Admin).
 - **Global stock-quality filter** (Healthy/Weak/Poor tick-boxes, unrated counts as Weak) is applied to every tab via
-  `healthIndex` → `excludedSymbols` → `filterDB`. Remembered in localStorage.
+  `healthIndex` → `excludedSymbols` → `filterDB`. Default **Healthy only** (`HEALTH_DEFAULT`), remembered in
+  localStorage key `hp_health_allow_v2`.
 - **Control Tower** (`ControlTowerCombined`) order: data scope → Market Intelligence (KPIs, Alpha rankings,
   Sector/Industry bubble panels, Movers·F&O·Flow·Bias) → Focus Command (Priority radar, HTF×LTF confluence, Focus
   map, Alignment matrix, Sector×TF heat, Near breakout · Relative strength · Conflict · Industry hotspots) → Setup
   Scanner (Zone Breakout Analyser, Stacked setups, setup lists, NR Trap) → Opportunities → Return Expectations →
   Watchlist Builder. Side nav `CTSideNav` (drawer, ☰ in the tab bar): quality, Direction All/Long/Short, F&O only,
-  Nifty 500, cap (Large 100 / Mid 150 / Small 250), sector, and jump links to `Anchor` ids (`ct-*`).
+  segment (All / Nifty 500 / Large 100 / Mid 150 / Small 250), sector, and jump links to `Anchor` ids (`ct-*`).
   Direction locks the side of Opportunities / Return Expectations / NR Trap / breakout analyser via `useLockable`.
 - Key logic: `buildFocusModel` (score, TF ladder, dir per stock), `SETUP_DEFS` + `stockSetups`,
   `buildOpportunities` (zone path + NR nested/domino; conviction High ≥ 9, Medium ≥ 6; targets Q/M/W),
@@ -202,7 +205,7 @@ failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSO
 
 ### Settings (Admin tab; defaults in `db.DEFAULT_SETTINGS`)
 schedule_times ["09:45","14:30"] · weekdays_only true · skip_dates [] (NSE holidays) · catch_up_minutes 180 ·
-retention_days 0 (forever) · manual_keep all|latest · telegram_enabled true.
+retention_days 0 (forever) · manual_keep all|latest · telegram_enabled true · nr_mother_body_pct 60.
 
 ### Worker
 Polls every 15 s: queue due slots → claim next queued job → `run_scanner()` in `data/runs/job_N` (chdir, stdout

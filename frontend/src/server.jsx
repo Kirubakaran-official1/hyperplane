@@ -202,7 +202,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
         <Tile label="Telegram" value={!form.telegram_enabled ? "Off" : sys.telegram_configured ? "On" : "Not set up"} color={form.telegram_enabled && sys.telegram_configured ? "var(--long)" : "var(--t2)"} sub={sys.telegram_configured ? "bot token in config.ini" : "add bot_token / chat_id in config.ini"} />
       </div>
 
-      <EqRow height={430} cols="minmax(0,1fr) minmax(0,1.3fr)" min={320}>
+      <EqRow height={460} cols="minmax(0,1fr) minmax(0,1.3fr)" min={320}>
         <FocusCard icon="🕘" title="Collection schedule" sub="Times are IST. Each time creates one stored collection per trading day.">
           <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
             <div>
@@ -231,6 +231,9 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
               <Pill active={form.manual_keep === "all"} onClick={() => setForm(f => ({ ...f, manual_keep: "all" }))}>Keep all</Pill>
               <Pill active={form.manual_keep === "latest"} onClick={() => setForm(f => ({ ...f, manual_keep: "latest" }))}>Keep only the latest per day</Pill>
             </div>
+            <label style={{ fontSize: 11.5 }} title="Used by every NR scan and the NR Trap. Applies from the next collection.">
+              NR mother candle: body at least <input id="mother-body-pct" type="number" min="1" max="100" step="1" value={form.nr_mother_body_pct} onChange={e => setForm(f => ({ ...f, nr_mother_body_pct: e.target.value === "" ? "" : +e.target.value }))} style={{ ...input, width: 56 }} /> % of the candle (high − low)
+            </label>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button onClick={save} disabled={saving} style={btn(true)}>{saving ? "Saving…" : "Save settings"}</button>
               <span style={{ fontSize: 10.5, color: "var(--t3)" }}>Next: {cfg.next_runs.slice(0, 3).map(fmtDT).join(" · ") || "none"}</span>

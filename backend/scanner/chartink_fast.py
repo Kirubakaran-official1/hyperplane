@@ -95,13 +95,13 @@ exclude_words = ['liquid', 'etf', 'nifty', 'bees']   # symbols containing these 
 
 # ---------------------------------------------------------------- NR (mother candle) --
 #   1. mother candle = the candle N bars ago:
-#        (H-L)/2 + sqrt(square(O-C))/2 >= (H-L)/2 * NR_MOTHER_BODY_FACTOR
+#        body |O-C| >= NR_MOTHER_BODY_PCT % of the candle range (H-L)
 #   2. bars 1..N-1   = BODY (open and close) inside mother High..Low. Wicks may go outside.
 #   3. latest close  = BO: >= mother High | BD: <= mother Low
 #                      HN: inside and >= mother High * NR_NEAR_RATIO
 #                      LW: inside and <= mother Low / NR_NEAR_RATIO
 #   Same rule for all NR scans. No trend, no price filter, all stocks.
-NR_MOTHER_BODY_FACTOR = 1.5     # the "Number 1.5" in your mother-candle condition
+NR_MOTHER_BODY_PCT = 60         # set from Admin by the server app; the old ChartInk "1.5" factor = 50
 NR_NEAR_RATIO = 1.9 / 2         # near-high: close >= high * 0.95   |   near-low: close <= low * 2/1.9
 
 # ---------------------------------------------------------------- VIRGIN BO / BD --
@@ -131,7 +131,7 @@ HEALTH_WEAK_DRAWDOWN_PCT = 50
 HEALTH_WEAK_YEARS = 5
 
 # ---------------------------------------------------------------- FAILED NR / TRAP (Failed_NR sheet) --
-#   Same mother candle as NR (NR_MOTHER_BODY_FACTOR), then:
+#   Same mother candle as NR (NR_MOTHER_BODY_PCT), then:
 #   Failed BO -> BUY  : one or more bars after the mother CLOSED above mother High (breakout),
 #                       no bar closed below mother Low, every other bar's body stayed inside,
 #                       and the latest close is back inside, near mother Low (close <= Low / NR_NEAR_RATIO)
@@ -1833,11 +1833,9 @@ def _nr_masks(x, signal_names):
             cache[tf] = {f: x.ohlc_matrix(tf, f) for f in ('open', 'high', 'low', 'close')}
         O, H, L, C = cache[tf]['open'], cache[tf]['high'], cache[tf]['low'], cache[tf]['close']
 
-        factor = NR_MOTHER_BODY_FACTOR
-
         mh, ml, mo, mc = H[:, n], L[:, n], O[:, n], C[:, n]
         rng = mh - ml
-        mother_ok = (rng / 2 + np.abs(mo - mc) / 2) >= (rng / 2) * factor
+        mother_ok = np.abs(mo - mc) >= rng * (NR_MOTHER_BODY_PCT / 100)
 
         def bodies_inside(a, b):
             ok = np.ones(x.n, dtype=bool)
@@ -3470,7 +3468,7 @@ def build_failed_nr_rows(frame, zone_rows, health_rows=None):
         for n in ns:
             mh, ml, mo, mc = H[:, n], L[:, n], O[:, n], C[:, n]
             rng = mh - ml
-            mother_ok = (rng / 2 + np.abs(mo - mc) / 2) >= (rng / 2) * NR_MOTHER_BODY_FACTOR
+            mother_ok = np.abs(mo - mc) >= rng * (NR_MOTHER_BODY_PCT / 100)
             inside_now = (c0 >= ml) & (c0 <= mh)
             for side in ('BO', 'BD'):
                 ok = mother_ok & inside_now
