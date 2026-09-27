@@ -202,7 +202,7 @@ def _job(r, with_log=False, tail=4000):
 
 
 @app.post("/api/sync")
-def sync_now(user=Depends(current_user)):
+def sync_now(user=Depends(admin_user)):
     with pool.connection() as c:
         busy = c.execute("SELECT * FROM jobs WHERE status IN ('queued','running') ORDER BY id LIMIT 1").fetchone()
         if busy:

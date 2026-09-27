@@ -63,7 +63,7 @@ function LoginScreen({ onLogin, theme, setTheme }) {
 }
 
 // ─── DATA PICKER (header) ─────────────────────────────────────────────────────
-function DataPicker({ snaps, sel, setSel, loading, sync, onSync }) {
+function DataPicker({ snaps, sel, setSel, loading }) {
   const [rangeOpen, setRangeOpen] = useState(false);
   const days = useMemo(() => [...new Set(snaps.map(s => s.trade_date))].sort(), [snaps]);
   const latest = snaps[0];
@@ -79,8 +79,6 @@ function DataPicker({ snaps, sel, setSel, loading, sync, onSync }) {
     const list = snaps.filter(s => s.trade_date === day).sort((a, b) => b.taken_at.localeCompare(a.taken_at));
     setSel({ mode: "single", date: day, id: list[0] && list[0].id, follow: latest && list[0] && list[0].id === latest.id });
   };
-  const running = sync && (sync.status === "queued" || sync.status === "running");
-  const elapsed = running && sync.started_at ? Math.round((Date.now() - new Date(sync.started_at)) / 1000) : 0;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, position: "relative" }}>
       <input id="data-date" type="date" value={curDay || ""} min={days[0]} max={days[days.length - 1]} onChange={e => pickDate(e.target.value)} title="Pick a day" style={{ ...input, width: 128 }} />
@@ -94,9 +92,6 @@ function DataPicker({ snaps, sel, setSel, loading, sync, onSync }) {
       {sel.mode === "range" && <span style={{ fontSize: 11, color: "var(--acc)", whiteSpace: "nowrap" }}>{fmtDay(sel.from)} → {fmtDay(sel.to)} · {sel.perDay === "all" ? "all" : "latest per day"}</span>}
       <button onClick={() => setRangeOpen(v => !v)} style={btn(sel.mode === "range")} title="Load several days to compare (Trend & Versions)">Range</button>
       {latest && !(sel.mode === "single" && sel.id === latest.id) && <button onClick={() => pickDate(latest.trade_date)} style={btn()} title="Back to the latest collection">Latest</button>}
-      <button onClick={onSync} disabled={running} title="Collect today's data now" style={{ ...btn(true), opacity: running ? .85 : 1 }}>
-        {running ? `⟳ Collecting… ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` : "⟳ Sync now"}
-      </button>
       {loading && <span style={{ fontSize: 10.5, color: "var(--t3)" }}>loading…</span>}
       {rangeOpen && (
         <div style={{ position: "absolute", top: 40, left: 0, zIndex: 300, background: "var(--s1)", border: "1px solid var(--b2)", borderRadius: 10, padding: 12, boxShadow: "0 10px 30px rgba(0,0,0,.35)", display: "flex", flexDirection: "column", gap: 8, minWidth: 280 }}>
@@ -138,8 +133,10 @@ function UserMenu({ user, onLogout, onLocalFiles }) {
 }
 
 // ─── ADMIN ────────────────────────────────────────────────────────────────────
-function AdminTab({ snaps, reloadSnaps, notify }) {
+function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
   const [sys, setSys] = useState(null);
+  const running = sync && (sync.status === "queued" || sync.status === "running");
+  const elapsed = running && sync.started_at ? Math.round((Date.now() - new Date(sync.started_at)) / 1000) : 0;
   const [cfg, setCfg] = useState(null);
   const [form, setForm] = useState(null);
   const [jobs, setJobs] = useState([]);
@@ -192,7 +189,10 @@ function AdminTab({ snaps, reloadSnaps, notify }) {
   const times = form.schedule_times || [];
   return (
     <div style={{ padding: "18px 22px" }}>
-      <SectionTitle icon="⚙️" title="Admin" sub="Collection schedule, stored data, history and imports. User IDs and passwords are managed in config.ini on the server." />
+      <SectionTitle icon="⚙️" title="Admin" sub="Collection schedule, stored data, history and imports. User IDs and passwords are managed in config.ini on the server."
+        right={<button onClick={onSync} disabled={running} title="Collect today's data now" style={{ ...btn(true), opacity: running ? .85 : 1 }}>
+          {running ? `⟳ Collecting… ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` : "⟳ Sync now"}
+        </button>} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, marginBottom: 12 }}>
         <Tile label="Collector" value={sys.worker.alive ? "● Online" : "● Offline"} color={sys.worker.alive ? "var(--long)" : "var(--short)"} sub={sys.worker.last_seen ? `seen ${fmtDT(sys.worker.last_seen)}` : "never seen"} />
         <Tile label="Collections stored" value={sys.collections.toLocaleString()} sub={sys.first ? `${fmtDay(sys.first)} → ${fmtDay(sys.last)}` : "none yet"} />
@@ -549,13 +549,16 @@ export default function Root() {
   const shown = local || versions;
   const extraTabs = [
     { id: "compare", label: "⏱ Intraday Compare", render: ({ health }) => <CompareTab snaps={snaps} health={health} /> },
-    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} /> }] : []),
+    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} /> }] : []),
   ];
   const empty = (
     <div style={{ padding: "60px 22px", textAlign: "center", color: "var(--t2)" }}>
       <div style={{ fontSize: 40, marginBottom: 12 }}>🗂</div>
       <div style={{ fontSize: 16, fontWeight: 700, color: "var(--t1)", marginBottom: 6 }}>{snaps.length ? "Loading the collection…" : "No collections stored yet"}</div>
-      {!snaps.length && <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>Press <strong>⟳ Sync now</strong> to collect today's data, or wait for the next scheduled run.{user.admin && <><br />Admins can load old Excel files in <strong>⚙ Admin → Import</strong>.</>}</div>}
+      {!snaps.length && <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+        {user.admin ? <>Press <strong>⟳ Sync now</strong> in <strong>⚙ Admin</strong> to collect today's data, or wait for the next scheduled run.<br />Admins can load old Excel files in <strong>⚙ Admin → Import</strong>.</>
+          : "No data has been collected yet — wait for the next scheduled run, or ask an admin to sync."}
+      </div>}
     </div>
   );
   return (
@@ -563,7 +566,7 @@ export default function Root() {
       <Dashboard rawVersions={shown} theme={theme} setTheme={setTheme} extraTabs={extraTabs} emptyState={empty}
         headerCenter={local
           ? <div style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ fontSize: 11, color: "var(--mixed)" }}>📂 Local file{local.length > 1 ? "s" : ""}: {local.map(v => v.fileName).join(", ").slice(0, 60)}</span><button onClick={() => setLocal(null)} style={btn(true)}>Back to stored data</button></div>
-          : <DataPicker snaps={snaps} sel={sel} setSel={setSel} loading={loading} sync={sync} onSync={onSync} />}
+          : <DataPicker snaps={snaps} sel={sel} setSel={setSel} loading={loading} />}
         headerRight={<UserMenu user={user} onLogout={logout} onLocalFiles={onLocalFiles} />} />
       {toast && (
         <div role="status" style={{ position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 500, background: "var(--s1)", border: `1px solid ${toast.kind === "err" ? "var(--short)" : "var(--acc)"}`, color: toast.kind === "err" ? "var(--short)" : "var(--t1)", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, boxShadow: "0 8px 24px rgba(0,0,0,.35)", maxWidth: "90vw" }}>{toast.text}</div>
