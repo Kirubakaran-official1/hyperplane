@@ -1,5 +1,7 @@
 # Hyperplane
 
+Repo: https://github.com/Kirubakaran-official1/hyperplane
+
 Your ChartInk scanner + the Hyperplane dashboard as one website on your Oracle server.
 
 - The scanner runs by itself at **09:45** and **14:30 IST** on weekdays, and when you press **⟳ Sync now**.
@@ -56,8 +58,8 @@ hyperplane/
    git add .
    git commit -m "Hyperplane first version"
    git branch -M main
-   git remote add origin https://github.com/<your-user>/hyperplane.git
-   git push -u origin main
+   git remote add origin https://github.com/Kirubakaran-official1/hyperplane.git
+   git push -u origin main 
    ```
 
 ## Part 3 — Oracle server (one time)
@@ -87,22 +89,31 @@ SSH into the server (`ssh ubuntu@<server-ip>`), then:
    GitHub repo → Settings → Deploy keys → *Add deploy key* → paste it (leave "write access" off). Then:
    ```
    printf "Host github.com\n  IdentityFile ~/.ssh/github_deploy\n" >> ~/.ssh/config
-   git clone git@github.com:<your-user>/hyperplane.git ~/hyperplane
+
+   git clone git@github.com:Kirubakaran-official1/hyperplane.git ~/hyperplane
+
    cd ~/hyperplane
+
    ```
-4. **DuckDNS name** — on duckdns.org sign in, create a name (e.g. `hyperplane-kiruba`), put the server's public IP in it and copy your token.
+4. **DuckDNS name** — on duckdns.org sign in, create a name (e.g. `hyperplane`), put the server's public IP in it and copy your token.
+
 5. **Private files on the server**:
    ```
    cp config.example.ini config.ini && nano config.ini      # users, secret_key (openssl rand -hex 32), Telegram
-   cp .env.example .env && nano .env                        # DOMAIN=hyperplane-kiruba.duckdns.org, passwords, DuckDNS token
+
+   cp .env.example .env && nano .env                        # DOMAIN=hyperplane.duckdns.org, passwords, DuckDNS token
+
    chmod 600 config.ini .env
+
    ```
 6. **Start it**:
    ```
    docker compose --profile duckdns up -d --build
    ```
-   Open **https://hyperplane-kiruba.duckdns.org** — the HTTPS certificate is created automatically in the first minute.
+   Open **https://hyperplane.duckdns.org** — the HTTPS certificate is created automatically in the first minute.
+
 7. **Stop the old scanner cron job** for `chartink_fast.py` (`crontab -e`, put `#` in front of that line) so it doesn't run twice. Your other cron jobs are not affected.
+
 8. **Load your history**: Admin → *Import old Excel files* → select your old `detailed_signals_*.xlsx` files.
 
 ## Part 4 — Automatic updates on every push (one time)
