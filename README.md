@@ -133,6 +133,9 @@ From now on:
 
 ```
 edit on your computer  →  docker compose up -d --build  (check http://localhost)  →  git commit + git push
+
+
+
 ```
 GitHub updates the server in about 1–2 minutes (see the repo's **Actions** tab). Only what changed is rebuilt:
 a dashboard change rebuilds the `web` part only, a scanner change rebuilds `api` + `worker`. Stored data is never touched.
