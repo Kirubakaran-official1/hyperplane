@@ -1,0 +1,23 @@
+# DOMAIN comes from .env — e.g. hyperplane-kiruba.duckdns.org
+# Caddy gets and renews the HTTPS certificate by itself.
+# For a quick test without a domain set DOMAIN=:80 (plain http).
+{$DOMAIN} {
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

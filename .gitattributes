@@ -1,0 +1,7 @@
+# Keep Linux line endings for everything that runs on the server (edited on Windows is fine)
+*.sh        text eol=lf
+*.py        text eol=lf
+Caddyfile   text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.ini       text eol=lf

@@ -1,0 +1,12 @@
+# secrets and server data — never commit these
+config.ini
+.env
+data/
+backups/
+
+# build output
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+.DS_Store
