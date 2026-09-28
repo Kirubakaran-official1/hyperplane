@@ -15,7 +15,7 @@ the exact trading rules, how to test, how to deploy, and how the owner wants to 
 2. A **collector** (`backend/app/worker.py`) runs the scanner on a schedule (default 09:45 and 14:30 IST, weekdays)
    and on demand ("Sync now"), and stores each result in **PostgreSQL** as a "collection".
 3. A **web app** (React, `frontend/`) with login shows the collections: latest by default, any older day or date range,
-   Admin settings, and an Intraday Compare view.
+   Admin settings, and a Compare view (intraday / day / week / month / custom).
 4. Everything runs with **Docker Compose** on the owner's Oracle Cloud Always-Free server
    (Ampere ARM, 2 OCPU, 12 GB RAM, Ubuntu). Other cron jobs run on that server too — keep resource use small.
 
@@ -32,7 +32,9 @@ the exact trading rules, how to test, how to deploy, and how the owner wants to 
   end. The dashboard reads the workbook as-is, so old files must keep loading.
 - **Test before delivering.** Run the scanner tests, run the app, check it in a browser. Say plainly what was and
   wasn't tested.
-- He works on **Windows** (`D:\Trading\...`), edits locally, pushes to GitHub; the server auto-deploys.
+- He works on **Windows** (`D:\Trading\...`), edits locally, pushes to GitHub, then deploys to the server (see §9).
+- He is new to Git, SSH, Docker and GitHub. When setup or deploy steps are involved, give exact commands, say
+  where to run each one (his PC or the server), and explain in plain words what each step does.
 - He writes short messages with typos; read for intent. Reply clearly and briefly; explain trading logic in plain words.
 - UI preferences he has asked for: copy buttons everywhere (plain `A,B,C` and TradingView `NSE:A,NSE:B,`), small "i"
   info buttons instead of long text, filters on every list, bubble view by default for sector/industry, a minimal
@@ -63,10 +65,10 @@ hyperplane/
 │   │   └── config.py             reads config.ini (auto-reload on change)
 │   └── scanner/
 │       ├── chartink_fast.py      THE SCANNER (single file, ~3.7k lines)
-│       └── tests/                rule tests + raw_sample/ (a saved raw snapshot for offline runs)
+│       └── tests/                rule tests + raw_sample/ — NOT in this repo yet (see §8)
 └── frontend/
     ├── src/dashboard.jsx         ALL dashboard widgets (~6k lines, one file) — exports Dashboard + helpers
-    ├── src/server.jsx            Root: login, DataPicker, Sync, AdminTab, CompareTab, UserMenu, api()
+    ├── src/server.jsx            Root: login, DataPicker, AdminTab (incl. Sync now), CompareTab, UserMenu, api()
     ├── src/main.jsx              mounts <Root/>
     ├── Dockerfile                node build → caddy:2-alpine serving /srv
     └── Caddyfile                 {$DOMAIN}: /api/* → api:8000, everything else → SPA; automatic HTTPS
@@ -164,7 +166,7 @@ Price_Health, Failed_NR. Symbols in Flat_Data_For_Slicers are TradingView style 
   Several files/collections = `versions[] = {fileName, db, dateValue, dateLabel}`; `mergeDBs()` combines a scope.
 - `Dashboard({rawVersions, theme, setTheme, headerCenter, headerRight, extraTabs, emptyState})` — the app shell.
   Tabs: Control Tower, Sector & Industry, Slicer, Opportunities, Horizon, Conviction, Multi-TF NR, Virgin BO/BD,
-  Signals, Master List, (+ Trend & Versions when >1 version), + extraTabs from server.jsx (Intraday Compare, Admin).
+  Signals, Master List, (+ Trend & Versions when >1 version), + extraTabs from server.jsx (Compare, Admin).
 - **Global stock-quality filter** (Healthy/Weak/Poor tick-boxes, unrated counts as Weak) is applied to every tab via
   `healthIndex` → `excludedSymbols` → `filterDB`. Default **Healthy only** (`HEALTH_DEFAULT`), remembered in
   localStorage key `hp_health_allow_v2`.
@@ -179,6 +181,21 @@ Price_Health, Failed_NR. Symbols in Flat_Data_For_Slicers are TradingView style 
   `buildOpportunities` (zone path + NR nested/domino; conviction High ≥ 9, Medium ≥ 6; targets Q/M/W),
   `buildReturnRows` (any entry TF D/W/M/Q, any exit TFs, from Zone_Levels), `zoneBreakRows` (broke a zone, still
   within ≤1/2/3/5 % of the level; Fresh = previous close of that TF was on the other side), `NRTrapSection`.
+- **Timeframe Signal Flow** (`StrategyFlowPanel`): the scanner writes `Timeframe` only on NR rows of
+  Flat_Data_For_Slicers (zone rows are blank), so the widget derives D/W/M/Q/Y with `classifySignal()` and colours each
+  signal by its own direction. Use `classifySignal()` whenever a signal's timeframe is needed — never `r.Timeframe`.
+- **Sector / industry per timeframe**: `TfPicker` (All · D · W · M · Q · Y) on the Control Tower sector + industry
+  panels and at the top of the Sector & Industry tab. All = the scanner's sheets as-is. D..Y = `tfSectorIndustry()`:
+  same columns and same strength formula (`attachStrength`, 40% net bias + 30% breadth + 30% momentum), counting only
+  that TF's signals, with breadth/momentum from `Price / Prev_<TF>_Close` (Zone_Levels; D uses master Change_Pct).
+  Verified: summing D..Y reproduces the sheet's net bias exactly; D reproduces stocks/advancing/declining. The sheet's
+  Total_Signal_Count is a bit higher because the scanner double-counts signals on both the long and mixed lists.
+- **Compare tab** (`CompareTab`, server.jsx): mode dropdown Intraday / Day over day / Weekly / Monthly / Custom
+  (`compareFrom`: previous week = last collection before Monday, previous month = before the 1st), a date + time
+  `CollectionPicker` per side, and clickable stat tiles (`STAT_FILTERS`) that filter the table.
+- **Market Bias Distribution** (`BiasDistributionPanel`) shows the scanner's per-stock `Trading_Bias`, which counts
+  zone signals only: NR-only stocks come out NEUTRAL, and one retracement signal makes the stock RETRACEMENT. Left as
+  is pending the owner's answer (§10).
 - Old Excel files without the new sheets must keep working (sections show a "needs the new scanner" note).
 - Styling: CSS variables in the `CSS` string (`.app-shell.theme-dark/.theme-light`), inline styles, IBM Plex Mono +
   Inter. Sticky header 52 px + tab bar 44 px → anchors use `scrollMarginTop: 104`. Don't set `overflow-x:hidden` on
@@ -193,8 +210,9 @@ Price_Health, Failed_NR. Symbols in Flat_Data_For_Slicers are TradingView style 
 | GET /api/snapshots?date_from&date_to, /api/snapshots/latest | user | collection list (meta only) |
 | GET /api/snapshots/{id}/data | user | gzip JSON workbook, `Content-Encoding: gzip`, cached immutable |
 | GET /api/snapshots/{id}/excel | user | original xlsx |
-| POST /api/sync | user | queue a manual collection (returns the running one if busy) |
+| POST /api/sync | admin | queue a manual collection (returns the running one if busy). The button is in the Admin tab only |
 | GET /api/jobs, /api/jobs/{id} | user | history / live log |
+| POST /api/jobs/{id}/cancel | admin | cancel a queued job |
 | GET /api/compare?a=&b= | user | per stock: price a→b, move %, bias, signals, new/dropped signals, health |
 | GET/PUT /api/admin/settings, POST /api/admin/import, DELETE /api/admin/snapshots/{id}, GET /api/admin/system | admin | schedule, retention, Telegram toggle, import old xlsx, status |
 
@@ -221,6 +239,9 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
 ```
 python backend/scanner/tests/run_all.py          # NR, NR rules, zones, virgin, health/trap
 ```
+**The `tests/` folder (and `raw_sample/`) is not in this repo** — ask the owner for it. Until then, check scanner
+changes by importing the module and running the rule on real data, and test with a real collection
+(`data/files/excel/detailed_signals_*.xlsx`; older files are in `D:\Trading\Code\New Selenium method\oracle\chartink\`).
 
 ### Run the whole app without Docker (fast loop)
 ```
@@ -239,18 +260,26 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
 `docker compose up -d --build` · logs: `docker compose logs -f worker` · local test: `DOMAIN=:80` in `.env` → http://localhost.
 
 ### Checks before finishing a change
-1. `python backend/scanner/tests/run_all.py` passes (scanner changes).
+1. `python backend/scanner/tests/run_all.py` passes (scanner changes; when the tests folder exists).
 2. `cd frontend && npm run build` succeeds (frontend changes).
-3. App runs; log in; latest collection loads; Sync now completes; Admin + Intraday Compare open; no console errors.
+3. App runs; log in; latest collection loads; Sync now completes; Admin + Compare open; no console errors.
 4. `docker compose config -q` passes (compose changes).
 5. Shell scripts stay LF (`.gitattributes`) and are called with `bash deploy/...` (Windows loses the exec bit).
 
 ## 9. Deploy
 
-Owner pushes to `main` → GitHub Actions (`deploy.yml`, secrets SERVER_HOST / SERVER_USER / SERVER_SSH_KEY) →
-`bash deploy/deploy.sh` on the server (`git pull --ff-only` + `docker compose up -d --build`). Only changed images
-rebuild; data volumes are untouched. HTTPS by Caddy for `DOMAIN` (a DuckDNS name). Oracle needs ports 80/443 open in
-the VCN security list AND in iptables (see README Part 3). Backups: `backups/hyperplane_*.dump` nightly, 14 days.
+- Repo: **https://github.com/Kirubakaran-official1/hyperplane** (private, branch `main`). Site:
+  **https://hyperplane.duckdns.org**. Server clone: `~/hyperplane` (user `ubuntu`), pulled with a read-only deploy key.
+- Owner's push routine (on his PC, in the project folder): `git add .` → `git commit -m "..."` → `git push`.
+  The Git identity is set locally for this repo only (not `--global`).
+- Planned flow: push to `main` → GitHub Actions (`deploy.yml`, repository secrets SERVER_HOST / SERVER_USER /
+  SERVER_SSH_KEY) → `bash deploy/deploy.sh` on the server (`git pull --ff-only` + `docker compose up -d --build`).
+- **GitHub Actions is currently disabled on the owner's GitHub account** (account-level block; only GitHub Support
+  can lift it — he was advised to open a ticket). Until it is re-enabled, deploy by hand after each push:
+  `ssh ubuntu@<server-ip>` then `cd ~/hyperplane && bash deploy/deploy.sh`. A server-side cron that pulls and
+  deploys when `main` changes was offered as an alternative; not built yet.
+- Only changed images rebuild; data volumes are untouched. HTTPS by Caddy for `DOMAIN`. Oracle needs ports 80/443 open
+  in the VCN security list AND in iptables (see README Part 3). Backups: `backups/hyperplane_*.dump` nightly, 14 days.
 
 ## 10. History (for context)
 
@@ -260,5 +289,10 @@ the VCN security list AND in iptables (see README Part 3). Backups: `backups/hyp
 - Recent owner requests implemented: stock-quality filter on all pages, Return Expectations with selectable entry/exit
   TFs, NR Trap, Zone Breakout Analyser (breakouts still near the level), side-nav drawer with filters, Nifty 500 segment,
   hyperplane logo (plane + normal vector + two point classes), Telegram retry on network errors.
+- 2026-09: Sync now is admin-only and lives in the Admin tab; NR mother-candle body % moved to Admin (default 60);
+  stock quality defaults to Healthy only; Nifty 500 moved into the side-nav segment choices; Timeframe Signal Flow
+  "Unknown" bucket fixed. Sector/industry timeframe views; Compare tab with week/month modes, proper collection pickers
+  and stat-tile filters; "NR Expansion" setup renamed "NR Breakout · Breakdown".
 - Open questions to ask the owner (don't guess): virgin **breakout** scan screenshot; a trend/flag scan screenshot;
-  a "Near_and_abv_Overlap" scan screenshot.
+  a "Near_and_abv_Overlap" scan screenshot; **Market Bias** — should NR-only stocks take their bias from the NR
+  direction (BO/HN = Long, BD/LW = Short), and should RETRACEMENT apply only when there are no long/short signals?

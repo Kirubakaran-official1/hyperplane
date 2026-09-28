@@ -1,4 +1,4 @@
-// Server shell around the Hyperplane dashboard: login, data picker, Sync now, Admin, Intraday Compare.
+// Server shell around the Hyperplane dashboard: login, data picker, Admin (incl. Sync now), Compare.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Dashboard, mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell,
@@ -319,21 +319,74 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
   );
 }
 
-// ─── INTRADAY COMPARE ─────────────────────────────────────────────────────────
+// ─── COMPARE (intraday / day / week / month / custom) ─────────────────────────
+const COMPARE_MODES = [
+  ["intraday", "Intraday", "first collection of the same day"],
+  ["daily", "Day over day", "last collection of the previous day"],
+  ["weekly", "Weekly", "last collection of the previous week"],
+  ["monthly", "Monthly", "last collection of the previous month"],
+  ["custom", "Custom", "pick both collections"],
+];
+const isoDay = d => d.toISOString().slice(0, 10);
+function periodStart(day, mode) {
+  const d = new Date(day + "T00:00:00Z");
+  if (mode === "daily") return day;
+  if (mode === "weekly") { d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return isoDay(d); }   // Monday
+  if (mode === "monthly") { d.setUTCDate(1); return isoDay(d); }
+  return null;
+}
+// The "from" collection for a preset, measured back from collection b
+function compareFrom(snaps, b, mode) {
+  if (!b || mode === "custom") return null;
+  const asc = snaps.slice().sort((x, y) => x.taken_at.localeCompare(y.taken_at));
+  if (mode === "intraday") { const f = asc.find(s => s.trade_date === b.trade_date); return f && f.id !== b.id ? f : null; }
+  const start = periodStart(b.trade_date, mode);
+  return asc.filter(s => s.trade_date < start).pop() || null;
+}
+
+function CollectionPicker({ id, snaps, days, value, onChange }) {
+  const cur = snaps.find(s => s.id === value);
+  const day = cur ? cur.trade_date : "";
+  const list = snaps.filter(s => s.trade_date === day).sort((x, y) => x.taken_at.localeCompare(y.taken_at));
+  const pickDay = d => {
+    const earlier = days.filter(x => x <= d);
+    const dd = days.includes(d) ? d : earlier[earlier.length - 1] || days[0];
+    const l = snaps.filter(s => s.trade_date === dd).sort((x, y) => y.taken_at.localeCompare(x.taken_at));
+    if (l[0]) onChange(l[0].id);
+  };
+  return (
+    <span style={{ display: "inline-flex", gap: 4 }}>
+      <input id={`${id}-date`} type="date" value={day} min={days[0]} max={days[days.length - 1]} onChange={e => e.target.value && pickDay(e.target.value)} title="Pick a day (snaps to the nearest earlier day with data)" style={{ ...input, width: 128 }} />
+      <select id={`${id}-time`} value={value || ""} onChange={e => onChange(+e.target.value)} title="Collection of that day" style={input}>
+        {list.map(s => <option key={s.id} value={s.id}>{fmtTime(s.taken_at)} · {SOURCE_LABEL[s.source] || s.source}</option>)}
+      </select>
+    </span>
+  );
+}
+
+const STAT_FILTERS = {
+  all: () => true, up: r => r.move_pct > 0, down: r => r.move_pct < 0,
+  new: r => r.new_signals.length > 0, lost: r => r.dropped_signals.length > 0,
+};
+
 function CompareTab({ snaps, health }) {
-  const byDay = useMemo(() => { const m = {}; snaps.forEach(s => { (m[s.trade_date] = m[s.trade_date] || []).push(s); }); return m; }, [snaps]);
-  const def = useMemo(() => {
-    if (!snaps.length) return [null, null];
-    const b = snaps[0];
-    const same = (byDay[b.trade_date] || []).slice().sort((x, y) => x.taken_at.localeCompare(y.taken_at));
-    const a = same.length > 1 ? same[0] : snaps[1] || null;
-    return [a && a.id, b.id];
-  }, [snaps, byDay]);
-  const [a, setA] = useState(def[0]); const [b, setB] = useState(def[1]);
-  useEffect(() => { if (a == null) setA(def[0]); if (b == null) setB(def[1]); }, [def]);
+  const days = useMemo(() => [...new Set(snaps.map(s => s.trade_date))].sort(), [snaps]);
+  const [b, setB] = useState(null);
+  const [mode, setMode] = useState(null);
+  const [customA, setCustomA] = useState(null);
+  useEffect(() => { if (b == null && snaps.length) setB(snaps[0].id); }, [snaps]);
+  const bSnap = snaps.find(s => s.id === b);
+  useEffect(() => {                                  // default: intraday when the day has 2+ collections, else day over day
+    if (mode || !bSnap) return;
+    setMode(compareFrom(snaps, bSnap, "intraday") ? "intraday" : "daily");
+  }, [bSnap, mode]);
+  const presetA = useMemo(() => compareFrom(snaps, bSnap, mode), [snaps, bSnap, mode]);
+  const a = mode === "custom" ? customA : presetA && presetA.id;
+  const chooseMode = m => { if (m === "custom") setCustomA(a || (snaps[1] && snaps[1].id) || null); setMode(m); };
   const [data, setData] = useState(null); const [err, setErr] = useState("");
   const [q, setQ] = useState(""); const [onlySig, setOnlySig] = useState(true); const [fno, setFno] = useState(false);
   const [sort, setSort] = useState("move"); const [showAll, setShowAll] = useState(false);
+  const [statF, setStatF] = useState("all");
   useEffect(() => {
     if (!a || !b || a === b) { setData(null); return; }
     setErr(""); setData(null);
@@ -345,13 +398,12 @@ function CompareTab({ snaps, health }) {
       && (!r.health || allow.has(r.health)) && (!q || r.symbol.includes(q.toUpperCase()) || (r.sector || "").toLowerCase().includes(q.toLowerCase()))),
     [data, onlySig, fno, q, allow]);
   const sorted = useMemo(() => {
-    const s = rows.slice();
+    const s = rows.filter(STAT_FILTERS[statF]);
     if (sort === "move") s.sort((x, y) => y.move_pct - x.move_pct);
     if (sort === "drop") s.sort((x, y) => x.move_pct - y.move_pct);
     if (sort === "new") s.sort((x, y) => y.new_signals.length - x.new_signals.length || y.move_pct - x.move_pct);
     return s;
-  }, [rows, sort]);
-  const up = rows.filter(r => r.move_pct > 0).length, dn = rows.filter(r => r.move_pct < 0).length;
+  }, [rows, sort, statF]);
   const avg = rows.length ? rows.reduce((s, r) => s + r.move_pct, 0) / rows.length : 0;
   const sectors = useMemo(() => {
     const m = {}; rows.forEach(r => { const k = r.sector || "Unknown"; (m[k] = m[k] || { n: 0, sum: 0 }); m[k].n++; m[k].sum += r.move_pct; });
@@ -361,19 +413,34 @@ function CompareTab({ snaps, health }) {
   const vis = showAll ? sorted : sorted.slice(0, 60);
   const TH = { position: "sticky", top: 0, background: "var(--s2)", borderBottom: "1px solid var(--b1)", padding: "6px 8px", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "var(--t3)", textAlign: "left", whiteSpace: "nowrap", zIndex: 1 };
   const TD = { padding: "5px 8px", fontFamily: "var(--mono)", whiteSpace: "nowrap", fontSize: 11 };
-  const opt = s => <option key={s.id} value={s.id}>{fmtDay(s.taken_at)} {fmtTime(s.taken_at)} · {SOURCE_LABEL[s.source] || s.source}</option>;
   const mc = v => v > 0 ? "var(--long)" : v < 0 ? "var(--short)" : "var(--t2)";
+  const modeMeta = COMPARE_MODES.find(m => m[0] === mode) || COMPARE_MODES[0];
+  const aSnap = snaps.find(s => s.id === a);
+  const tiles = [
+    ["all", "Stocks compared", rows.length.toLocaleString(), "var(--t1)"],
+    ["up", "Moved up", rows.filter(STAT_FILTERS.up).length.toLocaleString(), "var(--long)"],
+    ["down", "Moved down", rows.filter(STAT_FILTERS.down).length.toLocaleString(), "var(--short)"],
+    [null, "Average move", `${avg >= 0 ? "+" : ""}${avg.toFixed(2)}%`, mc(avg)],
+    ["new", "New signals", rows.filter(STAT_FILTERS.new).length.toLocaleString(), "var(--acc)"],
+    ["lost", "Lost signals", rows.filter(STAT_FILTERS.lost).length.toLocaleString(), "var(--mixed)"],
+  ];
   return (
     <div style={{ padding: "18px 22px" }}>
-      <SectionTitle icon="⏱" title="Intraday Compare" sub="How each stock moved between two collections — e.g. this morning's 09:45 run against the 14:30 run."
+      <SectionTitle icon="⏱" title={`${modeMeta[1]} Compare`} sub={`How each stock moved between two collections. From = ${modeMeta[2]}.`}
         right={<div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <select id="cmp-mode" value={mode || ""} onChange={e => chooseMode(e.target.value)} title="What to compare against" style={{ ...input, fontWeight: 600, color: "var(--acc)" }}>
+            {COMPARE_MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
           <span style={{ fontSize: 11, color: "var(--t3)" }}>From</span>
-          <select id="cmp-a" value={a || ""} onChange={e => setA(+e.target.value)} style={input}>{snaps.map(opt)}</select>
+          {mode === "custom"
+            ? <CollectionPicker id="cmp-a" snaps={snaps} days={days} value={customA} onChange={setCustomA} />
+            : <span style={{ ...input, color: aSnap ? "var(--t1)" : "var(--t3)", fontFamily: "var(--mono)" }} title={modeMeta[2]}>{aSnap ? `${fmtDay(aSnap.taken_at)} ${fmtTime(aSnap.taken_at)}` : "none"}</span>}
           <span style={{ fontSize: 11, color: "var(--t3)" }}>to</span>
-          <select id="cmp-b" value={b || ""} onChange={e => setB(+e.target.value)} style={input}>{snaps.map(opt)}</select>
+          <CollectionPicker id="cmp-b" snaps={snaps} days={days} value={b} onChange={setB} />
         </div>} />
       {snaps.length < 2 && <div style={{ color: "var(--t3)", fontSize: 12.5 }}>You need at least two collections. After today's 09:45 and 14:30 runs, this compares them automatically.</div>}
-      {a === b && snaps.length >= 2 && <div style={{ color: "var(--t3)", fontSize: 12.5 }}>Pick two different collections.</div>}
+      {snaps.length >= 2 && bSnap && !a && <div style={{ color: "var(--t3)", fontSize: 12.5 }}>No collection to compare against for {modeMeta[1].toLowerCase()} ({modeMeta[2]}). Pick another comparison or another "to" day.</div>}
+      {a && a === b && <div style={{ color: "var(--t3)", fontSize: 12.5 }}>Pick two different collections.</div>}
       {err && <div style={{ color: "var(--short)", fontSize: 12.5 }}>{err}</div>}
       {data && (<>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
@@ -384,13 +451,17 @@ function CompareTab({ snaps, health }) {
           {[["move", "Biggest gainers"], ["drop", "Biggest losers"], ["new", "Most new signals"]].map(([k, l]) => <Pill key={k} active={sort === k} onClick={() => setSort(k)}>{l}</Pill>)}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8, marginBottom: 12 }}>
-          {[["Stocks compared", rows.length.toLocaleString(), "var(--t1)"], ["Moved up", up.toLocaleString(), "var(--long)"], ["Moved down", dn.toLocaleString(), "var(--short)"],
-            ["Average move", `${avg >= 0 ? "+" : ""}${avg.toFixed(2)}%`, mc(avg)], ["New signals", rows.filter(r => r.new_signals.length).length.toLocaleString(), "var(--acc)"], ["Lost signals", rows.filter(r => r.dropped_signals.length).length.toLocaleString(), "var(--mixed)"]].map(([l, v, c]) => (
-            <div key={l} style={{ background: "var(--s1)", border: "1px solid var(--b1)", borderRadius: 10, padding: "10px 12px" }}>
-              <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".6px", fontWeight: 700 }}>{l}</div>
-              <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 700, color: c, marginTop: 3 }}>{v}</div>
-            </div>
-          ))}
+          {tiles.map(([k, l, v, c]) => {
+            const on = k && statF === k && k !== "all";
+            return (
+              <div key={l} onClick={k ? () => { setStatF(on ? "all" : k); setShowAll(false); } : undefined}
+                title={k ? (on ? "Click again to show all stocks" : `Show only these stocks in the table`) : "Average move of the stocks below"}
+                style={{ background: on ? "var(--adim)" : "var(--s1)", border: `1px solid ${on ? c : "var(--b1)"}`, borderRadius: 10, padding: "10px 12px", cursor: k ? "pointer" : "default" }}>
+                <div style={{ fontSize: 10, color: on ? c : "var(--t3)", textTransform: "uppercase", letterSpacing: ".6px", fontWeight: 700 }}>{on ? "✓ " : ""}{l}</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 700, color: c, marginTop: 3 }}>{v}</div>
+              </div>
+            );
+          })}
         </div>
         <EqRow height={520} cols="minmax(0,.8fr) minmax(0,2.2fr)" min={300}>
           <FocusCard icon="🏭" title="Sector move" sub="Average move of each sector's stocks (3+ stocks).">
@@ -405,7 +476,7 @@ function CompareTab({ snaps, health }) {
               </div>
             ))}
           </FocusCard>
-          <FocusCard icon="📋" title={`${sorted.length.toLocaleString()} stocks · ${fmtTime(data.a.taken_at)} → ${fmtTime(data.b.taken_at)}`} sub={`${data.a.label}  →  ${data.b.label}`} right={<ListCopy symbols={sorted.map(r => r.symbol)} />}>
+          <FocusCard icon="📋" title={`${sorted.length.toLocaleString()} stocks${statF !== "all" ? ` · ${tiles.find(t => t[0] === statF)[1].toLowerCase()}` : ""} · ${fmtDT(data.a.taken_at)} → ${fmtDT(data.b.taken_at)}`} sub={`${data.a.label}  →  ${data.b.label}`} right={<ListCopy symbols={sorted.map(r => r.symbol)} />}>
             <div style={{ overflow: "auto", flex: 1 }} className="tower-scroll">
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>{["Symbol", "Price then", "Price now", "Move", "Bias", "Signals", "New signals", "Lost signals", "Health"].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
@@ -551,7 +622,7 @@ export default function Root() {
 
   const shown = local || versions;
   const extraTabs = [
-    { id: "compare", label: "⏱ Intraday Compare", render: ({ health }) => <CompareTab snaps={snaps} health={health} /> },
+    { id: "compare", label: "⏱ Compare", render: ({ health }) => <CompareTab snaps={snaps} health={health} /> },
     ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} /> }] : []),
   ];
   const empty = (

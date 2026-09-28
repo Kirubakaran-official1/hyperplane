@@ -2591,7 +2591,13 @@ function RotationQuadrantChart({ items, onSelect, selectedKey, height=380, xAxis
 }
 
 // ─── SECTOR & INDUSTRY ANALYSIS TAB (NEW) ─────────────────────────────────────
-function SectorIndustryTab({ db }) {
+function SectorIndustryTab({ db: baseDb }) {
+  const [tf, setTf] = useState("ALL");
+  const tfd = useTfSectors(baseDb, tf);
+  const nrTf = useMemo(() => tf==="ALL" ? baseDb.nrSectorIndustry
+    : baseDb.nrSectorIndustry.filter(r => classifySignal({ Signal_Name:r.NR_Signal, Signal_Category:"NR_PATTERN", Signal_Type:r.Pattern_Type, Timeframe:"" }).tf===tf),
+    [baseDb.nrSectorIndustry, tf]);
+  const db = { ...baseDb, ...tfd, nrSectorIndustry: nrTf };
   const [selSector, setSelSector] = useState(null);
   const [indSearch, setIndSearch] = useState("");
   const [indSort, setIndSort] = useState({ col:"Strength_Score", dir:-1 });
@@ -2657,9 +2663,16 @@ function SectorIndustryTab({ db }) {
 
   return (
     <div style={{padding:"18px 22px"}}>
-      <div style={{marginBottom:16}}>
-        <div style={{fontSize:22,fontWeight:700,color:"var(--t1)"}}>🏭 Sector &amp; Industry Analysis</div>
-        <div style={{fontSize:13,color:"var(--t2)",marginTop:2}}>{sectors.length} sectors · {db.industryAnalysis.length} industries · {db.master.length.toLocaleString()} stocks mapped from the master list</div>
+      <div style={{marginBottom:16,display:"flex",alignItems:"flex-end",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:260}}>
+          <div style={{fontSize:22,fontWeight:700,color:"var(--t1)"}}>🏭 Sector &amp; Industry Analysis{tf!=="ALL"&&<span style={{fontSize:14,color:"var(--acc)",marginLeft:8}}>· {TF_NAME[tf]}</span>}</div>
+          <div style={{fontSize:13,color:"var(--t2)",marginTop:2}}>{sectors.length} sectors · {db.industryAnalysis.length} industries · {db.master.length.toLocaleString()} stocks mapped from the master list</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:10.5,color:"var(--t3)"}}>Timeframe</span>
+          <TfPicker value={tf} onChange={setTf}/>
+          <InfoTip><strong>All</strong> = every timeframe together (the Excel's cumulative score). <strong>D/W/M/Q/Y</strong> = only that timeframe's zone + NR signals; advancing/declining and average change are measured from that timeframe's previous close (e.g. W = since last week's close). Same strength formula: 40% net bias + 30% breadth + 30% momentum.</InfoTip>
+        </div>
       </div>
 
       {/* KPI strip */}
@@ -4836,7 +4849,7 @@ const SETUP_DEFS = [
     sub:"Close crossed a zone on this bar — the event just happened.",
     learn:<>"Above zone" is a state; "<strong>crossed</strong> above zone" is an event that happened on this candle. Fresh crosses are where momentum begins. The tag shows which timeframe's zone was crossed — Monthly/Quarterly crosses matter far more than Daily ones.</>,
     match:(nl)=>(nl.includes("crossed")||/_cro_|csd/.test(nl)) && !nl.includes("overlap") && !nl.startsWith("last_"), detail:(nl,g)=>`${TF_NAME[g.tf]} zone` },
-  { id:"nrBreak", icon:"📐", title:"NR Expansion", short:"NR Break", rank:7,
+  { id:"nrBreak", icon:"📐", title:"NR Breakout · Breakdown", short:"NR Break", rank:7,
     sub:"Price broke out of / down from a narrow-range (compressed) bar.",
     learn:<>A narrow range is the smallest candle of the last N bars — volatility compression. Compression is followed by expansion, and the direction of the break tells you which way. Breaks on <strong>several timeframes at once</strong> are much stronger than a single Daily NR break.</>,
     match:(nl,g)=>g.event==="BREAKOUT"||g.event==="BREAKDOWN", detail:(nl,g)=>{ const m=nl.match(/_(\d+)[dwmqy]_/); return `${g.tf} NR${m?m[1]:""}`; } },
@@ -4867,7 +4880,7 @@ const SETUP_DEFS = [
     match:(nl,g)=>g.event==="RECLAIM", detail:(nl,g)=>`${g.tf} NR` },
   { id:"nrCoil", icon:"🎯", title:"Near NR Breakout — set alerts", short:"Near NR Break", rank:1,
     sub:"Price is close to the mother candle High (▲) or Low (▼) — the breakout has not happened yet.",
-    learn:<>These are <strong>alerts, not trades</strong>. Price is inside the mother candle and within 5% of its High (▲) or Low (▼). Set an alert at that edge; when it closes beyond, the stock moves to the NR Expansion list.</>,
+    learn:<>These are <strong>alerts, not trades</strong>. Price is inside the mother candle and within 5% of its High (▲) or Low (▼). Set an alert at that edge; when it closes beyond, the stock moves to the NR Breakout · Breakdown list.</>,
     match:(nl,g)=>g.event==="NEAR" && isNRName(nl), detail:(nl,g)=>{ const m=nl.match(/_(\d+)[dwmqy]_/); return `${g.tf} NR${m?m[1]:""}`; } },
 ];
 const SETUP_BY_ID = Object.fromEntries(SETUP_DEFS.map(d=>[d.id,d]));
@@ -5028,7 +5041,7 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
           {[2,3,4].map(k=><div key={k} onClick={()=>setMinStack(k)} style={{padding:"3px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer",border:`1px solid ${minStack===k?"var(--acc)":"var(--b2)"}`,color:minStack===k?"var(--acc)":"var(--t2)",background:minStack===k?"var(--adim)":"var(--s2)"}}>{k}+</div>)}
           <ListCopy symbols={stacked.map(r=>r.s.symbol)}/>
         </>}
-        learn={<>One setup is an idea; several different setups on the same stock pointing the same way is <strong>evidence</strong>. For example a stock that is a <em>Virgin Break</em> + <em>Overlap Zone Break</em> + <em>NR Expansion</em> has three independent reasons to move. Struck-through red chips are setups pointing the <strong>opposite</strong> way — they don't cancel the idea but deserve a look.</>}>
+        learn={<>One setup is an idea; several different setups on the same stock pointing the same way is <strong>evidence</strong>. For example a stock that is a <em>Virgin Break</em> + <em>Overlap Zone Break</em> + <em>NR Breakout · Breakdown</em> has three independent reasons to move. Struck-through red chips are setups pointing the <strong>opposite</strong> way — they don't cancel the idea but deserve a look.</>}>
         <div style={{maxHeight:420,overflowY:"auto"}} className="tower-scroll">
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
             <thead><tr>{["#","Symbol","Dir","Setups (aligned)","Opposing","Score","Ladder"].map(h=><th key={h} style={{position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"5px 8px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",zIndex:1}}>{h}</th>)}</tr></thead>
@@ -5133,10 +5146,95 @@ const SectionTitle = ({ icon, title, sub, right }) => (
   </div>
 );
 
+// ─── SECTOR / INDUSTRY PER TIMEFRAME ──────────────────────────────────────────
+// Same formula as the scanner's Sector_Analysis / Industry_Analysis, but counting only one timeframe's signals
+// (classifySignal) and each stock's move since that timeframe's previous close (Zone_Levels).
+const SECTOR_TFS = [["ALL","All"],["D","D"],["W","W"],["M","M"],["Q","Q"],["Y","Y"]];
+
+function strengthLabel(s) { return s>=70?"Very Strong":s>=55?"Strong":s>=45?"Neutral":s>=30?"Weak":"Very Weak"; }
+
+function attachStrength(rows) {
+  const norm = (v, vals) => { const lo=Math.min(...vals), hi=Math.max(...vals); return hi===lo ? 50 : (v-lo)/(hi-lo)*100; };
+  const nb = rows.map(r=>r.Net_Bias_Score), ch = rows.map(r=>r.Avg_Change_Pct);
+  rows.forEach(r => {
+    r.Strength_Score = Math.round((0.4*norm(r.Net_Bias_Score,nb) + 0.3*r.Advance_Decline_Ratio*100 + 0.3*norm(r.Avg_Change_Pct,ch))*10)/10;
+    r.Strength_Label = strengthLabel(r.Strength_Score);
+  });
+  return rows.sort((a,b)=>b.Strength_Score-a.Strength_Score);
+}
+
+function tfSectorIndustry(db, tf) {
+  const zl = {}; (db.zoneLevels||[]).forEach(r=>{ zl[r.Symbol]=r; });
+  const secOf = {}, indOf = {};
+  db.master.forEach(m=>{ secOf[m.Symbol]=m.Sector; indOf[m.Symbol]=m.Industry; });
+  const sigs = {};
+  db.flat.forEach(r=>{
+    if (r.Signal_Category!=="ZONE" && r.Signal_Category!=="NR_PATTERN") return;
+    if (!(r.Symbol in secOf)) { secOf[r.Symbol]=r.Sector||"Unknown"; indOf[r.Symbol]=r.Industry||"Unknown"; }
+    if (classifySignal(r).tf===tf) (sigs[r.Symbol] = sigs[r.Symbol] || []).push(r);
+  });
+  const change = sym => {
+    const z = zl[sym];
+    if (tf==="D") { const v = parseFloat(db.masterMap[sym]?.Change_Pct); if (!isNaN(v)) return v; return z?.Change_Pct ?? null; }
+    return z && z.Price!=null && z.prev[tf] ? (z.Price/z.prev[tf]-1)*100 : null;
+  };
+  const metrics = syms => {
+    let adv=0, dec=0, unch=0, sum=0, n=0, withZ=0, withN=0;
+    const k = { LONG:0, SHORT:0, RETRACEMENT:0, MIXED:0, Breakout:0, Breakdown:0, "Near High":0, "Near Low":0, "Back to NR":0 };
+    syms.forEach(s => {
+      const c = change(s);
+      if (c!=null) { n++; sum+=c; if (c>0) adv++; else if (c<0) dec++; else unch++; }
+      const list = sigs[s] || [];
+      if (list.some(r=>r.Signal_Category==="ZONE")) withZ++;
+      if (list.some(r=>r.Signal_Category==="NR_PATTERN")) withN++;
+      list.forEach(r=>{ if (r.Signal_Type in k) k[r.Signal_Type]++; });
+    });
+    const total = Object.values(k).reduce((a,b)=>a+b,0);
+    const bull = k.LONG + k.Breakout, bear = k.SHORT + k.Breakdown;
+    return { Total_Stocks:syms.length, Advancing:adv, Declining:dec, Unchanged:unch, Avg_Change_Pct:n?Math.round(sum/n*100)/100:0,
+      Stocks_With_Zone_Signal:withZ, Zone_Long_Count:k.LONG, Zone_Short_Count:k.SHORT, Zone_Retracement_Count:k.RETRACEMENT, Zone_Mixed_Count:k.MIXED,
+      Stocks_With_NR_Signal:withN, NR_Breakout_Count:k.Breakout, NR_Breakdown_Count:k.Breakdown, NR_Near_High_Count:k["Near High"],
+      NR_Near_Low_Count:k["Near Low"], NR_Back_To_NR_Count:k["Back to NR"], Total_Signal_Count:total,
+      Bullish_Score:bull, Bearish_Score:bear, Net_Bias_Score:bull-bear,
+      Advance_Decline_Ratio:adv+dec ? Math.round(adv/(adv+dec)*1000)/1000 : 0.5,
+      Signal_Density:syms.length ? Math.round(total/syms.length*1000)/1000 : 0 };
+  };
+  const secGroups = {}, indGroups = {};
+  Object.keys(secOf).forEach(s => {
+    (secGroups[secOf[s]] = secGroups[secOf[s]] || []).push(s);
+    const key = secOf[s]+"||"+indOf[s]; (indGroups[key] = indGroups[key] || []).push(s);
+  });
+  const secSheet = {}; db.sectorAnalysis.forEach(r=>{ secSheet[r.Sector]=r; });
+  const indSheet = {}; db.industryAnalysis.forEach(r=>{ indSheet[r.Sector+"||"+r.Industry]=r; });
+  const sectorAnalysis = attachStrength(Object.entries(secGroups).map(([sec,syms]) =>
+    ({ Sector:sec, Marketcap_Breakdown:secSheet[sec]?.Marketcap_Breakdown||"", Total_Volume:secSheet[sec]?.Total_Volume||0, ...metrics(syms) })));
+  const industryAnalysis = attachStrength(Object.entries(indGroups).map(([key,syms]) => { const [sec,ind]=key.split("||");
+    return { Sector:sec, Industry:ind, Marketcap_Breakdown:indSheet[key]?.Marketcap_Breakdown||"", Total_Volume:indSheet[key]?.Total_Volume||0, ...metrics(syms) }; }));
+  return { sectorAnalysis, industryAnalysis };
+}
+
+// "ALL" = the scanner's cumulative sheets as they are; D..Y = recomputed for that timeframe
+function useTfSectors(db, tf) {
+  return useMemo(() => tf==="ALL" ? { sectorAnalysis:db.sectorAnalysis, industryAnalysis:db.industryAnalysis } : tfSectorIndustry(db, tf), [db, tf]);
+}
+
+function TfPicker({ value, onChange }) {
+  return (
+    <div style={{display:"inline-flex",border:"1px solid var(--b2)",borderRadius:6,overflow:"hidden",flexShrink:0}} title="All = every timeframe together (the Excel's cumulative score). D/W/M/Q/Y = only that timeframe's zone + NR signals, and each stock's move since that timeframe's previous close.">
+      {SECTOR_TFS.map(([k,l])=>(
+        <button key={k} onClick={()=>onChange(k)} style={{padding:"3px 8px",fontSize:10.5,fontWeight:600,fontFamily:"var(--mono)",background:value===k?"var(--adim)":"var(--s2)",color:value===k?"var(--acc)":"var(--t2)",borderRight:"1px solid var(--b2)"}}>{l}</button>
+      ))}
+    </div>
+  );
+}
+
 // ─── SECTOR / INDUSTRY with list ↔ bubble toggle ──────────────────────────────
-function SectorLeaderboardPanelV2({ db }) {
+function SectorLeaderboardPanelV2({ db: baseDb }) {
   const [view, setView] = useState("bubble");
-  const sectors = useMemo(()=>[...db.sectorAnalysis].sort((a,b)=>b.Strength_Score-a.Strength_Score),[db.sectorAnalysis]);
+  const [tf, setTf] = useState("ALL");
+  const tfd = useTfSectors(baseDb, tf);
+  const db = { ...baseDb, ...tfd };
+  const sectors = useMemo(()=>[...tfd.sectorAnalysis].sort((a,b)=>b.Strength_Score-a.Strength_Score),[tfd.sectorAnalysis]);
   const top10 = sectors.slice(0,10);
   const maxScore = Math.max(...top10.map(s=>s.Strength_Score),1);
   const topSyms = useMemo(()=> top10[0] ? db.master.filter(m=>m.Sector===top10[0].Sector).map(m=>m.Symbol) : [], [top10, db.master]);
@@ -5144,8 +5242,9 @@ function SectorLeaderboardPanelV2({ db }) {
     <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",display:"flex",alignItems:"center",flex:1}}>🏭 Sector Strength Leaderboard
-          <InfoTip><strong>List</strong>: strongest sectors by strength score (breadth + signal bias + price momentum). <strong>Bubble</strong>: every sector — x = net bias (bearish ← → bullish), y = strength, <strong>bubble size = signal intensity</strong> (total signals). Big bubbles in the top-right = strong, busy, bullish sectors.</InfoTip>
+          <InfoTip><strong>List</strong>: strongest sectors by strength score (breadth + signal bias + price momentum). <strong>Bubble</strong>: every sector — x = net bias (bearish ← → bullish), y = strength, <strong>bubble size = signal intensity</strong> (total signals). Big bubbles in the top-right = strong, busy, bullish sectors. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.</InfoTip>
         </div>
+        <TfPicker value={tf} onChange={setTf}/>
         <ViewToggle value={view} onChange={setView}/>
         {view==="list" && top10[0] && <ListCopy symbols={topSyms} compact/>}
       </div>
@@ -5176,9 +5275,11 @@ function SectorLeaderboardPanelV2({ db }) {
   );
 }
 
-function IndustryMomentumPanelV2({ db }) {
+function IndustryMomentumPanelV2({ db: baseDb }) {
   const [view, setView] = useState("bubble");
   const [mode, setMode] = useState("top");
+  const [tf, setTf] = useState("ALL");
+  const db = { ...baseDb, ...useTfSectors(baseDb, tf) };
   const sorted = useMemo(()=>[...db.industryAnalysis].sort((a,b)=>b.Net_Bias_Score-a.Net_Bias_Score),[db.industryAnalysis]);
   const data = mode==="top" ? sorted.slice(0,10) : [...sorted].reverse().slice(0,10);
   const maxAbs = Math.max(...data.map(d=>Math.abs(d.Net_Bias_Score)),1);
@@ -5188,8 +5289,9 @@ function IndustryMomentumPanelV2({ db }) {
     <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",display:"flex",alignItems:"center",flex:1}}>📐 Industry Bias Momentum
-          <InfoTip><strong>List</strong>: industries with the most bullish (or bearish) net signal bias. <strong>Bubble</strong>: the 40 busiest industries — x = net bias, y = strength, <strong>bubble size = signal intensity</strong>, colour = sector. A cluster of same-colour bubbles on one side = a whole sector rotating.</InfoTip>
+          <InfoTip><strong>List</strong>: industries with the most bullish (or bearish) net signal bias. <strong>Bubble</strong>: the 40 busiest industries — x = net bias, y = strength, <strong>bubble size = signal intensity</strong>, colour = sector. A cluster of same-colour bubbles on one side = a whole sector rotating. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.</InfoTip>
         </div>
+        <TfPicker value={tf} onChange={setTf}/>
         {view==="list" && <>
           <Pill active={mode==="top"} color="var(--long)" onClick={()=>setMode("top")}>▲ Bullish</Pill>
           <Pill active={mode==="bottom"} color="var(--short)" onClick={()=>setMode("bottom")}>▼ Bearish</Pill>

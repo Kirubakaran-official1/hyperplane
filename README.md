@@ -6,7 +6,7 @@ Your ChartInk scanner + the Hyperplane dashboard as one website on your Oracle s
 
 - The scanner runs by itself at **09:45** and **14:30 IST** on weekdays, and when you press **⟳ Sync now**.
 - Every collection is stored in PostgreSQL. The dashboard opens on the **latest** one; a date picker loads any older day, a whole day, or a date range.
-- **⏱ Intraday Compare** shows how every stock moved between two collections (e.g. 09:45 → 14:30).
+- **⏱ Compare** shows how every stock moved between two collections: intraday (09:45 → 14:30), day over day, weekly, monthly or any two you pick. Click a stat tile (Moved up, New signals…) to list just those stocks.
 - **⚙ Admin**: collection times, holidays, retention, Telegram on/off, run history with logs, stored collections (download Excel / delete), import old Excel files.
 - Login users and passwords live only in `config.ini`.
 
@@ -18,7 +18,7 @@ hyperplane/
 │   ├── Dockerfile  requirements.txt
 ├── frontend/
 │   ├── src/dashboard.jsx    ← all dashboard widgets (same code as the Hyperplane page)
-│   ├── src/server.jsx       login, date picker, Sync, Admin, Intraday Compare
+│   ├── src/server.jsx       login, date picker, Admin (incl. Sync), Compare
 │   ├── Caddyfile  Dockerfile  package.json
 ├── deploy/                  deploy.sh, backup.sh, restore.sh
 ├── .github/workflows/deploy.yml   auto-deploy on every push
@@ -40,9 +40,19 @@ hyperplane/
    ```
    - In `config.ini` set `secret_key` to any long random text and set your user ID / password under `[users]`.
    - In `.env` set `DOMAIN=:80` (for testing on your computer) and any `POSTGRES_PASSWORD`.
+
 4. Start everything locally:
    ```
    docker compose up -d --build
+   ```
+
+   ```
+   
+   Stop everything	- docker compose down
+   Start it again	 - docker compose up -d
+   Start after changing code	- docker compose up -d --build
+   See what's running	- docker compose ps
+   
    ```
    The first build takes a few minutes. Open **http://localhost**, log in, press **⟳ Sync now**.
    Follow the collector with `docker compose logs -f worker`.
@@ -137,6 +147,12 @@ edit on your computer  →  docker compose up -d --build  (check http://localhos
 git add .
 git commit -m "your message here"
 git push
+
+
+## Manual update the server code 
+cd ~/hyperplane && bash deploy/deploy.sh
+
+https://hyperplane.duckdns.org/
 
 ```
 GitHub updates the server in about 1–2 minutes (see the repo's **Actions** tab). Only what changed is rebuilt:
