@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Dashboard, mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell,
   ListCopy, HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, EqRow, formatDateLabel,
+  InfoTip, classifySignal, TF_WEIGHT,
 } from "./dashboard.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -364,12 +365,13 @@ function CollectionPicker({ id, snaps, days, value, onChange }) {
   );
 }
 
+const NR_TYPE = { BO: "Breakout", BD: "Breakdown", HN: "Near High", LW: "Near Low", B2NR: "Back to NR" };
 const STAT_FILTERS = {
   all: () => true, up: r => r.move_pct > 0, down: r => r.move_pct < 0,
   new: r => r.new_signals.length > 0, lost: r => r.dropped_signals.length > 0,
 };
 
-function CompareTab({ snaps, health }) {
+function CompareTab({ snaps, health, db }) {
   const days = useMemo(() => [...new Set(snaps.map(s => s.trade_date))].sort(), [snaps]);
   const [b, setB] = useState(null);
   const [mode, setMode] = useState(null);
@@ -387,6 +389,7 @@ function CompareTab({ snaps, health }) {
   const [q, setQ] = useState(""); const [onlySig, setOnlySig] = useState(true); const [fno, setFno] = useState(false);
   const [sort, setSort] = useState("move"); const [showAll, setShowAll] = useState(false);
   const [statF, setStatF] = useState("all");
+  const [by, setBy] = useState("all");
   useEffect(() => {
     if (!a || !b || a === b) { setData(null); return; }
     setErr(""); setData(null);
@@ -397,13 +400,41 @@ function CompareTab({ snaps, health }) {
       && (!onlySig || r.n_b > 0 || r.n_a > 0) && (!fno || r.is_fno)
       && (!r.health || allow.has(r.health)) && (!q || r.symbol.includes(q.toUpperCase()) || (r.sector || "").toLowerCase().includes(q.toLowerCase()))),
     [data, onlySig, fno, q, allow]);
+  // Strength change: every new / lost signal scored like the Focus score (timeframe weight x signal weight)
+  const sigInfo = useMemo(() => {
+    const m = {}; ((db && db.summary) || []).forEach(r => { m[r.Signal_Name] = r; });
+    return name => {
+      const nrm = name.match(/_(BO|BD|HN|LW|B2NR)$/);
+      const r = m[name] || { Signal_Name: name, Signal_Category: nrm ? "NR_PATTERN" : "ZONE", Signal_Type: nrm ? NR_TYPE[nrm[1]] : "", Timeframe: "" };
+      const c = classifySignal({ Signal_Name: name, Signal_Category: r.Signal_Category, Signal_Type: r.Signal_Type, Timeframe: r.Timeframe || "" });
+      return { name, nr: r.Signal_Category === "NR_PATTERN", tf: c.tf, dir: c.dir, pts: c.dir * (TF_WEIGHT[c.tf] || 1) * c.w };
+    };
+  }, [db]);
+  const strength = useMemo(() => {
+    const m = new Map();
+    (data ? data.rows : []).forEach(r => {
+      const g = { zone: 0, nr: 0, gained: [], lost: [] };
+      r.new_signals.forEach(n => { const i = sigInfo(n); g[i.nr ? "nr" : "zone"] += i.pts; if (i.dir) g.gained.push(i); });
+      r.dropped_signals.forEach(n => { const i = sigInfo(n); g[i.nr ? "nr" : "zone"] -= i.pts; if (i.dir) g.lost.push(i); });
+      g.zone = Math.round(g.zone * 10) / 10; g.nr = Math.round(g.nr * 10) / 10;
+      m.set(r.symbol, g);
+    });
+    return m;
+  }, [data, sigInfo]);
+  const deltaOf = r => { const g = strength.get(r.symbol); if (!g) return 0; return by === "zone" ? g.zone : by === "nr" ? g.nr : Math.round((g.zone + g.nr) * 10) / 10; };
+  const fns = { ...STAT_FILTERS, strUp: r => deltaOf(r) > 0, strDn: r => deltaOf(r) < 0 };
   const sorted = useMemo(() => {
-    const s = rows.filter(STAT_FILTERS[statF]);
+    const s = rows.filter(fns[statF]);
     if (sort === "move") s.sort((x, y) => y.move_pct - x.move_pct);
     if (sort === "drop") s.sort((x, y) => x.move_pct - y.move_pct);
     if (sort === "new") s.sort((x, y) => y.new_signals.length - x.new_signals.length || y.move_pct - x.move_pct);
+    if (sort === "stronger") s.sort((x, y) => deltaOf(y) - deltaOf(x) || y.move_pct - x.move_pct);
+    if (sort === "weaker") s.sort((x, y) => deltaOf(x) - deltaOf(y) || x.move_pct - y.move_pct);
     return s;
-  }, [rows, sort, statF]);
+  }, [rows, sort, statF, strength, by]);
+  const gainUp = useMemo(() => rows.filter(r => deltaOf(r) > 0).sort((x, y) => deltaOf(y) - deltaOf(x) || y.move_pct - x.move_pct), [rows, strength, by]);
+  const gainDn = useMemo(() => rows.filter(r => deltaOf(r) < 0).sort((x, y) => deltaOf(x) - deltaOf(y) || x.move_pct - y.move_pct), [rows, strength, by]);
+  const byCount = (k, sgn) => rows.filter(r => { const g = strength.get(r.symbol); return g && Math.sign(g[k]) === sgn; }).length;
   const avg = rows.length ? rows.reduce((s, r) => s + r.move_pct, 0) / rows.length : 0;
   const sectors = useMemo(() => {
     const m = {}; rows.forEach(r => { const k = r.sector || "Unknown"; (m[k] = m[k] || { n: 0, sum: 0 }); m[k].n++; m[k].sum += r.move_pct; });
@@ -423,6 +454,8 @@ function CompareTab({ snaps, health }) {
     [null, "Average move", `${avg >= 0 ? "+" : ""}${avg.toFixed(2)}%`, mc(avg)],
     ["new", "New signals", rows.filter(STAT_FILTERS.new).length.toLocaleString(), "var(--acc)"],
     ["lost", "Lost signals", rows.filter(STAT_FILTERS.lost).length.toLocaleString(), "var(--mixed)"],
+    ["strUp", "Stronger ▲", gainUp.length.toLocaleString(), "var(--long)"],
+    ["strDn", "Stronger ▼", gainDn.length.toLocaleString(), "var(--short)"],
   ];
   return (
     <div style={{ padding: "18px 22px" }}>
@@ -448,7 +481,7 @@ function CompareTab({ snaps, health }) {
           <Pill active={onlySig} onClick={() => setOnlySig(v => !v)}>{onlySig ? "✓ " : ""}Only stocks with signals</Pill>
           <Pill active={fno} color="var(--long)" onClick={() => setFno(v => !v)}>{fno ? "✓ " : ""}F&amp;O only</Pill>
           <span style={{ width: 1, height: 20, background: "var(--b2)" }} />
-          {[["move", "Biggest gainers"], ["drop", "Biggest losers"], ["new", "Most new signals"]].map(([k, l]) => <Pill key={k} active={sort === k} onClick={() => setSort(k)}>{l}</Pill>)}
+          {[["move", "Biggest gainers"], ["drop", "Biggest losers"], ["new", "Most new signals"], ["stronger", "Stronger ▲"], ["weaker", "Stronger ▼"]].map(([k, l]) => <Pill key={k} active={sort === k} onClick={() => setSort(k)}>{l}</Pill>)}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8, marginBottom: 12 }}>
           {tiles.map(([k, l, v, c]) => {
@@ -463,6 +496,49 @@ function CompareTab({ snaps, health }) {
             );
           })}
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "4px 0 8px" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--t1)", display: "flex", alignItems: "center" }}>💪 Who got stronger
+            <InfoTip>Each <strong>new</strong> signal adds points and each <strong>lost</strong> signal takes them away: points = timeframe weight (D 1 · W 2 · M 3 · Q 4 · Y 5) × signal weight (break / NR breakout 1 · holding a zone 0.6 · near a level 0.35) — the same weights as the Focus score. Bullish signals count +, bearish −. So a stock is <strong>stronger ▲</strong> when it gained bullish signals or lost bearish ones. <strong>By</strong> limits the score to zone signals or NR signals.</InfoTip>
+          </div>
+          <span style={{ fontSize: 11, color: "var(--t3)", marginLeft: 8 }}>By</span>
+          {[["all", "Zones + NR"], ["zone", "Zones"], ["nr", "NR"]].map(([k, l]) => <Pill key={k} active={by === k} onClick={() => setBy(k)}>{l}</Pill>)}
+          <span style={{ marginLeft: "auto", display: "flex", gap: 10, fontSize: 11, fontFamily: "var(--mono)" }}>
+            {[["zone", "Zones"], ["nr", "NR"]].map(([k, l]) => (
+              <span key={k} onClick={() => setBy(k)} style={{ cursor: "pointer", color: "var(--t2)" }} title={`Stocks whose ${l} score went up / down`}>
+                {l}: <span style={{ color: "var(--long)", fontWeight: 700 }}>▲{byCount(k, 1)}</span> <span style={{ color: "var(--short)", fontWeight: 700 }}>▼{byCount(k, -1)}</span>
+              </span>
+            ))}
+          </span>
+        </div>
+        <EqRow height={380} cols="minmax(0,1fr) minmax(0,1fr)" min={300}>
+          {[["▲", "Gaining upside strength", gainUp, "var(--long)"], ["▼", "Gaining downside strength", gainDn, "var(--short)"]].map(([ic, t, list, c]) => (
+            <FocusCard key={t} icon={ic} title={`${t} (${list.length})`} sub={by === "all" ? "Zone + NR signals" : by === "zone" ? "Zone signals only" : "NR signals only"} right={<ListCopy symbols={list.map(r => r.symbol)} />}>
+              <div style={{ overflow: "auto", flex: 1 }} className="tower-scroll">
+                {list.slice(0, 40).map(r => {
+                  const g = strength.get(r.symbol), d = deltaOf(r);
+                  const chips = [...g.gained.filter(i => by === "all" || (by === "nr") === i.nr).map(i => ({ ...i, lost: false })),
+                                 ...g.lost.filter(i => by === "all" || (by === "nr") === i.nr).map(i => ({ ...i, lost: true }))]
+                    .filter(i => (i.lost ? -i.dir : i.dir) * Math.sign(d) > 0).slice(0, 4);
+                  return (
+                    <div key={r.symbol} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid var(--b1)" }}>
+                      <div style={{ width: 96, flexShrink: 0 }}><SymCell sym={r.symbol} /><div style={{ fontSize: 8.5, color: sectorColor(r.sector || ""), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.sector}</div></div>
+                      <span style={{ width: 44, fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, color: c, textAlign: "right" }} title={`Zones ${g.zone >= 0 ? "+" : ""}${g.zone} · NR ${g.nr >= 0 ? "+" : ""}${g.nr}`}>{d > 0 ? "+" : ""}{d.toFixed(1)}</span>
+                      <span style={{ width: 54, fontFamily: "var(--mono)", fontSize: 10.5, color: mc(r.move_pct), textAlign: "right" }}>{r.move_pct > 0 ? "+" : ""}{r.move_pct.toFixed(2)}%</span>
+                      <div style={{ flex: 1, display: "flex", gap: 3, flexWrap: "wrap", minWidth: 0 }}>
+                        {chips.map((i, k) => (
+                          <span key={k} title={`${i.lost ? "Lost" : "New"}: ${i.name}`} style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, fontFamily: "var(--mono)", border: `1px solid ${i.dir > 0 ? "var(--long)" : "var(--short)"}`, color: i.dir > 0 ? "var(--long)" : "var(--short)", textDecoration: i.lost ? "line-through" : "none", whiteSpace: "nowrap" }}>
+                            {i.dir > 0 ? "▲" : "▼"} {i.tf} {i.nr ? "NR" : "Zone"}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {!list.length && <div style={{ color: "var(--t3)", fontSize: 11.5, padding: 10 }}>No stock got stronger this way.</div>}
+              </div>
+            </FocusCard>
+          ))}
+        </EqRow>
         <EqRow height={520} cols="minmax(0,.8fr) minmax(0,2.2fr)" min={300}>
           <FocusCard icon="🏭" title="Sector move" sub="Average move of each sector's stocks (3+ stocks).">
             {sectors.map(s => (
@@ -479,7 +555,7 @@ function CompareTab({ snaps, health }) {
           <FocusCard icon="📋" title={`${sorted.length.toLocaleString()} stocks${statF !== "all" ? ` · ${tiles.find(t => t[0] === statF)[1].toLowerCase()}` : ""} · ${fmtDT(data.a.taken_at)} → ${fmtDT(data.b.taken_at)}`} sub={`${data.a.label}  →  ${data.b.label}`} right={<ListCopy symbols={sorted.map(r => r.symbol)} />}>
             <div style={{ overflow: "auto", flex: 1 }} className="tower-scroll">
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr>{["Symbol", "Price then", "Price now", "Move", "Bias", "Signals", "New signals", "Lost signals", "Health"].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
+                <thead><tr>{["Symbol", "Price then", "Price now", "Move", "Strength Δ", "Bias", "Signals", "New signals", "Lost signals", "Health"].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
                 <tbody>
                   {vis.map(r => (
                     <tr key={r.symbol} className="sec-row" style={{ borderBottom: "1px solid var(--b1)" }}>
@@ -487,6 +563,7 @@ function CompareTab({ snaps, health }) {
                       <td style={TD}>{r.price_a}</td>
                       <td style={TD}>{r.price_b}</td>
                       <td style={{ ...TD, fontWeight: 700, color: mc(r.move_pct) }}>{r.move_pct > 0 ? "+" : ""}{r.move_pct.toFixed(2)}%</td>
+                      <td style={{ ...TD, fontWeight: 700, color: mc(deltaOf(r)) }} title={(() => { const g = strength.get(r.symbol); return g ? `Zones ${g.zone} · NR ${g.nr}` : ""; })()}>{deltaOf(r) > 0 ? "+" : ""}{deltaOf(r).toFixed(1)}</td>
                       <td style={TD}>{r.bias_a === r.bias_b ? (r.bias_b || "—") : `${r.bias_a || "—"} → ${r.bias_b || "—"}`}</td>
                       <td style={TD}>{r.n_a} → {r.n_b}</td>
                       <td style={{ padding: "5px 8px", maxWidth: 260 }}><div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>{r.new_signals.slice(0, 4).map(s => <span key={s} title={s} style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, border: "1px solid var(--acc)", color: "var(--acc)", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s}</span>)}{r.new_signals.length > 4 && <span style={{ fontSize: 9, color: "var(--t3)" }}>+{r.new_signals.length - 4}</span>}</div></td>
@@ -494,7 +571,7 @@ function CompareTab({ snaps, health }) {
                       <td style={{ padding: "5px 8px" }}><HealthBadge h={r.health} small /></td>
                     </tr>
                   ))}
-                  {!vis.length && <tr><td colSpan={9} style={{ padding: 14, color: "var(--t3)", textAlign: "center" }}>No stocks match these filters.</td></tr>}
+                  {!vis.length && <tr><td colSpan={10} style={{ padding: 14, color: "var(--t3)", textAlign: "center" }}>No stocks match these filters.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -622,7 +699,7 @@ export default function Root() {
 
   const shown = local || versions;
   const extraTabs = [
-    { id: "compare", label: "⏱ Compare", render: ({ health }) => <CompareTab snaps={snaps} health={health} /> },
+    { id: "compare", label: "⏱ Compare", render: ({ health, db }) => <CompareTab snaps={snaps} health={health} db={db} /> },
     ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} /> }] : []),
   ];
   const empty = (

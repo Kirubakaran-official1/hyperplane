@@ -138,8 +138,16 @@ Zone vocabulary per timeframe (from raw-data-5): **top band** = `top_near .. top
 - Break: close beyond `<a>`'s own zone level; `weekly_*` names need Weekly Close **crossed** it (prev weekly close on
   the other side). Retracement: close inside `<a>`'s band.
 
+### Zone retest (Zone_Retest sheet) — owner's words, 2026-09-29
+- "Last month closed above the last month zone and now LTP is near the current month zone bottom", same for W/M/Q/Y
+  (`ZONE_RETEST_TFS`), mirror for sells. BUY: previous bar close > previous bar's OWN top_zone (virgin-data) and
+  close inside the current bottom band (bottom_zone..bottom_near). SELL: previous close < previous bar's own
+  bottom_zone and close inside the current top band. No Daily (raw scans have no previous-day zones). No stop/target.
+
 ### Rules NOT yet confirmed by a screenshot (ask before changing; verify with `--validate`)
 - Trend / flag signals (`last_4mon_up_trend_with_close_...`): currently N completed bars each closing higher/lower.
+  The owner described the trend as **each bar's zone higher than the one before** ("4 month zone is less than the 3rd
+  month zone"), which differs — not changed yet; get the exact scan (which zone edge, how many bars) first.
 - "Near_and_abv/blw_Overlap_..." stacked-support/resistance signals: currently "both bands intersect".
 - The basic zone signals (close above/below/near/crossed a TF zone) are implemented from their names.
 
@@ -149,12 +157,13 @@ Zone vocabulary per timeframe (from raw-data-5): **top band** = `top_near .. top
 | Zone_Levels | per stock: price, prev closes, per TF `{L}_Top_Zone/_Top_Near/_Bottom_Near/_Bottom_Zone/_Position/_Dist_Top_Pct/_Dist_Bottom_Pct`, Is_FNO, Is_Nifty_500 |
 | Return_Potential | monthly-zone breakout entry → Q/Y zone targets; stop = other edge of the monthly band; Status Triggered / Near Entry (≤ `NEAR_ENTRY_PCT`) / Waiting / Target Q/Y Hit |
 | Price_Health | long-term quality from yearly candles: **POOR** > 70% below multi-year peak · **WEAK** > 50% below peak or lower than 5 years ago · **HEALTHY** otherwise (`HEALTH_*` settings) |
+| Zone_Retest | see "Zone retest" above: per stock + TF + side, previous close vs previous bar's zone, current zone + band, `Dist_To_Zone_Edge_Pct`, Health |
 | Failed_NR | NR trap: after the mother, bar(s) closed beyond one edge (failed BO/BD), no close beyond the other edge, other bodies inside, latest close back inside and near the OPPOSITE edge (same 1.9/2 rule). Failed BO → LONG at mother Low (stop Low, target High); mirror SHORT. Biggest mother per stock+TF kept. |
 
-All 18 sheets: Detailed_Signals, Flat_Data_For_Slicers, Signal_Matrix, Signal_Summary, Top_Opportunities,
+All 19 sheets: Detailed_Signals, Flat_Data_For_Slicers, Signal_Matrix, Signal_Summary, Top_Opportunities,
 Bias_Distribution, Signal_Type_Analysis, Multi_Timeframe_NR, Strong_Conviction, Virgin_BO_BD_Analysis,
 Sector_Analysis, Industry_Analysis, NR_Breakout_Sector_Industry, Master_Stock_Data, Zone_Levels, Return_Potential,
-Price_Health, Failed_NR. Symbols in Flat_Data_For_Slicers are TradingView style `NSE:SYM,` — always clean with
+Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are TradingView style `NSE:SYM,` — always clean with
 `replace("NSE:","").replace(",","").strip()` (JS `cleanSym`, Python `store.stock_rows`).
 
 ---
@@ -170,20 +179,22 @@ Price_Health, Failed_NR. Symbols in Flat_Data_For_Slicers are TradingView style 
 - **Global stock-quality filter** (Healthy/Weak/Poor tick-boxes, unrated counts as Weak) is applied to every tab via
   `healthIndex` → `excludedSymbols` → `filterDB`. Default **Healthy only** (`HEALTH_DEFAULT`), remembered in
   localStorage key `hp_health_allow_v2`.
-- **Control Tower** (`ControlTowerCombined`) order: data scope → Market Intelligence (KPIs, Alpha rankings,
-  Sector/Industry bubble panels, Movers·F&O·Flow·Bias) → Focus Command (Priority radar, HTF×LTF confluence, Focus
-  map, Alignment matrix, Sector×TF heat, Near breakout · Relative strength · Conflict · Industry hotspots) → Setup
-  Scanner (Zone Breakout Analyser, Stacked setups, setup lists, NR Trap) → Opportunities → Return Expectations →
-  Watchlist Builder. Side nav `CTSideNav` (drawer, ☰ in the tab bar): quality, Direction All/Long/Short, F&O only,
-  segment (All / Nifty 500 / Large 100 / Mid 150 / Small 250), sector, and jump links to `Anchor` ids (`ct-*`).
+- **Control Tower** (`ControlTowerCombined`) order: data scope → Sector + Industry bubble panels → Alpha composite
+  ranking (`ControlTower`) → Focus Command (Priority radar, HTF×LTF confluence (full width), Alignment matrix,
+  Sector×TF heat, Industry hotspots · Near breakout) → Setup Scanner (Zone Breakout Analyser, Stacked setups, setup
+  lists, NR Trap, Zone Retest (`ZoneRetestSection`), Trend Pullback (`TrendPullbackSection`, from the
+  `last_N…_trend_with_close_nearto_…_zone` signals)) → Opportunities → Return Expectations → Watchlist Builder. Removed on the owner's request
+  (2026-09-29): the Market Intelligence header + KPI strip, Top movers, F&O strategy mapper, Timeframe signal flow,
+  Market bias distribution, Focus Map, Relative Strength / Weakness, Conflict Zone. Side nav `CTSideNav` (drawer, ☰
+  in the tab bar): quality, Direction All/Long/Short, F&O only, segment (All / Nifty 500 / Large 100 / Mid 150 /
+  Small 250), sector, industry, and jump links to `Anchor` ids (`ct-*`).
   Direction locks the side of Opportunities / Return Expectations / NR Trap / breakout analyser via `useLockable`.
 - Key logic: `buildFocusModel` (score, TF ladder, dir per stock), `SETUP_DEFS` + `stockSetups`,
   `buildOpportunities` (zone path + NR nested/domino; conviction High ≥ 9, Medium ≥ 6; targets Q/M/W),
   `buildReturnRows` (any entry TF D/W/M/Q, any exit TFs, from Zone_Levels), `zoneBreakRows` (broke a zone, still
   within ≤1/2/3/5 % of the level; Fresh = previous close of that TF was on the other side), `NRTrapSection`.
-- **Timeframe Signal Flow** (`StrategyFlowPanel`): the scanner writes `Timeframe` only on NR rows of
-  Flat_Data_For_Slicers (zone rows are blank), so the widget derives D/W/M/Q/Y with `classifySignal()` and colours each
-  signal by its own direction. Use `classifySignal()` whenever a signal's timeframe is needed — never `r.Timeframe`.
+- The scanner writes `Timeframe` only on NR rows of Flat_Data_For_Slicers (zone rows are blank). Use
+  `classifySignal()` whenever a signal's timeframe or direction is needed — never `r.Timeframe`.
 - **Sector / industry per timeframe**: `TfPicker` (All · D · W · M · Q · Y) on the Control Tower sector + industry
   panels and at the top of the Sector & Industry tab. All = the scanner's sheets as-is. D..Y = `tfSectorIndustry()`:
   same columns and same strength formula (`attachStrength`, 40% net bias + 30% breadth + 30% momentum), counting only
@@ -193,9 +204,18 @@ Price_Health, Failed_NR. Symbols in Flat_Data_For_Slicers are TradingView style 
 - **Compare tab** (`CompareTab`, server.jsx): mode dropdown Intraday / Day over day / Weekly / Monthly / Custom
   (`compareFrom`: previous week = last collection before Monday, previous month = before the 1st), a date + time
   `CollectionPicker` per side, and clickable stat tiles (`STAT_FILTERS`) that filter the table.
-- **Market Bias Distribution** (`BiasDistributionPanel`) shows the scanner's per-stock `Trading_Bias`, which counts
-  zone signals only: NR-only stocks come out NEUTRAL, and one retracement signal makes the stock RETRACEMENT. Left as
-  is pending the owner's answer (§10).
+  "Who got stronger": each new signal adds and each lost signal subtracts `dir × TF_WEIGHT × signal weight`
+  (same weights as the Focus score, via `classifySignal` + the Signal_Summary sheet for signal types); split
+  Zones / NR; up/down lists, Stronger ▲/▼ tiles and sorts, and a Strength Δ column.
+- **Stock report everywhere**: `StockOpenCtx` + `StockReportHost` (wraps every tab in `Dashboard`). Any `SymCell`
+  inside opens `StockDeepDive`, or `NoSignalReport` (zone position per TF) when the stock has no signals. The
+  Control Tower provides its own `setOpenSym` so the report uses its filtered, multi-file model. Always render
+  tickers with `SymCell` (or `FocusSym` inside Focus Command) so they stay clickable.
+- Control Tower sector panel is selectable (bubble or list row): the industry panel then shows only that sector's
+  industries; both panels share one timeframe. Side nav has Sector + Industry filters (industry list follows the
+  sector).
+- The scanner's per-stock `Trading_Bias` counts zone signals only: NR-only stocks come out NEUTRAL, and one
+  retracement signal makes the stock RETRACEMENT.
 - Old Excel files without the new sheets must keep working (sections show a "needs the new scanner" note).
 - Styling: CSS variables in the `CSS` string (`.app-shell.theme-dark/.theme-light`), inline styles, IBM Plex Mono +
   Inter. Sticky header 52 px + tab bar 44 px → anchors use `scrollMarginTop: 104`. Don't set `overflow-x:hidden` on
@@ -294,5 +314,5 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
   "Unknown" bucket fixed. Sector/industry timeframe views; Compare tab with week/month modes, proper collection pickers
   and stat-tile filters; "NR Expansion" setup renamed "NR Breakout · Breakdown".
 - Open questions to ask the owner (don't guess): virgin **breakout** scan screenshot; a trend/flag scan screenshot;
-  a "Near_and_abv_Overlap" scan screenshot; **Market Bias** — should NR-only stocks take their bias from the NR
-  direction (BO/HN = Long, BD/LW = Short), and should RETRACEMENT apply only when there are no long/short signals?
+  a "Near_and_abv_Overlap" scan screenshot; the exact **trend** definition (zones rising vs closes
+  rising — see §5).

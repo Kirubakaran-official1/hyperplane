@@ -140,6 +140,16 @@ HEALTH_WEAK_YEARS = 5
 #   Timeframes / lengths = the same ones as your NR scans (D W M Q Y, 4..12 bars); per stock and
 #   timeframe the biggest mother candle is kept.
 
+# ---------------------------------------------------------------- ZONE RETEST (Zone_Retest sheet) --
+#   Owner's rule (2026-09-29): "last month closed above the last month zone and now LTP is near the
+#   current month zone bottom" — the same for every timeframe below, and the mirror for sells:
+#   BUY  : previous bar CLOSE > the previous bar's OWN top_zone (virgin-data)
+#          and close inside the CURRENT bar's bottom band (bottom_zone .. bottom_near)
+#   SELL : previous bar CLOSE < the previous bar's OWN bottom_zone
+#          and close inside the CURRENT bar's top band (top_near .. top_zone)
+#   Daily is not included: the raw scans have no previous-day zones.
+ZONE_RETEST_TFS = 'wmqy'
+
 # ---------------------------------------------------------------- Return_Potential sheet --
 NEAR_ENTRY_PCT = 3.0            # "Near Entry" status when price is within this % of the monthly breakout level
                                 # stop = other edge of the monthly breakout band (top_near for longs)
@@ -3262,6 +3272,7 @@ def generate_telegram_insights(combined_stock_map, stock_zone_signal_map, stock_
 #     Return_Potential  "hidden return": entry = monthly zone breakout, exits = quarterly / yearly zone
 #     Price_Health      long-term price quality (POOR / WEAK / HEALTHY) from the yearly candles
 #     Failed_NR         failed NR breakout / breakdown, price back at the opposite mother edge (trap)
+#     Zone_Retest       last bar closed beyond its own zone, price now back at the current zone's other band
 # ============================================================================
 
 _TF_LABEL = {'d': 'D', 'w': 'W', 'm': 'M', 'q': 'Q', 'y': 'Y'}
@@ -3515,6 +3526,42 @@ def build_failed_nr_rows(frame, zone_rows, health_rows=None):
     return rows
 
 
+def build_zone_retest_rows(frame, zone_rows, health_rows=None):
+    """ZONE RETEST — the last bar closed beyond its own zone, price is now back at the current zone's
+    opposite band (rule in SETTINGS)."""
+    x = _Ctx(frame)
+    zinfo = {z['Symbol']: z for z in zone_rows}
+    health = {h['Symbol']: h['Health'] for h in (health_rows or [])}
+    syms = frame['symbol'].tolist()
+    rows = []
+    for tf in ZONE_RETEST_TFS:
+        prev_close = x.prev(tf)
+        prev_top, prev_bot = x.vzone(tf, 'top', 1), x.vzone(tf, 'bottom', 1)
+        tz, tn, bz, bn = x.z[tf]['tz'], x.z[tf]['tn'], x.z[tf]['bz'], x.z[tf]['bn']
+        for trade, mask in (('LONG', (prev_close > prev_top) & x.in_band(x.bottom(tf))),
+                            ('SHORT', (prev_close < prev_bot) & x.in_band(x.top(tf)))):
+            for k in np.flatnonzero(mask):
+                sym = syms[k]
+                if sym not in zinfo:
+                    continue
+                z, price = zinfo[sym], float(x.c[k])
+                edge = bz[k] if trade == 'LONG' else tz[k]
+                rows.append({
+                    'Symbol': sym, 'Stock_Name': z['Stock_Name'], 'Sector': z['Sector'], 'Industry': z['Industry'],
+                    'Price': _r2(price), 'Timeframe': _TF_LABEL[tf], 'Trade': trade,
+                    'Setup': (f"Closed above last {_TF_LABEL[tf]} zone -> back at current zone bottom" if trade == 'LONG'
+                              else f"Closed below last {_TF_LABEL[tf]} zone -> back at current zone top"),
+                    'Prev_Close': _r2(prev_close[k]), 'Prev_Zone_Top': _r2(prev_top[k]), 'Prev_Zone_Bottom': _r2(prev_bot[k]),
+                    'Zone_Top': _r2(tz[k]), 'Zone_Top_Near': _r2(tn[k]), 'Zone_Bottom_Near': _r2(bn[k]), 'Zone_Bottom': _r2(bz[k]),
+                    'Dist_To_Zone_Edge_Pct': _r2(abs(price - edge) / price * 100) if price else None,
+                    'Health': health.get(sym, ''),
+                    'Is_FNO': z['Is_FNO'], 'Is_Nifty_500': z['Is_Nifty_500'],
+                })
+    tf_rank = {'Y': 0, 'Q': 1, 'M': 2, 'W': 3}
+    rows.sort(key=lambda r: (tf_rank[r['Timeframe']], r['Dist_To_Zone_Edge_Pct'] if r['Dist_To_Zone_Edge_Pct'] is not None else 99))
+    return rows
+
+
 def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
     """Append Zone_Levels + Return_Potential to the already-saved workbook."""
     try:
@@ -3522,11 +3569,13 @@ def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
         health_rows = build_price_health_rows(frame, zone_rows)
         ret_rows = build_return_potential_rows(zone_rows, health_rows)
         failed_rows = build_failed_nr_rows(frame, zone_rows, health_rows)
+        retest_rows = build_zone_retest_rows(frame, zone_rows, health_rows)
         with pd.ExcelWriter(filename, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
             pd.DataFrame(zone_rows).to_excel(writer, sheet_name='Zone_Levels', index=False)
             pd.DataFrame(ret_rows).to_excel(writer, sheet_name='Return_Potential', index=False)
             pd.DataFrame(health_rows).to_excel(writer, sheet_name='Price_Health', index=False)
             pd.DataFrame(failed_rows).to_excel(writer, sheet_name='Failed_NR', index=False)
+            pd.DataFrame(retest_rows).to_excel(writer, sheet_name='Zone_Retest', index=False)
         n_long = sum(1 for r in ret_rows if r['Direction'] == 'LONG')
         print(f"  ✓ Added Zone_Levels ({len(zone_rows)} stocks) + Return_Potential ({n_long} long / {len(ret_rows) - n_long} short setups)")
         return True
@@ -3619,17 +3668,19 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
             master_stock_data, stock_zone_signal_map, stock_nr_signal_map
         )
 
-        current_step = "Building Zone_Levels + Price_Health + Return_Potential + Failed_NR"
+        current_step = "Building Zone_Levels + Price_Health + Return_Potential + Failed_NR + Zone_Retest"
         zone_level_rows = build_zone_level_rows(frame, master_stock_data, category_stocks)
         health_rows = build_price_health_rows(frame, zone_level_rows)
         return_rows = build_return_potential_rows(zone_level_rows, health_rows)
         failed_nr_rows = build_failed_nr_rows(frame, zone_level_rows, health_rows)
+        retest_rows = build_zone_retest_rows(frame, zone_level_rows, health_rows)
         n_long = sum(1 for r in return_rows if r['Direction'] == 'LONG')
         n_poor = sum(1 for r in health_rows if r['Health'] == 'POOR')
         n_weak = sum(1 for r in health_rows if r['Health'] == 'WEAK')
         print(f"  • Zone_Levels: {len(zone_level_rows)} stocks | Return_Potential: {n_long} long / {len(return_rows) - n_long} short setups")
         print(f"  • Price_Health: {n_poor} poor, {n_weak} weak, {len(health_rows) - n_poor - n_weak} healthy")
         print(f"  • Failed_NR: {len(failed_nr_rows)} trap setups")
+        print(f"  • Zone_Retest: {len(retest_rows)} retest setups")
 
         current_step = "Saving Excel"
         filename = save_excel_with_enhanced_sheets(
@@ -3638,7 +3689,8 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
             sector_rows=sector_rows, industry_rows=industry_rows,
             nr_detail_rows=nr_detail_rows, master_stock_records=master_stock_records,
             extra_sheets={'Zone_Levels': zone_level_rows, 'Return_Potential': return_rows,
-                          'Price_Health': health_rows, 'Failed_NR': failed_nr_rows}
+                          'Price_Health': health_rows, 'Failed_NR': failed_nr_rows,
+                          'Zone_Retest': retest_rows}
         )
         if not filename:
             raise Exception("Failed to generate Excel file")

@@ -269,10 +269,15 @@ function CopyBtn({ text }) {
   );
 }
 
-function SymCell({ sym }) {
+// Any ticker inside a provider opens the stock report drawer
+const StockOpenCtx = React.createContext(null);
+
+function SymCell({ sym, size=11 }) {
+  const open = React.useContext(StockOpenCtx);
   return (
     <div className="sym-cell">
-      <span style={{fontFamily:"var(--mono)",fontSize:"11px",fontWeight:700,color:"var(--acc)"}}>{sym}</span>
+      <span onClick={open ? e=>{ e.stopPropagation(); open(sym); } : undefined} title={open ? "Open the stock report" : undefined}
+        style={{fontFamily:"var(--mono)",fontSize:size,fontWeight:700,color:"var(--acc)",cursor:open?"pointer":"default",borderBottom:open?"1px dotted var(--accborder)":"none"}}>{sym}</span>
       <CopyBtn text={sym} />
     </div>
   );
@@ -619,10 +624,20 @@ function mapDB(rawDB) {
     return o;
   }).filter(r => r.Symbol && r.Trade);
 
-  const has = { priceHealth: !!Object.keys(rawDB).find(k=>k.toLowerCase().replace(/[\s_]/g,"")==="pricehealth"),
-                failedNR: !!Object.keys(rawDB).find(k=>k.toLowerCase().replace(/[\s_]/g,"")==="failednr") };
+  // Zone_Retest (last bar closed beyond its own zone, price back at the current zone's other band)
+  const ZR_NUM = ["Price","Prev_Close","Prev_Zone_Top","Prev_Zone_Bottom","Zone_Top","Zone_Top_Near","Zone_Bottom_Near","Zone_Bottom","Dist_To_Zone_Edge_Pct"];
+  const zoneRetest = find("ZoneRetest","Zone_Retest").map(r => {
+    const o = { Symbol: cleanSym(r.Symbol), Stock_Name: str(r.Stock_Name), Sector: str(r.Sector||"Unknown")||"Unknown",
+      Industry: str(r.Industry||"Unknown")||"Unknown", Timeframe: str(r.Timeframe), Trade: str(r.Trade), Setup: str(r.Setup),
+      Health: str(r.Health).toUpperCase(), Is_FNO: str(r.Is_FNO||"No"), Is_Nifty_500: str(r.Is_Nifty_500||"No") };
+    ZR_NUM.forEach(k => { o[k] = numOrNull(r[k]); });
+    return o;
+  }).filter(r => r.Symbol && r.Trade);
 
-  return { flat, top, summary, strong, mtnr, virgin, sig_stocks, master, masterMap, sectorAnalysis, industryAnalysis, nrSectorIndustry, zoneLevels, returnPotential, priceHealth, failedNR, has };
+  const hasSheet = name => !!Object.keys(rawDB).find(k=>k.toLowerCase().replace(/[\s_]/g,"")===name);
+  const has = { priceHealth: hasSheet("pricehealth"), failedNR: hasSheet("failednr"), zoneRetest: hasSheet("zoneretest") };
+
+  return { flat, top, summary, strong, mtnr, virgin, sig_stocks, master, masterMap, sectorAnalysis, industryAnalysis, nrSectorIndustry, zoneLevels, returnPotential, priceHealth, failedNR, zoneRetest, has };
 }
 
 function classifyHorizons(flat) {
@@ -896,7 +911,7 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
           ))}
         </div>
 
-        <div>
+        <StockReportHost db={db}>
           {!db && !extra && (emptyState || null)}
           {db && tab==="tower"   && <ControlTowerCombined versions={versions} health={health} navOpen={navOpen} setNavOpen={setNavOpen} onFilterCount={setCtFilters} />}
           {db && tab==="sector"  && <SectorIndustryTab db={db} />}
@@ -910,7 +925,7 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
           {db && tab==="master"  && <MasterListTab  db={db} />}
           {db && tab==="trend" && hasMultiVersions && <TrendVersionsTab versions={versions} activeIdx={safeActive} onSelectVersion={setActiveIdx} />}
           {extra && extra.render({ versions, db, health, setTab })}
-        </div>
+        </StockReportHost>
       </div>
     </>
   );
@@ -1047,50 +1062,6 @@ function WatchlistBuilder({ db }) {
           </span>
         ))}
         {list.length===0&&<span style={{fontSize:11,color:"var(--t3)"}}>Add stocks via presets above</span>}
-      </div>
-    </div>
-  );
-}
-
-// ─── STRATEGY FLOW ────────────────────────────────────────────────────────────
-function StrategyFlowPanel({ db }) {
-  const tfData = useMemo(()=>{
-    const m={};
-    FOCUS_TFS.forEach(t=>{ m[t]={tf:TF_NAME[t],LONG:0,SHORT:0,MIXED:0,RETRACEMENT:0,total:0}; });
-    db.flat.forEach(r=>{
-      if (r.Signal_Category!=="ZONE" && r.Signal_Category!=="NR_PATTERN") return;
-      const c=classifySignal(r), t=m[c.tf];
-      if (!t) return;
-      const b = r.Signal_Type==="RETRACEMENT" ? "RETRACEMENT" : c.dir>0 ? "LONG" : c.dir<0 ? "SHORT" : "MIXED";
-      t[b]++; t.total++;
-    });
-    return FOCUS_TFS.map(t=>m[t]).filter(t=>t.total);
-  },[db.flat]);
-  const maxTotal=Math.max(...tfData.map(t=>t.total),1);
-  return (
-    <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px",height:"100%"}}>
-      <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:"1px",fontWeight:600,marginBottom:12}}>⚡ Timeframe Signal Flow</div>
-      {tfData.map(t=>(
-        <div key={t.tf} style={{marginBottom:10}}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-            <span style={{fontSize:11,fontWeight:600,color:"var(--t1)",fontFamily:"var(--mono)"}}>{t.tf}</span>
-            <span style={{fontSize:10,color:"var(--t2)",fontFamily:"var(--mono)"}}>{t.total}</span>
-          </div>
-          <div style={{height:8,background:"var(--s3)",borderRadius:5,overflow:"hidden",display:"flex"}}>
-            {["LONG","SHORT","MIXED","RETRACEMENT"].map(b=>{
-              const w=(t[b]||0)/t.total*100;
-              if(!w) return null;
-              const bc=BIAS_COLOR[b]||BIAS_COLOR.NEUTRAL;
-              return <div key={b} title={`${b}: ${t[b]}`} style={{height:"100%",width:`${w}%`,background:bc.text,opacity:.8}}/>;
-            })}
-          </div>
-        </div>
-      ))}
-      <div style={{display:"flex",gap:10,marginTop:8,flexWrap:"wrap"}}>
-        {["LONG","SHORT","MIXED","RETRACEMENT"].map(b=>{
-          const bc=BIAS_COLOR[b]||BIAS_COLOR.NEUTRAL;
-          return <div key={b} style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:8,height:8,borderRadius:2,background:bc.text}}/><span style={{fontSize:9,color:"var(--t2)"}}>{b}</span></div>;
-        })}
       </div>
     </div>
   );
@@ -1283,72 +1254,6 @@ function AlphaIdeasPanel({ db }) {
   );
 }
 
-// ─── TOP MOVERS ───────────────────────────────────────────────────────────────
-function TopMoversPanel({ db }) {
-  const [mode, setMode] = useState("long");
-  const lists = useMemo(()=>({
-    long:   [...db.strong].filter(r=>r.Conviction_Type.includes("LONG")).sort((a,b)=>+b.Long_Signals-+a.Long_Signals).slice(0,8),
-    short:  [...db.strong].filter(r=>r.Conviction_Type.includes("SHORT")).sort((a,b)=>+b.Short_Signals-+a.Short_Signals).slice(0,8),
-    nr:     [...db.mtnr].sort((a,b)=>+b.NR_Signal_Count-+a.NR_Signal_Count).slice(0,8),
-    virgin: [...db.virgin].sort((a,b)=>+b.Virgin_Signal_Count-+a.Virgin_Signal_Count).slice(0,8),
-  }),[db]);
-  const modeConfig={
-    long:  {label:"Strong Long", color:"var(--long)", icon:"↑"},
-    short: {label:"Strong Short",color:"var(--short)",icon:"↓"},
-    nr:    {label:"Multi-TF NR", color:"var(--a2)",   icon:"◆"},
-    virgin:{label:"Virgin",      color:"var(--ret)",   icon:"🔓"},
-  };
-  const cfg=modeConfig[mode], data=lists[mode];
-  const getVal=r=>{
-    if(mode==="long")   return {v:r.Long_Signals, l:"long sigs"};
-    if(mode==="short")  return {v:r.Short_Signals,l:"short sigs"};
-    if(mode==="nr")     return {v:r.NR_Signal_Count,l:`${r.Timeframe_Count} TF`};
-    if(mode==="virgin") return {v:r.Virgin_Signal_Count,l:"signals"};
-    return {v:"-",l:""};
-  };
-  const maxV=Math.max(...data.map(r=>+getVal(r).v),1);
-  const allSyms=data.map(r=>r.Symbol);
-
-  return (
-    <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px",height:"100%",display:"flex",flexDirection:"column"}}>
-      <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
-        {Object.entries(modeConfig).map(([k,c])=>(
-          <button key={k} onClick={()=>setMode(k)} style={{padding:"4px 10px",borderRadius:5,fontSize:10.5,cursor:"pointer",border:`1px solid ${mode===k?c.color:"var(--b2)"}`,background:mode===k?`${c.color}18`:"var(--s2)",color:mode===k?c.color:"var(--t2)"}}>
-            {c.icon} {c.label}
-          </button>
-        ))}
-      </div>
-      <div style={{marginBottom:8}}>
-        <TVCopyBtn symbols={allSyms} label={`⎘ Copy ${cfg.label} TV`}/>
-      </div>
-      <div style={{flex:1}}>
-        {data.map((r,i)=>{
-          const {v,l}=getVal(r), bar=(+v/maxV*100).toFixed(0);
-          return (
-            <div key={r.Symbol} style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,padding:"5px 0",borderBottom:"1px solid var(--b1)"}}>
-              <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--t3)",width:16,flexShrink:0}}>{i+1}</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:3,flexWrap:"wrap"}}>
-                  <SymCell sym={r.Symbol}/>
-                  {r.Is_FNO==="Yes"&&<span style={{background:"var(--longd)",color:"var(--long)",fontSize:8,padding:"1px 4px",borderRadius:3}}>FNO</span>}
-                  <SectorChip sector={r.Sector} industry={r.Industry} dim/>
-                </div>
-                <div style={{height:3,background:"var(--s3)",borderRadius:2,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${bar}%`,background:cfg.color,borderRadius:2,opacity:.8}}/>
-                </div>
-              </div>
-              <div style={{textAlign:"right",flexShrink:0}}>
-                <div style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:cfg.color}}>{v}</div>
-                <div style={{fontSize:9,color:"var(--t3)"}}>{l}</div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 // ─── SIGNAL DENSITY ───────────────────────────────────────────────────────────
 function SignalDensityHistogram({ db }) {
   const data = useMemo(()=>{
@@ -1388,48 +1293,6 @@ function SignalDensityHistogram({ db }) {
       <div style={{marginTop:8,borderTop:"1px solid var(--b1)",paddingTop:8,fontSize:10.5,color:"var(--t2)"}}>
         High-density (6+ signals): <strong style={{color:"var(--acc)"}}>{(data['6-10']+data['11-20']+data['21+']).toLocaleString()}</strong> stocks
       </div>
-    </div>
-  );
-}
-
-// ─── FNO STRATEGY ─────────────────────────────────────────────────────────────
-function FNOStrategyPanel({ db }) {
-  const data = useMemo(()=>{
-    const fno=db.flat.filter(r=>r.Is_FNO==="Yes"), biasBuckets={};
-    fno.forEach(r=>{ const b=r.Trading_Bias; if(!biasBuckets[b])biasBuckets[b]={bias:b,syms:new Set(),zone:0,nr:0,sectorCount:{}}; biasBuckets[b].syms.add(r.Symbol); if(r.Signal_Category==="ZONE")biasBuckets[b].zone++; else biasBuckets[b].nr++; if(r.Sector) biasBuckets[b].sectorCount[r.Sector]=(biasBuckets[b].sectorCount[r.Sector]||0)+1; });
-    return Object.values(biasBuckets).sort((a,b)=>b.syms.size-a.syms.size);
-  },[db.flat]);
-  const strategies={
-    LONG:{label:"Bull Spread / CE Buy",desc:"Buy ATM/OTM CE or Bull Call Spread",color:"var(--long)"},
-    SHORT:{label:"Bear Spread / PE Buy",desc:"Buy ATM/OTM PE or Bear Put Spread",color:"var(--short)"},
-    MIXED:{label:"Iron Condor / Strangle",desc:"Sell both sides — range-bound play",color:"var(--mixed)"},
-    RETRACEMENT:{label:"Covered Call / Ratio Spread",desc:"Sell OTM CE against long position",color:"var(--ret)"},
-  };
-  return (
-    <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px",height:"100%"}}>
-      <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:"1px",fontWeight:600,marginBottom:12}}>🎰 FNO Strategy Mapper</div>
-      {data.map(d=>{
-        const strat=strategies[d.bias]||strategies.MIXED, bc=BIAS_COLOR[d.bias]||BIAS_COLOR.NEUTRAL;
-        const topSector=Object.entries(d.sectorCount).sort((a,b)=>b[1]-a[1])[0];
-        return (
-          <div key={d.bias} style={{background:"var(--s2)",border:`1px solid ${bc.border}`,borderRadius:8,padding:"10px 12px",marginBottom:8}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-              {biasBadge(d.bias,true)}
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <TVCopyBtn symbols={[...d.syms]} label="⎘ TV"/>
-                <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:strat.color}}>{d.syms.size}<span style={{fontSize:10,color:"var(--t3)",fontWeight:400,marginLeft:4}}>stocks</span></div>
-              </div>
-            </div>
-            <div style={{fontSize:11,fontWeight:600,color:"var(--t1)",marginBottom:2}}>{strat.label}</div>
-            <div style={{fontSize:10.5,color:"var(--t2)"}}>{strat.desc}</div>
-            <div style={{display:"flex",gap:8,marginTop:5,alignItems:"center",flexWrap:"wrap"}}>
-              <span style={{fontSize:9.5,color:"var(--acc)",fontFamily:"var(--mono)"}}>Zone: {d.zone}</span>
-              <span style={{fontSize:9.5,color:"var(--a2)",fontFamily:"var(--mono)"}}>NR: {d.nr}</span>
-              {topSector&&<SectorChip sector={topSector[0]} dim/>}
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -1546,111 +1409,20 @@ function genInsights(biasCnt, total, db) {
 }
 
 // ─── CONTROL TOWER ────────────────────────────────────────────────────────────
-function ControlTower({ db, horizons, embedded=false }) {
-  const syms=new Set(db.flat.map(r=>r.Symbol));
-  const fno=new Set(db.flat.filter(r=>r.Is_FNO==="Yes").map(r=>r.Symbol));
-  const n500=new Set(db.flat.filter(r=>r.Is_Nifty_500==="Yes").map(r=>r.Symbol));
-  const n100=new Set(db.flat.filter(r=>r.Is_Nifty_LargeCap_100==="Yes").map(r=>r.Symbol));
-  const mid=new Set(db.flat.filter(r=>r.Is_Midcap_150==="Yes").map(r=>r.Symbol));
-
-  const biasSymMap={};
-  db.flat.forEach(r=>{biasSymMap[r.Symbol]=r.Trading_Bias;});
-  const biasCnt={};
-  Object.values(biasSymMap).forEach(b=>{biasCnt[b]=(biasCnt[b]||0)+1;});
-  const total=syms.size||1;
-
-  let swSym=new Set(), invSym=new Set();
-  db.flat.forEach(r=>{
-    const hs=getHorizonList(r.Signal_Name, horizons);
-    if(hs.includes("swing"))      swSym.add(r.Symbol);
-    if(hs.includes("investment")) invSym.add(r.Symbol);
-  });
-
-  const longPct=((biasCnt.LONG||0)/total*100);
-  const shortPct=((biasCnt.SHORT||0)/total*100);
-  const dominantBias=Object.entries(biasCnt).sort((a,b)=>b[1]-a[1])[0];
-  const sortedSectors=[...db.sectorAnalysis].sort((a,b)=>b.Strength_Score-a.Strength_Score);
-  const topSector=sortedSectors[0];
-
-  const KPI_DATA=[
-    {label:"Total Universe", value:syms.size.toLocaleString(), color:"var(--acc)",   sub:"tracked stocks"},
-    {label:"Signal Rows",    value:db.flat.length.toLocaleString(), color:"var(--a2)",sub:"signal instances"},
-    {label:"Opportunities",  value:db.top.length.toLocaleString(), color:"var(--long)",sub:"high-signal stocks"},
-    {label:"FNO Eligible",   value:fno.size,          color:"var(--mixed)",sub:"derivative-ready"},
-    {label:"Nifty 500",      value:n500.size,         color:"var(--ret)",  sub:"index constituents"},
-    {label:"LargeCap 100",   value:n100.size,         color:"var(--acc)",  sub:"large cap signals"},
-    {label:"Midcap 150",     value:mid.size,          color:"var(--t1)",   sub:"midcap signals"},
-    {label:"Conviction",     value:db.strong.length,  color:"var(--mixed)",sub:"strong conviction"},
-    {label:"Multi-TF NR",    value:db.mtnr.length,    color:"var(--a2)",   sub:"coiling stocks"},
-    {label:"Virgin Events",  value:db.virgin.length,  color:"var(--ret)",  sub:"uncharted territory"},
-    {label:"Swing Eligible", value:swSym.size,        color:"var(--acc)",  sub:"swing timeframe"},
-    {label:"Investment",     value:invSym.size,       color:"var(--ret)",  sub:"long-term horizon"},
-    {label:"Sectors",        value:db.sectorAnalysis.length, color:sectorColor(topSector?.Sector||""), sub:"tracked sectors"},
-    {label:"Top Sector",     value:topSector?topSector.Sector:"—", color:sectorColor(topSector?.Sector||""), sub:topSector?`strength ${topSector.Strength_Score.toFixed(1)}`:""},
-  ];
-
-  const CARD={background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"};
-
+function ControlTower({ db }) {
+  const [pickSec, setPickSec] = useState(null);
+  const [secTf, setSecTf] = useState("ALL");
   return (
-    <div style={{padding:"18px 22px"}}>
-      {/* Header */}
-      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
-        <div>
-          <div style={{fontSize:embedded?18:22,fontWeight:700,color:"var(--t1)"}}>{embedded?"📡 Market Intelligence":"🏛 Control Tower"}</div>
-          <div style={{fontSize:13,color:"var(--t2)",marginTop:2}}>Where the market is — alpha rankings, sector &amp; industry strength, movers and F&amp;O strategy</div>
-        </div>
-        <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
-          {dominantBias&&(
-            <div style={{display:"flex",alignItems:"center",gap:8,background:"var(--s2)",border:"1px solid var(--b1)",borderRadius:8,padding:"6px 14px"}}>
-              <div className="blink" style={{width:7,height:7,borderRadius:999,background:dominantBias[0]==="LONG"?"var(--long)":dominantBias[0]==="SHORT"?"var(--short)":"var(--mixed)"}}/>
-              <span style={{fontFamily:"var(--mono)",fontSize:12,color:"var(--t2)"}}>MARKET</span>
-              {biasBadge(dominantBias[0])}
-              <span style={{fontFamily:"var(--mono)",fontSize:12,color:"var(--t1)",fontWeight:700}}>{((dominantBias[1]/total)*100).toFixed(1)}%</span>
-            </div>
-          )}
-          {topSector&&(
-            <div style={{display:"flex",alignItems:"center",gap:8,background:"var(--s2)",border:"1px solid var(--b1)",borderRadius:8,padding:"6px 14px"}}>
-              <span style={{fontFamily:"var(--mono)",fontSize:12,color:"var(--t2)"}}>SECTOR</span>
-              <SectorChip sector={topSector.Sector}/>
-              <span style={{fontFamily:"var(--mono)",fontSize:12,color:sectorColor(topSector.Sector),fontWeight:700}}>{topSector.Strength_Score.toFixed(1)}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* KPI Strip */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:8,marginBottom:16}}>
-        {KPI_DATA.map(k=>(
-          <div key={k.label} style={{...CARD,padding:"10px 12px",position:"relative",overflow:"hidden"}}>
-            <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:k.color,opacity:.5}}/>
-            <div style={{fontFamily:"var(--mono)",fontSize:typeof k.value==="string"&&k.value.length>6?14:20,fontWeight:700,color:k.color,lineHeight:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{k.value}</div>
-            <div style={{fontSize:10.5,color:"var(--t1)",marginTop:3,fontWeight:600}}>{k.label}</div>
-            <div style={{fontSize:9,color:"var(--t3)",marginTop:1}}>{k.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Alpha table */}
+    <div style={{padding:"18px 22px 0"}}>
+      <Anchor id="ct-sector"/>
+      <EqRow height={440} cols="minmax(0,1fr) minmax(0,1fr)">
+        <SectorLeaderboardPanelV2 db={db} tf={secTf} setTf={setSecTf} selected={pickSec} onSelect={setPickSec}/>
+        <IndustryMomentumPanelV2 db={db} tf={secTf} setTf={setSecTf} sector={pickSec} onClearSector={()=>setPickSec(null)}/>
+      </EqRow>
       <Anchor id="ct-alpha"/>
       <div style={{marginBottom:12}}>
         <AlphaIdeasPanel db={db}/>
       </div>
-
-      {/* Sector + Industry (list ↔ bubble) — equal height */}
-      <Anchor id="ct-sector"/>
-      <EqRow height={440} cols="minmax(0,1fr) minmax(0,1fr)">
-        <SectorLeaderboardPanelV2 db={db}/>
-        <IndustryMomentumPanelV2 db={db}/>
-      </EqRow>
-
-      {/* Compact widgets — all the same height */}
-      <Anchor id="ct-compact"/>
-      <EqRow height={390} min={260}>
-        <TopMoversPanel db={db}/>
-        <FNOStrategyPanel db={db}/>
-        <StrategyFlowPanel db={db}/>
-        <BiasDistributionPanel db={db}/>
-      </EqRow>
     </div>
   );
 }
@@ -1701,7 +1473,7 @@ function Overview({ db, horizons }) {
           </div>
           {topOpps.map(r=>(
             <div key={r.Symbol} style={{background:"var(--s2)",border:"1px solid var(--b1)",borderRadius:7,padding:"9px 13px",marginBottom:7,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <div className="sym-cell" style={{flex:1,minWidth:90}}><span style={{fontFamily:"var(--mono)",fontSize:12.5,fontWeight:700,color:"var(--acc)"}}>{r.Symbol}</span><CopyBtn text={r.Symbol}/></div>
+              <div style={{flex:1,minWidth:90}}><SymCell sym={r.Symbol} size={12.5}/></div>
               <SectorChip sector={r.Sector} industry={r.Industry}/>
               {biasBadge(r.Trading_Bias,true)}
               <div style={{fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:"var(--t1)"}}>{r.Total_Signals}</div>
@@ -2075,10 +1847,7 @@ function Opportunities({ db }) {
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:10}}>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-                    <div className="sym-cell" onClick={e=>e.stopPropagation()}>
-                      <span style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--acc)"}}>{r.Symbol}</span>
-                      <CopyBtn text={r.Symbol}/>
-                    </div>
+                    <div onClick={e=>e.stopPropagation()}><SymCell sym={r.Symbol} size={13}/></div>
                     <TVCopyBtn symbols={[r.Symbol]} label="TV"/>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
@@ -2285,7 +2054,7 @@ function StrongConviction({ db }) {
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}}>
                 <div>
                   <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
-                    <div className="sym-cell"><span style={{fontFamily:"var(--mono)",fontSize:13,fontWeight:700,color:"var(--acc)"}}>{r.Symbol}</span><CopyBtn text={r.Symbol}/></div>
+                    <SymCell sym={r.Symbol} size={13}/>
                     <TVCopyBtn symbols={[r.Symbol]} label="TV"/>
                   </div>
                   <div style={{fontSize:11,fontWeight:600,color:scoreColor}}>{r.Conviction_Type}</div>
@@ -3769,6 +3538,64 @@ function StockDeepDive({ s, onClose }) {
   );
 }
 
+// Report for a ticker that has no signals in the loaded data (or is hidden by filters)
+function NoSignalReport({ sym, db, onClose }) {
+  const m = db.masterMap?.[sym], z = (db.zoneLevels||[]).find(r=>r.Symbol===sym);
+  const POS = { ABOVE_TOP:["Above the zone","var(--long)"], IN_TOP_BAND:["In the top band","var(--long)"], INSIDE:["Inside the zone","var(--t2)"],
+    IN_BOTTOM_BAND:["In the bottom band","var(--short)"], BELOW_BOTTOM:["Below the zone","var(--short)"] };
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:600,display:"flex",justifyContent:"flex-end"}}>
+      <div onClick={e=>e.stopPropagation()} className="tower-scroll slide-in" style={{width:"min(560px,100%)",height:"100%",background:"var(--bg)",borderLeft:"1px solid var(--b2)",overflowY:"auto",padding:"18px 20px",boxShadow:"-12px 0 40px var(--shadow)"}}>
+        <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:14}}>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontFamily:"var(--mono)",fontSize:20,fontWeight:700,color:"var(--acc)"}}>{sym}</span><TVCopyBtn symbols={[sym]} label="⎘ TV"/></div>
+            <div style={{fontSize:11.5,color:"var(--t2)",marginTop:3}}>{m?.Stock_Name || z?.Stock_Name || ""}</div>
+            <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap",alignItems:"center"}}>
+              {(m?.Sector||z?.Sector) && <SectorChip sector={m?.Sector||z?.Sector}/>}{(m?.Industry||z?.Industry) && <IndustryTag industry={m?.Industry||z?.Industry}/>}
+              {m?.Price && <span style={{fontSize:10,fontFamily:"var(--mono)",color:+m.Change_Pct>=0?"var(--long)":"var(--short)"}}>₹{m.Price} ({+m.Change_Pct>=0?"+":""}{m.Change_Pct}%)</span>}
+            </div>
+          </div>
+          <button onClick={onClose} style={{fontSize:18,color:"var(--t2)",padding:"0 4px"}}>✕</button>
+        </div>
+        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginBottom:12,fontSize:12,color:"var(--t2)",lineHeight:1.6}}>
+          No zone or NR signals for <strong style={{color:"var(--t1)"}}>{sym}</strong> in the data shown here — it has no active setup, or it is hidden by your filters (stock quality, segment, sector).
+        </div>
+        {z && (
+          <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px"}}>
+            <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>🧱 Where price sits in each timeframe's zones</div>
+            {[...FOCUS_TFS].reverse().map(t=>{ const x=z[t]; if (!x || x.tz==null) return null; const [lbl,c]=POS[x.pos]||[x.pos||"—","var(--t3)"];
+              return (
+                <div key={t} style={{display:"flex",gap:10,padding:"6px 0",borderBottom:"1px solid var(--b1)",fontSize:11,fontFamily:"var(--mono)",alignItems:"baseline"}}>
+                  <span style={{width:74,fontFamily:"inherit",fontWeight:700,color:"var(--t1)"}}>{TF_NAME[t]}</span>
+                  <span style={{flex:1,color:c}}>{lbl}</span>
+                  <span style={{color:"var(--t3)"}}>top {x.tz} · bottom {x.bz}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// One report drawer shared by every tab: tickers (SymCell) inside open it
+function StockReportHost({ db, presence=null, nFiles=1, children }) {
+  const [sym, setSym] = useState(null);
+  const opened = sym != null;
+  const bySym = useMemo(() => {
+    if (!opened || !db) return {};
+    const m = {}; buildFocusModel(db, presence, nFiles).list.forEach(s=>{ m[s.symbol]=s; }); return m;
+  }, [db, presence, nFiles, opened]);
+  const close = () => setSym(null);
+  return (
+    <StockOpenCtx.Provider value={setSym}>
+      {children}
+      {opened && db && (bySym[sym] ? <StockDeepDive s={bySym[sym]} onClose={close}/> : <NoSignalReport sym={sym} db={db} onClose={close}/>)}
+    </StockOpenCtx.Provider>
+  );
+}
+
 // ─── FOCUS COMMAND TAB ────────────────────────────────────────────────────────
 function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSetups=null, gDir="ALL", setupExtra=null }) {
   const model = useMemo(()=>buildFocusModel(db, presence, nFiles), [db, presence, nFiles]);
@@ -3810,12 +3637,8 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
   const heatMax = Math.max(1,...secHeat.flatMap(r=>FOCUS_TFS.map(t=>Math.abs(r.tf[t]/Math.max(r.n,1)))));
 
   // ── Special lists
-  const leaders = directional.filter(s=>s.dir==="LONG"&&s.score>=30&&s.secStrength<45).slice(0,10);
-  const laggards = directional.filter(s=>s.dir==="SHORT"&&s.score>=30&&s.secStrength>55).slice(0,10);
   const coiled = directional.filter(s=>(s.setupTfs.length>=2||(s.mtnr&&s.setupTfs.length>=1))&&s.trigTfs.length===0)
     .sort((a,b)=>(b.setupTfs.reduce((x,t)=>x+TF_WEIGHT[t],0)+(b.mtnr?3:0))-(a.setupTfs.reduce((x,t)=>x+TF_WEIGHT[t],0)+(a.mtnr?3:0))).slice(0,12);
-  const pullbacks = filtered.filter(s=>tfWeightedNet(s,["M","Q","Y"])>0.5&&tfWeightedNet(s,["D","W"])<-0.5).sort((a,b)=>tfWeightedNet(b,["M","Q","Y"])-tfWeightedNet(a,["M","Q","Y"])).slice(0,10);
-  const bounces = filtered.filter(s=>tfWeightedNet(s,["M","Q","Y"])<-0.5&&tfWeightedNet(s,["D","W"])>0.5).sort((a,b)=>tfWeightedNet(a,["M","Q","Y"])-tfWeightedNet(b,["M","Q","Y"])).slice(0,10);
 
   // ── Industry hotspots
   const industries = useMemo(()=>{
@@ -3895,9 +3718,9 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
         </div>
       </FocusCard>
 
-      {/* Confluence grid + Focus map */}
+      {/* Confluence grid */}
       <Anchor id="ct-confluence"/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1.15fr",gap:12,marginBottom:12,alignItems:"stretch"}}>
+      <div style={{marginBottom:12}}>
         <FocusCard icon="⚡" title="Higher-TF × Lower-TF Confluence" sub="Example: a Quarterly breakout that ALSO triggered on the Daily. Click a cell to list those stocks."
           right={<div onClick={()=>{setStrict(v=>!v);setCellSel(null);}} style={pill(strict,"var(--acc)")}>{strict?"Strict: both triggered":"Relaxed: LTF aligned"}</div>}
           learn={<>The <strong>higher timeframe</strong> (Monthly/Quarterly/Yearly) tells you <em>what</em> to trade — the big level just broke. The <strong>lower timeframe</strong> (Weekly/Daily) tells you <em>when</em> — momentum has arrived right now. When both fire together you get the best of both: a meaningful level and a timely entry. <strong>Strict</strong> mode needs a fresh trigger on both; <strong>Relaxed</strong> only needs the lower TF to lean the same way.</>}>
@@ -3936,18 +3759,6 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
           </div>
         </FocusCard>
 
-        <FocusCard icon="🗺" right={<ListCopy symbols={directional.slice(0,70).map(s=>s.symbol)}/>} title="Focus Map" sub="Top 70 names · x = how one-sided the evidence is · y = Focus Score · bubble = signal count · colour = sector. Click a bubble."
-          learn={<>Upper corners are where you want to be: high score <em>and</em> one-sided evidence. Bubbles near the <strong>centre line</strong> have evidence pulling both ways — even with many signals, they're lower quality. Clusters of the same colour in an upper corner mean a whole sector is moving — the strongest kind of move.</>}>
-          <RotationQuadrantChart
-            items={directional.slice(0,70).map(s=>({key:s.symbol,label:s.symbol,x:Math.round(s.net*100),y:s.score,size:s.nDirSignals,color:sectorColor(s.sector),
-              tooltip:`${s.symbol} (${s.sector}) · ${s.dir} · score ${Math.round(s.score)} · ${s.alignedTfs.length}/5 TFs aligned · ${s.nDirSignals} signals`}))}
-            onSelect={k=>k&&open(k)} selectedKey={openSym} height={400}
-            xAxisLabel="Evidence balance  (all bearish ← 0 → all bullish)" yAxisLabel="Focus Score"
-            quadrantTexts={[
-              {text:"FOCUS: BULLISH CONFLUENCE",color:"#00c896"},{text:"FOCUS: BEARISH CONFLUENCE",color:"#ff4454"},
-              {text:"DEVELOPING LONG",color:"#a259ff"},{text:"DEVELOPING SHORT",color:"#fbbf24"}]}
-          />
-        </FocusCard>
       </div>
 
       {/* Alignment matrix + Sector×TF */}
@@ -4065,26 +3876,6 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
           {coiled.map(s=><MiniRow key={s.symbol} s={s} extra={`${s.sgn>0?"pressing top":"sitting on floor"} · ${s.setupTfs.join("+")}${s.mtnr?` · ${s.mtnr.Timeframe_Count}-TF NR`:""}`}/>)}
           {!coiled.length && <div style={{color:"var(--t3)",fontSize:11}}>None right now.</div>}
         </FocusCard>
-
-        <FocusCard icon="💎" title="Relative Strength / Weakness" sub="Stocks moving against their own sector." right={<ListCopy symbols={[...leaders,...laggards].map(s=>s.symbol)}/>}
-          learn={<>A stock rising while its sector falls has a <strong>buyer who doesn't care about the sector</strong> — often the strongest names once the sector turns. The mirror case, a stock falling inside a strong sector, often has a company-specific problem — prime short or avoid.</>}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}><div style={{fontSize:10.5,fontWeight:700,color:"var(--long)"}}>▲ Leaders in weak sectors ({leaders.length})</div><ListCopy symbols={leaders.map(s=>s.symbol)} compact/></div>
-          {leaders.map(s=><MiniRow key={s.symbol} s={s} extra={`${s.sector} str ${Math.round(s.secStrength)}`}/>)}
-          {!leaders.length && <div style={{color:"var(--t3)",fontSize:11,marginBottom:6}}>None.</div>}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"10px 0 2px"}}><div style={{fontSize:10.5,fontWeight:700,color:"var(--short)"}}>▼ Laggards in strong sectors ({laggards.length})</div><ListCopy symbols={laggards.map(s=>s.symbol)} compact/></div>
-          {laggards.map(s=><MiniRow key={s.symbol} s={s} extra={`${s.sector} str ${Math.round(s.secStrength)}`}/>)}
-          {!laggards.length && <div style={{color:"var(--t3)",fontSize:11}}>None.</div>}
-        </FocusCard>
-
-        <FocusCard icon="⚠️" title="Conflict Zone — wait, don't act" sub="Higher and lower timeframes disagree." right={<ListCopy symbols={[...pullbacks,...bounces].map(s=>s.symbol)}/>}
-          learn={<><strong>Pullback in an uptrend</strong> (big TFs up, small TFs down) is where patient traders buy — but only after the Daily turns back up. <strong>Bounce in a downtrend</strong> (big TFs down, small TFs up) is where beginners get trapped buying. Both lists say the same thing: <em>wait for the small timeframe to rejoin the big one</em>.</>}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}><div style={{fontSize:10.5,fontWeight:700,color:"var(--long)"}}>↘ Pullback in uptrend ({pullbacks.length}) — future buy-the-dip</div><ListCopy symbols={pullbacks.map(s=>s.symbol)} compact/></div>
-          {pullbacks.map(s=><MiniRow key={s.symbol} s={s} extra={`HTF ${tfWeightedNet(s,["M","Q","Y"]).toFixed(1)} · LTF ${tfWeightedNet(s,["D","W"]).toFixed(1)}`}/>)}
-          {!pullbacks.length && <div style={{color:"var(--t3)",fontSize:11,marginBottom:6}}>None.</div>}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"10px 0 2px"}}><div style={{fontSize:10.5,fontWeight:700,color:"var(--short)"}}>↗ Bounce in downtrend ({bounces.length}) — trap risk</div><ListCopy symbols={bounces.map(s=>s.symbol)} compact/></div>
-          {bounces.map(s=><MiniRow key={s.symbol} s={s} extra={`HTF ${tfWeightedNet(s,["M","Q","Y"]).toFixed(1)} · LTF ${tfWeightedNet(s,["D","W"]).toFixed(1)}`}/>)}
-          {!bounces.length && <div style={{color:"var(--t3)",fontSize:11}}>None.</div>}
-        </FocusCard>
       </div>
 
       <Anchor id="ct-setups"/>
@@ -4154,7 +3945,8 @@ function mergeDBs(dbs) {
       returnPotential: latestBy("returnPotential", r => r.Symbol + "|" + r.Direction),
       priceHealth: latestBy("priceHealth", bySym),
       failedNR: latestBy("failedNR", r => r.Symbol + "|" + r.Timeframe),
-      has: { priceHealth: dbs.some(d=>d.has&&d.has.priceHealth), failedNR: dbs.some(d=>d.has&&d.has.failedNR) },
+      zoneRetest: latestBy("zoneRetest", r => r.Symbol + "|" + r.Timeframe + "|" + r.Trade),
+      has: { priceHealth: dbs.some(d=>d.has&&d.has.priceHealth), failedNR: dbs.some(d=>d.has&&d.has.failedNR), zoneRetest: dbs.some(d=>d.has&&d.has.zoneRetest) },
     },
     presence, nFiles: dbs.length,
   };
@@ -4203,7 +3995,7 @@ function filterDB(db, ex) {
     summary: db.summary.map(r => ({ ...r, Stock_Count: String(sigCount[r.Signal_Name]||0) })),
     top: db.top.filter(keep), strong: db.strong.filter(keep), mtnr: db.mtnr.filter(keep), virgin: db.virgin.filter(keep),
     zoneLevels: (db.zoneLevels||[]).filter(keep), returnPotential: (db.returnPotential||[]).filter(keep),
-    failedNR: (db.failedNR||[]).filter(keep),
+    failedNR: (db.failedNR||[]).filter(keep), zoneRetest: (db.zoneRetest||[]).filter(keep),
     healthFiltered: ex.size };
 }
 
@@ -4253,23 +4045,22 @@ function HealthListPanel({ level, hIdx, onClose }) {
 
 // ─── CONTROL TOWER SIDE NAV — filters + jump links ───────────────────────────
 const CT_NAV = [
-  { group:"Market Intelligence", items:[
-    ["ct-market","📡","Market overview"], ["ct-alpha","💎","Alpha rankings"], ["ct-sector","🏭","Sector & industry strength"],
-    ["ct-compact","📊","Movers · F&O · flow · bias"] ]},
+  { group:"Market", items:[
+    ["ct-sector","🏭","Sector & industry strength"], ["ct-alpha","💎","Alpha rankings"] ]},
   { group:"Focus Command", items:[
-    ["ct-radar","🚨","Priority radar"], ["ct-confluence","⚡","Confluence & focus map"], ["ct-matrix","🪜","Alignment & sector heat"],
-    ["ct-special","🎯","Near breakout · RS · conflict · hotspots"] ]},
+    ["ct-radar","🚨","Priority radar"], ["ct-confluence","⚡","HTF × LTF confluence"], ["ct-matrix","🪜","Alignment & sector heat"],
+    ["ct-special","🎯","Hotspots · near breakout"] ]},
   { group:"Setups", items:[
-    ["ct-intraday","🚀","Zone breakout analyser"], ["ct-stacked","🏆","Stacked setups"], ["ct-setupcards","🎯","Setup lists"], ["ct-trap","🪤","NR trap"] ]},
+    ["ct-intraday","🚀","Zone breakout analyser"], ["ct-stacked","🏆","Stacked setups"], ["ct-setupcards","🎯","Setup lists"], ["ct-trap","🪤","NR trap"], ["ct-retest","🔁","Zone retest"], ["ct-trend","📈","Trend pullback"] ]},
   { group:"Trade ideas", items:[
     ["ct-opps","🔮","Opportunities"], ["ct-returns","💰","Return expectations"], ["ct-watch","📌","Watchlist builder"] ]},
 ];
 const CAP_OPTS = [["all","All stocks"],["n500","Nifty 500"],["large","Large 100"],["mid","Mid 150"],["small","Small 250"]];
 
-const ctFilterCount = (f, health) => (f.dir!=="ALL") + f.fno + (f.cap!=="all") + !!f.sector
+const ctFilterCount = (f, health) => (f.dir!=="ALL") + f.fno + (f.cap!=="all") + !!f.sector + !!f.industry
   + !!(health && health.hIdx.available && !isHealthDefault(health.allow));
 
-function CTSideNav({ open, setOpen, f, setF, sectors, health, onShowList, active, counts }) {
+function CTSideNav({ open, setOpen, f, setF, sectors, industries=[], health, onShowList, active, counts }) {
   const jump = id => { const el=document.getElementById(id); if (el) el.scrollIntoView({behavior:"smooth",block:"start"}); };
   const chip = (on, c="var(--acc)") => ({padding:"4px 9px",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer",border:`1px solid ${on?c:"var(--b2)"}`,background:on?"var(--adim)":"var(--s2)",color:on?c:"var(--t2)",whiteSpace:"nowrap"});
   const Lbl = ({children}) => <div style={{fontSize:9.5,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,margin:"12px 0 6px"}}>{children}</div>;
@@ -4284,7 +4075,7 @@ function CTSideNav({ open, setOpen, f, setF, sectors, health, onShowList, active
     <aside className={`ct-nav ${open?"open":""}`} aria-hidden={!open}>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
         <span style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>Filters</span>
-        {nOn>0 && <button onClick={()=>{ setF({dir:"ALL",fno:false,cap:"all",sector:""}); health.setAllow(new Set(HEALTH_DEFAULT)); }} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>Reset ({nOn})</button>}
+        {nOn>0 && <button onClick={()=>{ setF({dir:"ALL",fno:false,cap:"all",sector:"",industry:""}); health.setAllow(new Set(HEALTH_DEFAULT)); }} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>Reset ({nOn})</button>}
         <button onClick={()=>setOpen(false)} title="Close (Esc)" style={{marginLeft:"auto",fontSize:14,width:26,height:26,borderRadius:6,border:"1px solid var(--b2)",background:"var(--s2)",color:"var(--t2)",lineHeight:1}}>✕</button>
       </div>
 
@@ -4313,9 +4104,14 @@ function CTSideNav({ open, setOpen, f, setF, sectors, health, onShowList, active
         {CAP_OPTS.map(([k,l])=><div key={k} onClick={()=>setF(p=>({...p,cap:k}))} style={chip(f.cap===k)}>{l}</div>)}
       </div>
       <Lbl>Sector</Lbl>
-      <select id="ct-sector-filter" value={f.sector} onChange={e=>setF(p=>({...p,sector:e.target.value}))} style={{width:"100%",background:"var(--s2)",border:`1px solid ${f.sector?sectorColor(f.sector):"var(--b2)"}`,color:f.sector?sectorColor(f.sector):"var(--t2)",borderRadius:6,fontSize:11.5,padding:"5px 8px"}}>
+      <select id="ct-sector-filter" value={f.sector} onChange={e=>setF(p=>({...p,sector:e.target.value,industry:""}))} style={{width:"100%",background:"var(--s2)",border:`1px solid ${f.sector?sectorColor(f.sector):"var(--b2)"}`,color:f.sector?sectorColor(f.sector):"var(--t2)",borderRadius:6,fontSize:11.5,padding:"5px 8px"}}>
         <option value="">All sectors</option>
         {sectors.map(s=><option key={s} value={s}>{s}</option>)}
+      </select>
+      <Lbl>Industry {f.sector && <span style={{textTransform:"none",letterSpacing:0,fontWeight:500}}>· in {f.sector}</span>}</Lbl>
+      <select id="ct-industry-filter" value={f.industry} onChange={e=>setF(p=>({...p,industry:e.target.value}))} style={{width:"100%",background:"var(--s2)",border:`1px solid ${f.industry?"var(--acc)":"var(--b2)"}`,color:f.industry?"var(--acc)":"var(--t2)",borderRadius:6,fontSize:11.5,padding:"5px 8px"}}>
+        <option value="">{f.sector ? `All ${industries.length} industries in ${f.sector}` : `All industries (${industries.length})`}</option>
+        {industries.map(s=><option key={s} value={s}>{s}</option>)}
       </select>
       <div style={{fontSize:10,color:"var(--t3)",marginTop:8,lineHeight:1.5}}>
         Showing <strong style={{color:"var(--t1)"}}>{counts.shown.toLocaleString()}</strong> of {counts.total.toLocaleString()} stocks in the Control Tower.
@@ -4344,14 +4140,15 @@ function versionLabel(v, i) { return v.dateLabel || (v.fileName||"").replace(/\.
 // Symbol attributes used by the side-nav filters
 function symbolAttrs(db) {
   const a = {};
-  const get = sym => (a[sym] = a[sym] || { fno:false, n500:false, cap:null, sector:null });
+  const get = sym => (a[sym] = a[sym] || { fno:false, n500:false, cap:null, sector:null, industry:null });
+  const setInd = (x, r) => { if (!x.industry && r.Industry && r.Industry!=="Unknown") x.industry = r.Industry; };
   db.flat.forEach(r => { const x=get(r.Symbol);
     if (r.Is_FNO==="Yes") x.fno=true;
     if (r.Is_Nifty_500==="Yes") x.n500=true;
     if (r.Is_Nifty_LargeCap_100==="Yes") x.cap="large"; else if (r.Is_Midcap_150==="Yes" && x.cap!=="large") x.cap="mid"; else if (r.Is_SmallCap_250==="Yes" && !x.cap) x.cap="small";
-    if (!x.sector && r.Sector && r.Sector!=="Unknown") x.sector=r.Sector; });
-  (db.zoneLevels||[]).forEach(r => { const x=get(r.Symbol); if (r.Is_FNO==="Yes") x.fno=true; if (r.Is_Nifty_500==="Yes") x.n500=true; if (!x.sector && r.Sector && r.Sector!=="Unknown") x.sector=r.Sector; });
-  (db.master||[]).forEach(r => { const x=get(r.Symbol); if (!x.sector && r.Sector && r.Sector!=="Unknown") x.sector=r.Sector; });
+    if (!x.sector && r.Sector && r.Sector!=="Unknown") x.sector=r.Sector; setInd(x, r); });
+  (db.zoneLevels||[]).forEach(r => { const x=get(r.Symbol); if (r.Is_FNO==="Yes") x.fno=true; if (r.Is_Nifty_500==="Yes") x.n500=true; if (!x.sector && r.Sector && r.Sector!=="Unknown") x.sector=r.Sector; setInd(x, r); });
+  (db.master||[]).forEach(r => { const x=get(r.Symbol); if (!x.sector && r.Sector && r.Sector!=="Unknown") x.sector=r.Sector; setInd(x, r); });
   return a;
 }
 
@@ -4364,21 +4161,22 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
   const mode = safeIdx.length===1 && safeIdx[0]===n-1 ? "latest" : safeIdx.length===n ? "all" : "custom";
 
   // side-nav filters (Control Tower only; stock quality is global and lives in App)
-  const [f, setF] = useState({ dir:"ALL", fno:false, cap:"all", sector:"" });
+  const [f, setF] = useState({ dir:"ALL", fno:false, cap:"all", sector:"", industry:"" });
   const [healthList, setHealthList] = useState(null);
-  const [active, setActive] = useState("ct-market");
+  const [active, setActive] = useState("ct-sector");
 
   const attrs = useMemo(()=>symbolAttrs(merged.db), [merged]);
   const sectors = useMemo(()=>[...new Set(Object.values(attrs).map(x=>x.sector).filter(Boolean))].sort(), [attrs]);
+  const industries = useMemo(()=>[...new Set(Object.values(attrs).filter(x=>!f.sector||x.sector===f.sector).map(x=>x.industry).filter(Boolean))].sort(), [attrs, f.sector]);
   const scopeEx = useMemo(()=>{
     const ex = new Set();
-    if (!f.fno && f.cap==="all" && !f.sector) return ex;
+    if (!f.fno && f.cap==="all" && !f.sector && !f.industry) return ex;
     Object.entries(attrs).forEach(([sym,x]) => {
       const capOk = f.cap==="all" || (f.cap==="n500" ? x.n500 : x.cap===f.cap);
-      if ((f.fno && !x.fno) || !capOk || (f.sector && x.sector!==f.sector)) ex.add(sym);
+      if ((f.fno && !x.fno) || !capOk || (f.sector && x.sector!==f.sector) || (f.industry && x.industry!==f.industry)) ex.add(sym);
     });
     return ex;
-  }, [attrs, f.fno, f.cap, f.sector]);
+  }, [attrs, f.fno, f.cap, f.sector, f.industry]);
   const db = useMemo(()=>filterDB(merged.db, scopeEx), [merged, scopeEx]);
   const model = useMemo(()=>buildFocusModel(db, merged.presence, merged.nFiles), [db, merged]);
   const modelBySym = useMemo(()=>{ const m={}; model.list.forEach(s=>{ m[s.symbol]=s; }); return m; }, [model]);
@@ -4388,7 +4186,6 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
     const ex = new Set(model.list.filter(s=>s.dir!==f.dir).map(s=>s.symbol));
     return filterDB(db, ex);
   }, [db, model, f.dir]);
-  const horizons = useMemo(()=>classifyHorizons(dbDir.flat), [dbDir]);
   const lock = f.dir==="ALL" ? null : f.dir;
   const lockLS = lock ? (lock==="LONG"?"L":"S") : null;
   const [openSym, setOpenSym] = useState(null);
@@ -4433,8 +4230,9 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
   useEffect(()=>{ onFilterCount(nFilters); }, [nFilters]);
 
   return (
+    <StockOpenCtx.Provider value={setOpenSym}>
     <div className={`ct-layout ${navOpen?"nav-open":""}`}>
-      <CTSideNav open={navOpen} setOpen={setNavOpen} f={f} setF={setF} sectors={sectors} health={hp}
+      <CTSideNav open={navOpen} setOpen={setNavOpen} f={f} setF={setF} sectors={sectors} industries={industries} health={hp}
         onShowList={h=>{ setHealthList(h); window.scrollTo({top:0,behavior:"smooth"}); }} active={active} counts={{shown:shownN,total:totalN}}/>
       <div style={{minWidth:0}}>
         {/* Scope bar */}
@@ -4467,16 +4265,19 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
               Showing <strong style={{color:"var(--t1)"}}>{safeIdx.length===1?"a single file":`${safeIdx.length} files combined`}</strong> ({rangeText}) · {shownN.toLocaleString()} stocks after filters.
               {safeIdx.length>1 && <span style={{color:"var(--t3)"}}> Combining rules: each stock+signal pair counted once, stock details and lists from the newest selected file, sector/industry scores averaged, and a <span style={{color:"#38bdf8"}}>persistence</span> bonus for stocks that show up in more of the selected files.</span>}
               {n===1 && <span style={{color:"var(--t3)"}}> Upload several dated files together to unlock multi-file scopes.</span>}
-              {(f.dir!=="ALL"||f.fno||f.cap!=="all"||f.sector) && <span style={{color:"var(--acc)"}}> Filters on: {[f.dir!=="ALL"&&(f.dir==="LONG"?"Long":"Short"), f.fno&&"F&O only", f.cap!=="all"&&CAP_OPTS.find(c=>c[0]===f.cap)[1], f.sector].filter(Boolean).join(" · ")}. Sector and industry scores come from the Excel and are not re-computed.</span>}
+              {(f.dir!=="ALL"||f.fno||f.cap!=="all"||f.sector||f.industry) && <span style={{color:"var(--acc)"}}> Filters on: {[f.dir!=="ALL"&&(f.dir==="LONG"?"Long":"Short"), f.fno&&"F&O only", f.cap!=="all"&&CAP_OPTS.find(c=>c[0]===f.cap)[1], f.sector, f.industry].filter(Boolean).join(" · ")}. Sector and industry scores come from the Excel and are not re-computed.</span>}
             </div>
           </div>
         </div>
 
-        <Anchor id="ct-market"/>
-        <ControlTower db={dbDir} horizons={horizons} embedded/>
+        <ControlTower db={dbDir}/>
         <Divider/>
         <FocusCommandTab db={db} presence={merged.presence} nFiles={merged.nFiles} embedded gDir={f.dir}
-          setupExtra={<NRTrapSection db={db} open={setOpenSym} lockDir={lock} embedded/>}
+          setupExtra={<>
+            <NRTrapSection db={db} open={setOpenSym} lockDir={lock} embedded/>
+            <ZoneRetestSection db={db} lockDir={lock}/>
+            <TrendPullbackSection db={db} lockDir={lock}/>
+          </>}
           afterSetups={<>
             <Anchor id="ct-opps"/>
             <OpportunitiesSection db={db} model={model} open={setOpenSym} lockDir={lockLS}/>
@@ -4487,9 +4288,12 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
           <Anchor id="ct-watch"/>
           <WatchlistBuilder db={dbDir}/>
         </div>
-        <StockDeepDive s={openSym ? modelBySym[openSym] : null} onClose={()=>setOpenSym(null)}/>
+        {openSym && (modelBySym[openSym]
+          ? <StockDeepDive s={modelBySym[openSym]} onClose={()=>setOpenSym(null)}/>
+          : <NoSignalReport sym={openSym} db={db} onClose={()=>setOpenSym(null)}/>)}
       </div>
     </div>
+    </StockOpenCtx.Provider>
   );
 }
 
@@ -5229,29 +5033,32 @@ function TfPicker({ value, onChange }) {
 }
 
 // ─── SECTOR / INDUSTRY with list ↔ bubble toggle ──────────────────────────────
-function SectorLeaderboardPanelV2({ db: baseDb }) {
+function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, selected=null, onSelect=null }) {
   const [view, setView] = useState("bubble");
-  const [tf, setTf] = useState("ALL");
+  const [tfLocal, setTfLocal] = useState("ALL");
+  const tf = tfIn || tfLocal, setTf = setTfIn || setTfLocal;
   const tfd = useTfSectors(baseDb, tf);
   const db = { ...baseDb, ...tfd };
   const sectors = useMemo(()=>[...tfd.sectorAnalysis].sort((a,b)=>b.Strength_Score-a.Strength_Score),[tfd.sectorAnalysis]);
   const top10 = sectors.slice(0,10);
   const maxScore = Math.max(...top10.map(s=>s.Strength_Score),1);
-  const topSyms = useMemo(()=> top10[0] ? db.master.filter(m=>m.Sector===top10[0].Sector).map(m=>m.Symbol) : [], [top10, db.master]);
+  const copySec = selected || top10[0]?.Sector;
+  const topSyms = useMemo(()=> copySec ? db.master.filter(m=>m.Sector===copySec).map(m=>m.Symbol) : [], [copySec, db.master]);
+  const pick = sec => onSelect && onSelect(selected===sec ? null : sec);
   return (
     <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",display:"flex",alignItems:"center",flex:1}}>🏭 Sector Strength Leaderboard
-          <InfoTip><strong>List</strong>: strongest sectors by strength score (breadth + signal bias + price momentum). <strong>Bubble</strong>: every sector — x = net bias (bearish ← → bullish), y = strength, <strong>bubble size = signal intensity</strong> (total signals). Big bubbles in the top-right = strong, busy, bullish sectors. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.</InfoTip>
+          <InfoTip><strong>List</strong>: strongest sectors by strength score (breadth + signal bias + price momentum). <strong>Bubble</strong>: every sector — x = net bias (bearish ← → bullish), y = strength, <strong>bubble size = signal intensity</strong> (total signals). Big bubbles in the top-right = strong, busy, bullish sectors. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.{onSelect && <> <strong>Click a sector</strong> (bubble or row) to show only its industries on the right; click it again to clear.</>}</InfoTip>
         </div>
         <TfPicker value={tf} onChange={setTf}/>
         <ViewToggle value={view} onChange={setView}/>
         {view==="list" && top10[0] && <ListCopy symbols={topSyms} compact/>}
       </div>
       {view==="list" ? top10.map((s,i)=>{
-        const c=sectorColor(s.Sector), pct=s.Strength_Score/maxScore*100;
+        const c=sectorColor(s.Sector), pct=s.Strength_Score/maxScore*100, on=selected===s.Sector;
         return (
-          <div key={s.Sector} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div key={s.Sector} onClick={()=>pick(s.Sector)} className={onSelect?"sec-row":undefined} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,padding:"3px 4px",borderRadius:6,cursor:onSelect?"pointer":"default",background:on?"var(--adim)":"transparent",outline:on?`1px solid ${c}`:"none"}}>
             <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--t3)",width:14,flexShrink:0}}>{i+1}</div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,gap:6}}>
@@ -5269,21 +5076,25 @@ function SectorLeaderboardPanelV2({ db: baseDb }) {
       }) : (
         <RotationQuadrantChart height={360}
           items={sectors.map(s=>({key:s.Sector,label:s.Sector,x:s.Net_Bias_Score,y:s.Strength_Score,size:s.Total_Signal_Count,color:sectorColor(s.Sector),
-            tooltip:`${s.Sector}: strength ${s.Strength_Score.toFixed(1)} · net bias ${s.Net_Bias_Score} · ${s.Total_Signal_Count} signals across ${s.Total_Stocks} stocks`}))}/>
+            tooltip:`${s.Sector}: strength ${s.Strength_Score.toFixed(1)} · net bias ${s.Net_Bias_Score} · ${s.Total_Signal_Count} signals across ${s.Total_Stocks} stocks`}))}
+          onSelect={onSelect ? k=>onSelect(k) : undefined} selectedKey={selected}/>
       )}
     </div>
   );
 }
 
-function IndustryMomentumPanelV2({ db: baseDb }) {
+function IndustryMomentumPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, sector=null, onClearSector=null }) {
   const [view, setView] = useState("bubble");
   const [mode, setMode] = useState("top");
-  const [tf, setTf] = useState("ALL");
-  const db = { ...baseDb, ...useTfSectors(baseDb, tf) };
-  const sorted = useMemo(()=>[...db.industryAnalysis].sort((a,b)=>b.Net_Bias_Score-a.Net_Bias_Score),[db.industryAnalysis]);
+  const [tfLocal, setTfLocal] = useState("ALL");
+  const tf = tfIn || tfLocal, setTf = setTfIn || setTfLocal;
+  const tfd = useTfSectors(baseDb, tf);
+  const inds = useMemo(()=> sector ? tfd.industryAnalysis.filter(r=>r.Sector===sector) : tfd.industryAnalysis, [tfd.industryAnalysis, sector]);
+  const db = { ...baseDb, ...tfd, industryAnalysis: inds };
+  const sorted = useMemo(()=>[...inds].sort((a,b)=>b.Net_Bias_Score-a.Net_Bias_Score),[inds]);
   const data = mode==="top" ? sorted.slice(0,10) : [...sorted].reverse().slice(0,10);
   const maxAbs = Math.max(...data.map(d=>Math.abs(d.Net_Bias_Score)),1);
-  const bubbles = useMemo(()=>[...db.industryAnalysis].sort((a,b)=>b.Total_Signal_Count-a.Total_Signal_Count).slice(0,40),[db.industryAnalysis]);
+  const bubbles = useMemo(()=>[...inds].sort((a,b)=>b.Total_Signal_Count-a.Total_Signal_Count).slice(0,40),[inds]);
   const symsOf = ind => db.master.filter(m=>m.Industry===ind.Industry && m.Sector===ind.Sector).map(m=>m.Symbol);
   return (
     <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"}}>
@@ -5291,6 +5102,7 @@ function IndustryMomentumPanelV2({ db: baseDb }) {
         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",display:"flex",alignItems:"center",flex:1}}>📐 Industry Bias Momentum
           <InfoTip><strong>List</strong>: industries with the most bullish (or bearish) net signal bias. <strong>Bubble</strong>: the 40 busiest industries — x = net bias, y = strength, <strong>bubble size = signal intensity</strong>, colour = sector. A cluster of same-colour bubbles on one side = a whole sector rotating. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.</InfoTip>
         </div>
+        {sector && <button onClick={onClearSector} title="Show every sector's industries" style={{fontSize:10.5,padding:"2px 8px",borderRadius:5,border:`1px solid ${sectorColor(sector)}`,color:sectorColor(sector),background:"var(--s2)",whiteSpace:"nowrap"}}>✕ {sector}</button>}
         <TfPicker value={tf} onChange={setTf}/>
         {view==="list" && <>
           <Pill active={mode==="top"} color="var(--long)" onClick={()=>setMode("top")}>▲ Bullish</Pill>
@@ -5315,44 +5127,6 @@ function IndustryMomentumPanelV2({ db: baseDb }) {
           items={bubbles.map(d=>({key:d.Sector+"|"+d.Industry,label:d.Industry,x:d.Net_Bias_Score,y:d.Strength_Score,size:d.Total_Signal_Count,color:sectorColor(d.Sector),
             tooltip:`${d.Industry} (${d.Sector}): strength ${d.Strength_Score.toFixed(1)} · net bias ${d.Net_Bias_Score} · ${d.Total_Signal_Count} signals · ${d.Total_Stocks} stocks`}))}/>
       )}
-    </div>
-  );
-}
-
-function BiasDistributionPanel({ db }) {
-  const biasSymMap = {};
-  db.flat.forEach(r=>{ biasSymMap[r.Symbol]=r.Trading_Bias; });
-  const biasCnt = {};
-  Object.values(biasSymMap).forEach(b=>{ biasCnt[b]=(biasCnt[b]||0)+1; });
-  const total = Object.keys(biasSymMap).length || 1;
-  const longPct = (biasCnt.LONG||0)/total*100, shortPct = (biasCnt.SHORT||0)/total*100;
-  return (
-    <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"}}>
-      <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",marginBottom:12,display:"flex",alignItems:"center"}}>📡 Market Bias Distribution
-        <InfoTip>How many stocks carry each trading bias today. When one side dominates, trade that side and demand exceptional setups for the other.</InfoTip>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-        <div style={{background:"var(--longd)",borderRadius:7,padding:"10px 12px"}}>
-          <div style={{fontSize:22,fontWeight:700,color:"var(--long)",fontFamily:"var(--mono)"}}>{longPct.toFixed(0)}%</div>
-          <div style={{fontSize:10,color:"var(--long)"}}>Bullish · {biasCnt.LONG||0}</div>
-        </div>
-        <div style={{background:"var(--shortd)",borderRadius:7,padding:"10px 12px"}}>
-          <div style={{fontSize:22,fontWeight:700,color:"var(--short)",fontFamily:"var(--mono)"}}>{shortPct.toFixed(0)}%</div>
-          <div style={{fontSize:10,color:"var(--short)"}}>Bearish · {biasCnt.SHORT||0}</div>
-        </div>
-      </div>
-      {Object.entries(biasCnt).sort((a,b)=>b[1]-a[1]).map(([bias,cnt])=>{
-        const bc=BIAS_COLOR[bias]||BIAS_COLOR.NEUTRAL, pct=(cnt/total*100).toFixed(1);
-        return (
-          <div key={bias} style={{marginBottom:9}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
-              {biasBadge(bias,true)}
-              <span style={{fontFamily:"var(--mono)",fontSize:11.5,color:"var(--t1)"}}>{cnt} <span style={{color:"var(--t3)",fontSize:10}}>({pct}%)</span></span>
-            </div>
-            <div style={{height:5,background:"var(--s3)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",background:bc.text,width:pct+"%",borderRadius:3,opacity:.8}}/></div>
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -6234,5 +6008,142 @@ function NRTrapSection({ db, open, lockDir=null, embedded=false }) {
 }
 
 
+// ─── ZONE RETEST (Zone_Retest sheet) ──────────────────────────────────────────
+const RETEST_TFS = ["Y","Q","M","W"];
+const ZR_TH = {position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"6px 8px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",whiteSpace:"nowrap",zIndex:1};
+const ZR_TD = {padding:"5px 8px",fontFamily:"var(--mono)",whiteSpace:"nowrap",fontSize:11};
+
+function ZoneRetestSection({ db, lockDir=null }) {
+  const all = db.zoneRetest || [];
+  const [trade, setTrade] = useLockable(lockDir, "LONG");
+  const [tfs, setTfs] = useState(new Set(RETEST_TFS));
+  const [fnoOnly, setFnoOnly] = useState(false);
+  const toggleTf = t => setTfs(prev => { const n=new Set(prev); n.has(t)&&n.size>1?n.delete(t):n.add(t); return n; });
+  const side = all.filter(r => r.Trade===trade && (!fnoOnly || r.Is_FNO==="Yes"));
+  const tfCount = {}; side.forEach(r => { tfCount[r.Timeframe]=(tfCount[r.Timeframe]||0)+1; });
+  const rows = side.filter(r => tfs.has(r.Timeframe));
+  const buy = trade==="LONG", c = buy ? "var(--long)" : "var(--short)";
+  const title = "Zone Retest — broke last bar's zone, back at the current zone";
+  return (
+    <div>
+      <Anchor id="ct-retest"/>
+      <SectionTitle icon="🔁" title={title}
+        sub={buy ? "Last bar CLOSED above its own zone (breakout). Now price has come back into the current zone's bottom band — the breakout is being retested from the zone low."
+                 : "Last bar CLOSED below its own zone (breakdown). Now price has come back up into the current zone's top band — the breakdown is being retested from the zone high."}
+        right={<div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          {(!lockDir || lockDir==="LONG") && <Pill active={buy} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Broke up → buy at zone low</Pill>}
+          {(!lockDir || lockDir==="SHORT") && <Pill active={!buy} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Broke down → sell at zone high</Pill>}
+          <span style={{width:1,height:20,background:"var(--b2)"}}/>
+          {RETEST_TFS.map(t=><Pill key={t} active={tfs.has(t)} onClick={()=>toggleTf(t)}>{t} · {tfCount[t]||0}</Pill>)}
+          <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)}>FNO only</Pill>
+          <ListCopy symbols={[...new Set(rows.map(r=>r.Symbol))]}/>
+        </div>}/>
+      {!(db.has && db.has.zoneRetest) && !all.length ? (
+        <div style={{background:"var(--s1)",border:"1px dashed var(--b2)",borderRadius:12,padding:"22px",textAlign:"center",color:"var(--t2)",fontSize:12.5,lineHeight:1.7,marginBottom:14}}>
+          This collection has no <strong>Zone_Retest</strong> sheet.<br/>It appears from the next scanner run.
+        </div>
+      ) : (
+        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",marginBottom:14}}>
+          <div style={{fontSize:10.5,color:"var(--t3)",marginBottom:6,display:"flex",alignItems:"center"}}>
+            {rows.length} setups · Yearly first, then closest to the zone edge
+            <InfoTip><strong>Rule</strong> (W, M, Q, Y): {buy ? <>the previous bar <strong>closed above its own top zone</strong> and the price is now <strong>inside the current bar's bottom band</strong> (bottom_zone … bottom_near)</> : <>the previous bar <strong>closed below its own bottom zone</strong> and the price is now <strong>inside the current bar's top band</strong> (top_near … top_zone)</>}. Daily isn't included — the raw scans have no previous-day zones. <strong>From edge</strong> = how far price is from the zone {buy?"bottom":"top"}.</InfoTip>
+          </div>
+          <div style={{maxHeight:380,overflow:"auto"}} className="tower-scroll">
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead><tr>{["Symbol","TF","Last bar closed","Its zone","CMP",buy?"Current bottom band":"Current top band","Current zone","From edge","Health"].map(h=><th key={h} style={ZR_TH}>{h}</th>)}</tr></thead>
+              <tbody>
+                {rows.map(r=>(
+                  <tr key={r.Symbol+r.Timeframe+r.Trade} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
+                    <td style={{padding:"5px 8px",whiteSpace:"nowrap"}}><SymCell sym={r.Symbol}/><div style={{fontSize:8.5,color:sectorColor(r.Sector)}}>{r.Sector}{r.Is_FNO==="Yes"?" · FNO":""}</div></td>
+                    <td style={{...ZR_TD,fontWeight:700}}>{r.Timeframe}</td>
+                    <td style={{...ZR_TD,color:c}}>{r.Prev_Close} {buy?"▲":"▼"}</td>
+                    <td style={ZR_TD}>{r.Prev_Zone_Bottom} – {r.Prev_Zone_Top}</td>
+                    <td style={{...ZR_TD,fontWeight:700}}>{r.Price}</td>
+                    <td style={{...ZR_TD,color:c}}>{buy ? `${r.Zone_Bottom} – ${r.Zone_Bottom_Near}` : `${r.Zone_Top_Near} – ${r.Zone_Top}`}</td>
+                    <td style={ZR_TD}>{r.Zone_Bottom} – {r.Zone_Top}</td>
+                    <td style={ZR_TD}>{r.Dist_To_Zone_Edge_Pct!=null?`${r.Dist_To_Zone_Edge_Pct.toFixed(2)}%`:"—"}</td>
+                    <td style={{padding:"5px 8px"}}>{r.Health ? <HealthBadge h={r.Health} small/> : null}</td>
+                  </tr>
+                ))}
+                {!rows.length && <tr><td colSpan={9} style={{padding:16,textAlign:"center",color:"var(--t3)"}}>Nothing matches these filters.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── TREND PULLBACK (the scanner's "last_N…_trend_with_close_nearto_…_zone" signals) ─────
+const TREND_PB_RE = /^last_(\d+)(mon|wk|day)_(up|down)_trend_with_close_nearto_(low|high)_zone$/;
+const TREND_UNIT = { day:"D", wk:"W", mon:"M" };
+const TREND_BARS = { D:"days", W:"weeks", M:"months" };
+
+function TrendPullbackSection({ db, lockDir=null }) {
+  const [trade, setTrade] = useLockable(lockDir, "LONG");
+  const [tfs, setTfs] = useState(new Set(["M","W","D"]));
+  const [only4, setOnly4] = useState(false);
+  const toggleTf = t => setTfs(prev => { const n=new Set(prev); n.has(t)&&n.size>1?n.delete(t):n.add(t); return n; });
+  const all = useMemo(() => {
+    const zl = {}; (db.zoneLevels||[]).forEach(z=>{ zl[z.Symbol]=z; });
+    const m = {};
+    db.flat.forEach(r => {
+      const g = r.Signal_Name.match(TREND_PB_RE); if (!g) return;
+      const tf = TREND_UNIT[g[2]], t = g[3]==="up" ? "LONG" : "SHORT", n = +g[1], k = r.Symbol+"|"+tf+"|"+t;
+      if (!m[k] || m[k].bars < n) m[k] = { sym:r.Symbol, sector:r.Sector, fno:r.Is_FNO==="Yes", tf, trade:t, bars:n, z:zl[r.Symbol], price:r.Price };
+    });
+    return Object.values(m);
+  }, [db.flat, db.zoneLevels]);
+  const side = all.filter(r => r.trade===trade && (!only4 || r.bars>=4));
+  const tfCount = {}; side.forEach(r => { tfCount[r.tf]=(tfCount[r.tf]||0)+1; });
+  const rank = { M:0, W:1, D:2 };
+  const rows = side.filter(r => tfs.has(r.tf)).sort((a,b) => rank[a.tf]-rank[b.tf] || b.bars-a.bars);
+  const buy = trade==="LONG", c = buy ? "var(--long)" : "var(--short)";
+  return (
+    <div>
+      <Anchor id="ct-trend"/>
+      <SectionTitle icon="📈" title="Trend Pullback — trend intact, price back at the zone"
+        sub={buy ? "Several bars trending up, and price is now back in the current zone's bottom band — buy the dip in an uptrend."
+                 : "Several bars trending down, and price is now back in the current zone's top band — sell the rise in a downtrend."}
+        right={<div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          {(!lockDir || lockDir==="LONG") && <Pill active={buy} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Uptrend → buy near zone low</Pill>}
+          {(!lockDir || lockDir==="SHORT") && <Pill active={!buy} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Downtrend → sell near zone high</Pill>}
+          <span style={{width:1,height:20,background:"var(--b2)"}}/>
+          {["M","W","D"].map(t=><Pill key={t} active={tfs.has(t)} onClick={()=>toggleTf(t)}>{t} · {tfCount[t]||0}</Pill>)}
+          <Pill active={only4} onClick={()=>setOnly4(v=>!v)}>{only4?"✓ ":""}4-bar trend only</Pill>
+          <ListCopy symbols={[...new Set(rows.map(r=>r.sym))]}/>
+        </div>}/>
+      <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",marginBottom:14}}>
+        <div style={{fontSize:10.5,color:"var(--t3)",marginBottom:6,display:"flex",alignItems:"center"}}>
+          {rows.length} setups · Monthly first, then the longest trend
+          <InfoTip>From your <strong>last_3/4 mon · wk · day _{buy?"up":"down"}_trend_with_close_nearto_{buy?"low":"high"}_zone</strong> scans. How the scanner reads them today: the last 3 or 4 completed bars each <strong>closed {buy?"higher":"lower"}</strong> than the bar before, and the price is inside the current bar's {buy?"bottom":"top"} band.</InfoTip>
+        </div>
+        <div style={{maxHeight:380,overflow:"auto"}} className="tower-scroll">
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr>{["Symbol","TF","Trend","CMP",buy?"Current bottom band":"Current top band","Current zone"].map(h=><th key={h} style={ZR_TH}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rows.map(r=>{ const z = r.z && r.z[r.tf];
+                return (
+                  <tr key={r.sym+r.tf+r.trade} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
+                    <td style={{padding:"5px 8px",whiteSpace:"nowrap"}}><SymCell sym={r.sym}/><div style={{fontSize:8.5,color:sectorColor(r.sector||"")}}>{r.sector}{r.fno?" · FNO":""}</div></td>
+                    <td style={{...ZR_TD,fontWeight:700}}>{r.tf}</td>
+                    <td style={{...ZR_TD,color:c}}>{buy?"▲":"▼"} {r.bars} {TREND_BARS[r.tf]}</td>
+                    <td style={{...ZR_TD,fontWeight:700}}>{r.z?.Price ?? r.price}</td>
+                    <td style={{...ZR_TD,color:c}}>{z ? (buy ? `${z.bz} – ${z.bn}` : `${z.tn} – ${z.tz}`) : "—"}</td>
+                    <td style={ZR_TD}>{z ? `${z.bz} – ${z.tz}` : "—"}</td>
+                  </tr>
+                );
+              })}
+              {!rows.length && <tr><td colSpan={6} style={{padding:16,textAlign:"center",color:"var(--t3)"}}>Nothing matches these filters.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export { mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell, ListCopy,
-         HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, InfoTip, EqRow, CopyBtn, biasBadge, formatDateLabel };
+         HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, InfoTip, EqRow, CopyBtn, biasBadge, formatDateLabel,
+         classifySignal, TF_WEIGHT, TF_NAME };
