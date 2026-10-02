@@ -8,6 +8,7 @@ Hyperplane API.
   /api/sync                 start a collection now
   /api/jobs                 collection history + live log
   /api/compare?a=&b=        stock-by-stock change between two collections (morning vs afternoon)
+  /api/index-rules          admin's extra / excluded index-ETF symbols (the dashboard hides indices)
   /api/admin/*              settings, import old Excel files, delete collections, system status
 """
 import os
@@ -251,6 +252,18 @@ class SettingsIn(BaseModel):
     manual_keep: str = "all"
     telegram_enabled: bool = True
     nr_mother_body_pct: float = 60
+    index_add: list[str] = []
+    index_keep: list[str] = []
+
+
+def _symbols(items):
+    return sorted({s.strip().upper().replace("NSE:", "").strip(",") for s in items if s.strip()})
+
+
+@app.get("/api/index-rules")
+def index_rules(user=Depends(current_user)):
+    s = get_settings()
+    return {"add": s["index_add"], "keep": s["index_keep"]}
 
 
 @app.get("/api/admin/settings")
@@ -273,7 +286,8 @@ def write_settings(body: SettingsIn, user=Depends(admin_user)):
         raise HTTPException(422, "Mother candle body % must be between 1 and 100")
     s = body.model_dump()
     s.update(schedule_times=times, skip_dates=skips, retention_days=max(0, body.retention_days),
-             catch_up_minutes=max(0, min(body.catch_up_minutes, 720)))
+             catch_up_minutes=max(0, min(body.catch_up_minutes, 720)),
+             index_add=_symbols(body.index_add), index_keep=_symbols(body.index_keep))
     put_settings(s)
     return read_settings(user)
 

@@ -134,7 +134,11 @@ function UserMenu({ user, onLogout, onLocalFiles }) {
 }
 
 // ─── ADMIN ────────────────────────────────────────────────────────────────────
-function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
+const toForm = st => ({ ...st, skip_text: (st.skip_dates || []).join("\n"),
+  add_text: (st.index_add || []).join("\n"), keep_text: (st.index_keep || []).join("\n") });
+const symList = t => (t || "").split(/[\s,]+/).map(x => x.trim().toUpperCase().replace(/^NSE:/, "")).filter(Boolean);
+
+function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
   const [sys, setSys] = useState(null);
   const running = sync && (sync.status === "queued" || sync.status === "running");
   const elapsed = running && sync.started_at ? Math.round((Date.now() - new Date(sync.started_at)) / 1000) : 0;
@@ -148,7 +152,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
   const load = useCallback(async () => {
     const [s, c, j] = await Promise.all([api("/api/admin/system"), api("/api/admin/settings"), api("/api/jobs?limit=40")]);
     setSys(s); setCfg(c); setJobs(j);
-    setForm(f => f || { ...c.settings, skip_text: (c.settings.skip_dates || []).join("\n") });
+    setForm(f => f || toForm(c.settings));
   }, []);
   useEffect(() => { load().catch(e => notify(e.message, "err")); const t = setInterval(() => load().catch(() => {}), 10000); return () => clearInterval(t); }, [load]);
   useEffect(() => {
@@ -161,9 +165,10 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
   const save = async () => {
     setSaving(true);
     try {
-      const body = { ...form, skip_dates: form.skip_text.split(/[\s,]+/).filter(Boolean) }; delete body.skip_text;
+      const body = { ...form, skip_dates: form.skip_text.split(/[\s,]+/).filter(Boolean), index_add: symList(form.add_text), index_keep: symList(form.keep_text) };
+      delete body.skip_text; delete body.add_text; delete body.keep_text;
       const c = await api("/api/admin/settings", { method: "PUT", json: body });
-      setCfg(c); setForm({ ...c.settings, skip_text: (c.settings.skip_dates || []).join("\n") }); notify("Settings saved");
+      setCfg(c); setForm(toForm(c.settings)); notify("Settings saved"); onSaved && onSaved();
     } catch (e) { notify(e.message, "err"); } finally { setSaving(false); }
   };
   const doImport = async files => {
@@ -316,6 +321,18 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync }) {
           <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 6, lineHeight: 1.5 }}>To add or remove a user or change a password, edit <code>config.ini</code> on the server under <code>[users]</code>. It is picked up automatically — no restart.</div>
         </FocusCard>
       </EqRow>
+
+      <FocusCard icon="📉" title="Indices & ETFs" sub="The dashboard hides these when “Hide indices & ETFs” is on (side nav, on by default). Found automatically: sector “Indices”, symbols with NIFTY / SENSEX / BEES or ending in ETF, and names with the word ETF / Index Fund / Fund of Funds.">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12 }}>
+          {[["add_text", "Also treat as index / ETF (hide)", "e.g. SILVER001, GOLDCASE"], ["keep_text", "Not an index — always show", "e.g. a real stock that got caught"]].map(([k, l, ph]) => (
+            <div key={k}>
+              <div style={{ fontSize: 10.5, color: "var(--t3)", marginBottom: 4 }}>{l} — one symbol per line</div>
+              <textarea id={`idx-${k}`} value={form[k]} placeholder={ph} onChange={e => setForm(f => ({ ...f, [k]: e.target.value }))} rows={4} style={{ ...input, width: "100%", boxSizing: "border-box", fontFamily: "var(--mono)" }} />
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 8 }}><button onClick={save} disabled={saving} style={btn(true)}>{saving ? "Saving…" : "Save settings"}</button></div>
+      </FocusCard>
     </div>
   );
 }
@@ -625,6 +642,9 @@ export default function Root() {
   }, []);
 
   useEffect(() => { if (user) reloadSnaps().catch(e => notify(e.message, "err")); }, [user]);
+  const [indexRules, setIndexRules] = useState({ add: [], keep: [] });
+  const loadIndexRules = useCallback(() => api("/api/index-rules").then(setIndexRules).catch(() => {}), []);
+  useEffect(() => { if (user) loadIndexRules(); }, [user]);
 
   // Load the selected collections (cached — a collection never changes once stored)
   useEffect(() => {
@@ -700,7 +720,7 @@ export default function Root() {
   const shown = local || versions;
   const extraTabs = [
     { id: "compare", label: "⏱ Compare", render: ({ health, db }) => <CompareTab snaps={snaps} health={health} db={db} /> },
-    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} /> }] : []),
+    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} onSaved={loadIndexRules} /> }] : []),
   ];
   const empty = (
     <div style={{ padding: "60px 22px", textAlign: "center", color: "var(--t2)" }}>
@@ -714,7 +734,7 @@ export default function Root() {
   );
   return (
     <div className={`app-shell theme-${theme}`}>
-      <Dashboard rawVersions={shown} theme={theme} setTheme={setTheme} extraTabs={extraTabs} emptyState={empty}
+      <Dashboard rawVersions={shown} theme={theme} setTheme={setTheme} extraTabs={extraTabs} emptyState={empty} indexRules={indexRules}
         headerCenter={local
           ? <div style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ fontSize: 11, color: "var(--mixed)" }}>📂 Local file{local.length > 1 ? "s" : ""}: {local.map(v => v.fileName).join(", ").slice(0, 60)}</span><button onClick={() => setLocal(null)} style={btn(true)}>Back to stored data</button></div>
           : <DataPicker snaps={snaps} sel={sel} setSel={setSel} loading={loading} />}

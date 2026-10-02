@@ -831,8 +831,9 @@ const TABS = [
   { id:"master",   label:"🗂 Master List" },
 ];
 const TREND_TAB = { id:"trend", label:"📈 Trend & Versions" };
+const NO_INDEX_RULES = { add:[], keep:[] };
 
-export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, headerRight=null, extraTabs=[], emptyState=null }) {
+export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, headerRight=null, extraTabs=[], emptyState=null, indexRules=NO_INDEX_RULES }) {
   const [activeIdx, setActiveIdx] = useState(Math.max(0, rawVersions.length-1));
   useEffect(() => { setActiveIdx(Math.max(0, rawVersions.length-1)); }, [rawVersions]);
   const [tab, setTab]     = useState("tower");
@@ -845,12 +846,25 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
   const setHealthAllow = upd => setHealthAllowState(prev => { const n = typeof upd==="function" ? upd(prev) : upd; savePref("hp_health_allow_v2", [...n].join(",")); return n; });
   const healthMode = HEALTH_LEVELS.every(h=>healthAllow.has(h)) ? "all" : "custom";
   const hIdx = useMemo(() => healthIndex(rawVersions), [rawVersions]);
-  const excluded = useMemo(() => {
+  const [hideIdx, setHideIdxState] = useState(() => loadPref("hp_hide_index", "1") === "1");
+  const setHideIdx = v => { setHideIdxState(v); savePref("hp_hide_index", v ? "1" : "0"); };
+  const idxSyms = useMemo(() => indexSymbols(rawVersions, indexRules), [rawVersions, indexRules]);
+  const healthEx = useMemo(() => {
     const all = new Set(); rawVersions.forEach(v => { v.db.flat.forEach(r=>all.add(r.Symbol)); (v.db.zoneLevels||[]).forEach(r=>all.add(r.Symbol)); (v.db.master||[]).forEach(r=>all.add(r.Symbol)); });
+    if (hideIdx) idxSyms.forEach(sym => all.delete(sym));
     return excludedSymbols(healthAllow, hIdx, all);
-  }, [rawVersions, healthAllow, hIdx]);
-  const versions = useMemo(() => rawVersions.map(v => ({ ...v, db: filterDB(v.db, excluded) })), [rawVersions, excluded]);
-  const health = { allow: healthAllow, setAllow: setHealthAllow, hIdx, removed: excluded.size };
+  }, [rawVersions, healthAllow, hIdx, hideIdx, idxSyms]);
+  const excluded = useMemo(() => {
+    if (!hideIdx || !idxSyms.size) return healthEx;
+    const ex = new Set(healthEx); idxSyms.forEach(sym => ex.add(sym)); return ex;
+  }, [healthEx, hideIdx, idxSyms]);
+  const versions = useMemo(() => rawVersions.map(v => {
+    const d = filterDB(v.db, excluded);
+    return { ...v, db: hideIdx ? { ...d, sectorAnalysis: dropIndexSector(d.sectorAnalysis), industryAnalysis: dropIndexSector(d.industryAnalysis),
+                                   nrSectorIndustry: dropIndexSector(d.nrSectorIndustry) } : d };
+  }), [rawVersions, excluded, hideIdx]);
+  const health = { allow: healthAllow, setAllow: setHealthAllow, hIdx, removed: healthEx.size,
+                   hideIdx, setHideIdx, idxCount: idxSyms.size };
   const safeActive = Math.min(activeIdx, Math.max(0, versions.length-1));
   const db = versions.length ? versions[safeActive].db : null;
   const fileName = versions.length ? versions[safeActive].fileName : "";
@@ -876,7 +890,7 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
           {healthMode!=="all" && hIdx.available && (
             <div onClick={()=>setTab("tower")} title="Stock quality filter is on for every page — change it in the Control Tower"
                  style={{cursor:"pointer",fontSize:10.5,fontWeight:700,padding:"3px 9px",borderRadius:20,border:"1px solid var(--long)",color:"var(--long)",whiteSpace:"nowrap"}}>
-              🩺 {HEALTH_LEVELS.filter(h=>healthAllow.has(h)).map(h=>HEALTH_LABEL[h]).join(" + ")} only · {excluded.size.toLocaleString()} hidden
+              🩺 {HEALTH_LEVELS.filter(h=>healthAllow.has(h)).map(h=>HEALTH_LABEL[h]).join(" + ")} only · {healthEx.size.toLocaleString()} hidden
             </div>
           )}
           <div style={{marginLeft:"auto",display:"flex",gap:12,alignItems:"center"}}>
@@ -1904,6 +1918,8 @@ function HorizonTab({ db, horizons }) {
   const [sort,setSort]   = useState({ col:"signals", dir:-1 });
   const [page,setPage]   = useState(1);
   const [pageSize,setPageSize] = useState(50);
+  const [sf,setSfState] = useState(EMPTY_SF);
+  const setSf = u => { setSfState(u); setPage(1); };
 
   const toggleH=h=>setSelHorizons(prev=>{ const s=new Set(prev); if(s.has(h)&&s.size>1)s.delete(h); else s.add(h); setPage(1); return s; });
 
@@ -1918,6 +1934,7 @@ function HorizonTab({ db, horizons }) {
     });
     let out=Object.values(stockSigs);
     if(bias!=="ALL") out=out.filter(r=>r.Trading_Bias===bias);
+    out=out.filter(r=>passSF(r,sf));
     if(search){const q=search.toLowerCase();out=out.filter(r=>r.Symbol.toLowerCase().includes(q));}
     if(sort.col){
       out=[...out].sort((a,b)=>{
@@ -1928,7 +1945,7 @@ function HorizonTab({ db, horizons }) {
       });
     }
     return out;
-  },[db.flat,horizons,selHorizons,bias,search,sort]);
+  },[db.flat,horizons,selHorizons,bias,search,sort,sf]);
 
   const sortCol=col=>setSort(p=>p.col===col?{col,dir:-p.dir}:{col,dir:1});
   const totalPg=Math.max(1,Math.ceil(data.length/pageSize));
@@ -1957,6 +1974,11 @@ function HorizonTab({ db, horizons }) {
           return <div key={b} onClick={()=>{setBias(b);setPage(1);}} style={{padding:"5px 10px",borderRadius:6,fontSize:11.5,cursor:"pointer",border:`1px solid ${active?bc.border:"var(--b2)"}`,background:active?bc.bg:"var(--s2)",color:active?bc.text:"var(--t2)"}}>{b}</div>;
         })}
         <TVCopyBtn symbols={filteredSyms} label={`⎘ Copy ${filteredSyms.length} TV`}/>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14,marginTop:-6}}>
+        <span style={{fontSize:10,color:"var(--t3)",fontWeight:600,textTransform:"uppercase",letterSpacing:".7px"}}>Filter:</span>
+        <StockFilterBar rows={db.flat} f={sf} setF={setSf}/>
+        <span style={{fontSize:11,color:"var(--t2)",fontFamily:"var(--mono)"}}>{data.length.toLocaleString()} stocks</span>
         <div style={{position:"relative",marginLeft:"auto"}}>
           <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",color:"var(--t3)",fontSize:12}}>🔍</span>
           <input style={{background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:7,color:"var(--t1)",fontSize:11.5,padding:"5px 12px 5px 30px",width:200}} placeholder="Search symbol..." value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/>
@@ -2018,12 +2040,39 @@ function HorizonTab({ db, horizons }) {
   );
 }
 
+// ─── SHARED STOCK FILTER BAR ──────────────────────────────────────────────────
+const EMPTY_SF = { fno:false, n500:false, sector:"", industry:"" };
+const passSF = (r, f) => (!f.fno || r.Is_FNO==="Yes") && (!f.n500 || r.Is_Nifty_500==="Yes")
+  && (!f.sector || r.Sector===f.sector) && (!f.industry || r.Industry===f.industry);
+function StockFilterBar({ rows, f, setF }) {
+  const sectors = useMemo(() => [...new Set(rows.map(r=>r.Sector).filter(x=>x && x!=="Unknown"))].sort(), [rows]);
+  const inds = useMemo(() => [...new Set(rows.filter(r=>!f.sector || r.Sector===f.sector).map(r=>r.Industry).filter(x=>x && x!=="Unknown"))].sort(), [rows, f.sector]);
+  const sel = on => ({ background:"var(--s2)", border:`1px solid ${on?"var(--acc)":"var(--b2)"}`, color:on?"var(--acc)":"var(--t2)", borderRadius:6, fontSize:11.5, padding:"5px 8px", maxWidth:190 });
+  const any = f.fno || f.n500 || f.sector || f.industry;
+  return (
+    <>
+      <Pill active={f.fno} color="var(--long)" onClick={()=>setF(p=>({...p,fno:!p.fno}))}>{f.fno?"✓ ":""}F&amp;O only</Pill>
+      <Pill active={f.n500} color="var(--ret)" onClick={()=>setF(p=>({...p,n500:!p.n500}))}>{f.n500?"✓ ":""}Nifty 500</Pill>
+      <select value={f.sector} onChange={e=>setF(p=>({...p,sector:e.target.value,industry:""}))} style={sel(!!f.sector)} title="Sector">
+        <option value="">All sectors</option>{sectors.map(x=><option key={x} value={x}>{x}</option>)}
+      </select>
+      <select value={f.industry} onChange={e=>setF(p=>({...p,industry:e.target.value}))} style={sel(!!f.industry)} title={f.sector?`Industries in ${f.sector}`:"Industry"}>
+        <option value="">{f.sector ? `All industries in ${f.sector}` : "All industries"}</option>{inds.map(x=><option key={x} value={x}>{x}</option>)}
+      </select>
+      {any && <button onClick={()=>setF(EMPTY_SF)} style={{fontSize:10.5,padding:"4px 9px",borderRadius:6,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>✕ Clear</button>}
+    </>
+  );
+}
+
 // ─── STRONG CONVICTION ────────────────────────────────────────────────────────
 function StrongConviction({ db }) {
   const [filterType,setFilterType] = useState("ALL");
+  const [sf,setSf] = useState(EMPTY_SF);
+  const [search,setSearch] = useState("");
   const sorted=useMemo(()=>[...db.strong].sort((a,b)=>+b.Conviction_Score-+a.Conviction_Score),[db.strong]);
-  const types=useMemo(()=>{ const t={}; db.strong.forEach(r=>{t[r.Conviction_Type]=(t[r.Conviction_Type]||0)+1;}); return t; },[db.strong]);
-  const data=filterType==="ALL"?sorted:sorted.filter(r=>r.Conviction_Type===filterType);
+  const base=useMemo(()=>sorted.filter(r=>passSF(r,sf) && (!search || r.Symbol.toLowerCase().includes(search.toLowerCase()))),[sorted,sf,search]);
+  const types=useMemo(()=>{ const t={}; db.strong.forEach(r=>{t[r.Conviction_Type]=0;}); base.forEach(r=>{t[r.Conviction_Type]++;}); return t; },[db.strong,base]);
+  const data=filterType==="ALL"?base:base.filter(r=>r.Conviction_Type===filterType);
   const maxS=Math.max(...db.strong.map(r=>+r.Conviction_Score),1);
   const filteredSyms=data.map(r=>r.Symbol);
 
@@ -2031,8 +2080,10 @@ function StrongConviction({ db }) {
     <div style={{padding:"18px 22px"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:16}}>
         <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:"1px",fontWeight:600}}>
-          💪 Strong Conviction — {db.strong.length} stocks
+          💪 Strong Conviction — {data.length} of {db.strong.length} stocks
         </div>
+        <StockFilterBar rows={db.strong} f={sf} setF={setSf}/>
+        <input placeholder="Search symbol..." value={search} onChange={e=>setSearch(e.target.value)} style={{background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:6,color:"var(--t1)",fontSize:11.5,padding:"5px 9px",width:150}}/>
         <div style={{marginLeft:"auto",display:"flex",gap:6}}>
           <TVCopyBtn symbols={filteredSyms} label={`⎘ Copy ${filteredSyms.length} TV`}/>
         </div>
@@ -2040,7 +2091,7 @@ function StrongConviction({ db }) {
       <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:18}}>
         {["ALL",...Object.keys(types)].map(t=>(
           <button key={t} onClick={()=>setFilterType(t)} style={{padding:"5px 11px",borderRadius:6,fontSize:11.5,cursor:"pointer",border:`1px solid ${filterType===t?"var(--acc)":"var(--b2)"}`,background:filterType===t?"var(--adim)":"var(--s2)",color:filterType===t?"var(--acc)":"var(--t2)"}}>
-            {t} {t!=="ALL"&&<span style={{fontSize:9,background:"var(--s3)",borderRadius:999,padding:"1px 5px",marginLeft:3,color:"var(--t3)"}}>{types[t]}</span>}
+            {t} <span style={{fontSize:9,background:"var(--s3)",borderRadius:999,padding:"1px 5px",marginLeft:3,color:"var(--t3)"}}>{t==="ALL"?base.length:types[t]}</span>
           </button>
         ))}
       </div>
@@ -2360,14 +2411,25 @@ function RotationQuadrantChart({ items, onSelect, selectedKey, height=380, xAxis
 }
 
 // ─── SECTOR & INDUSTRY ANALYSIS TAB (NEW) ─────────────────────────────────────
-function SectorIndustryTab({ db: baseDb }) {
+function SectorIndustryTab({ db: rawDb }) {
   const [tf, setTf] = useState("ALL");
-  const tfd = useTfSectors(baseDb, tf);
+  const [fnoOnly, setFnoOnly] = useState(false);
+  const baseDb = useMemo(() => {
+    if (!fnoOnly) return rawDb;
+    const fno = new Set([...rawDb.flat, ...(rawDb.zoneLevels||[])].filter(r=>r.Is_FNO==="Yes").map(r=>r.Symbol));
+    const ex = new Set([...rawDb.master, ...rawDb.flat, ...(rawDb.zoneLevels||[])].map(r=>r.Symbol).filter(sym=>!fno.has(sym)));
+    const d = filterDB(rawDb, ex);
+    return { ...d, nrSectorIndustry: nrRowsFromFlat(d.flat) };
+  }, [rawDb, fnoOnly]);
+  const tfd = useTfSectors(baseDb, tf, fnoOnly);
   const nrTf = useMemo(() => tf==="ALL" ? baseDb.nrSectorIndustry
     : baseDb.nrSectorIndustry.filter(r => classifySignal({ Signal_Name:r.NR_Signal, Signal_Category:"NR_PATTERN", Signal_Type:r.Pattern_Type, Timeframe:"" }).tf===tf),
     [baseDb.nrSectorIndustry, tf]);
   const db = { ...baseDb, ...tfd, nrSectorIndustry: nrTf };
-  const [selSector, setSelSector] = useState(null);
+  const [selSector, setSelSectorRaw] = useState(null);
+  const [selIndustry, setSelIndustry] = useState(null);
+  const setSelSector = sec => { setSelSectorRaw(sec); setSelIndustry(null); };
+  const pickIndustry = (sec, ind) => { if (selIndustry===ind && selSector===sec) { setSelIndustry(null); return; } setSelSectorRaw(sec); setSelIndustry(ind); };
   const [indSearch, setIndSearch] = useState("");
   const [indSort, setIndSort] = useState({ col:"Strength_Score", dir:-1 });
   const [nrPattern, setNrPattern] = useState("ALL");
@@ -2392,16 +2454,17 @@ function SectorIndustryTab({ db: baseDb }) {
   const nrRows = useMemo(()=>{
     let out = db.nrSectorIndustry;
     if(selSector) out = out.filter(r=>r.Sector===selSector);
+    if(selIndustry) out = out.filter(r=>r.Industry===selIndustry);
     if(nrPattern!=="ALL") out = out.filter(r=>r.Pattern_Type===nrPattern);
     return [...out].sort((a,b)=>b.Stock_Count-a.Stock_Count).slice(0,120);
-  },[db.nrSectorIndustry,selSector,nrPattern]);
+  },[db.nrSectorIndustry,selSector,selIndustry,nrPattern]);
 
   const nrPatternTotals = useMemo(()=>{
-    const base = selSector ? db.nrSectorIndustry.filter(r=>r.Sector===selSector) : db.nrSectorIndustry;
+    const base = db.nrSectorIndustry.filter(r=>(!selSector||r.Sector===selSector) && (!selIndustry||r.Industry===selIndustry));
     const m={};
     base.forEach(r=>{ m[r.Pattern_Type]=(m[r.Pattern_Type]||0)+r.Stock_Count; });
     return m;
-  },[db.nrSectorIndustry,selSector]);
+  },[db.nrSectorIndustry,selSector,selIndustry]);
 
   const flatBySym = useMemo(()=>{
     const m={};
@@ -2412,12 +2475,13 @@ function SectorIndustryTab({ db: baseDb }) {
   const stockRows = useMemo(()=>{
     let out = db.master;
     if(selSector) out = out.filter(r=>r.Sector===selSector);
+    if(selIndustry) out = out.filter(r=>r.Industry===selIndustry);
     if(stockSearch){ const q=stockSearch.toLowerCase(); out = out.filter(r=>r.Symbol.toLowerCase().includes(q)||r.Stock_Name.toLowerCase().includes(q)); }
     return [...out].sort((a,b)=>{
       const ca=(flatBySym[a.Symbol]||{}).count||0, cb=(flatBySym[b.Symbol]||{}).count||0;
       return cb-ca;
     });
-  },[db.master,selSector,stockSearch,flatBySym]);
+  },[db.master,selSector,selIndustry,stockSearch,flatBySym]);
 
   const patternTypes = ["ALL","Breakout","Breakdown","Near High","Near Low","Back to NR"];
   const patternColor = { Breakout:"var(--long)", Breakdown:"var(--short)", "Near High":"var(--acc)", "Near Low":"var(--mixed)", "Back to NR":"var(--ret)" };
@@ -2434,11 +2498,12 @@ function SectorIndustryTab({ db: baseDb }) {
     <div style={{padding:"18px 22px"}}>
       <div style={{marginBottom:16,display:"flex",alignItems:"flex-end",gap:12,flexWrap:"wrap"}}>
         <div style={{flex:1,minWidth:260}}>
-          <div style={{fontSize:22,fontWeight:700,color:"var(--t1)"}}>🏭 Sector &amp; Industry Analysis{tf!=="ALL"&&<span style={{fontSize:14,color:"var(--acc)",marginLeft:8}}>· {TF_NAME[tf]}</span>}</div>
+          <div style={{fontSize:22,fontWeight:700,color:"var(--t1)"}}>🏭 Sector &amp; Industry Analysis{tf!=="ALL"&&<span style={{fontSize:14,color:"var(--acc)",marginLeft:8}}>· {TF_NAME[tf]}</span>}{fnoOnly&&<span style={{fontSize:14,color:"var(--long)",marginLeft:8}}>· F&amp;O only</span>}</div>
           <div style={{fontSize:13,color:"var(--t2)",marginTop:2}}>{sectors.length} sectors · {db.industryAnalysis.length} industries · {db.master.length.toLocaleString()} stocks mapped from the master list</div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
-          <span style={{fontSize:10.5,color:"var(--t3)"}}>Timeframe</span>
+          <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)} title="Only F&O stocks — every score, count and list on this tab is recalculated from them">{fnoOnly?"✓ ":""}F&amp;O only</Pill>
+          <span style={{fontSize:10.5,color:"var(--t3)",marginLeft:6}}>Timeframe</span>
           <TfPicker value={tf} onChange={setTf}/>
           <InfoTip><strong>All</strong> = every timeframe together (the Excel's cumulative score). <strong>D/W/M/Q/Y</strong> = only that timeframe's zone + NR signals; advancing/declining and average change are measured from that timeframe's previous close (e.g. W = since last week's close). Same strength formula: 40% net bias + 30% breadth + 30% momentum.</InfoTip>
         </div>
@@ -2478,6 +2543,7 @@ function SectorIndustryTab({ db: baseDb }) {
       <div style={{marginBottom:8,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
         <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:"1px",fontWeight:600}}>Sectors — click a card to filter industries, NR patterns &amp; stocks below</div>
         {selSector && <button onClick={()=>setSelSector(null)} style={{background:"var(--s2)",border:`1px solid ${sectorColor(selSector)}`,color:sectorColor(selSector),padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ Clear: {selSector}</button>}
+        {selIndustry && <button onClick={()=>setSelIndustry(null)} style={{background:"var(--s2)",border:"1px solid var(--acc)",color:"var(--acc)",padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ Industry: {selIndustry}</button>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:8,marginBottom:20}}>
         {sectors.map(s=>{
@@ -2570,9 +2636,10 @@ function SectorIndustryTab({ db: baseDb }) {
           <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"16px 18px",marginBottom:18}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
               <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>🧭 Industry Rotation within {selSector}</div>
-              <div style={{fontSize:10,color:"var(--t3)"}}>which industries here are bullish/strong vs bearish/weak · bubble size = stock count</div>
+              <div style={{fontSize:10,color:"var(--t3)"}}>bubble size = stock count · <strong>click a bubble</strong> to filter the NR table and stock list below</div>
             </div>
-            <RotationQuadrantChart items={indItems} height={340} emptyLabel={`No industry-level data for ${selSector}`}/>
+            <RotationQuadrantChart items={indItems} height={340} emptyLabel={`No industry-level data for ${selSector}`}
+              onSelect={k=>k ? pickIndustry(selSector,k) : setSelIndustry(null)} selectedKey={selIndustry}/>
           </div>
         );
       })()}
@@ -2581,7 +2648,7 @@ function SectorIndustryTab({ db: baseDb }) {
       <div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr",gap:14,marginBottom:18,alignItems:"start"}}>
         <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
           <div style={{padding:"10px 14px",borderBottom:"1px solid var(--b1)",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",flex:1}}>Industries {selSector?`in ${selSector}`:""} ({industries.length})</div>
+            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",flex:1}}>Industries {selSector?`in ${selSector}`:""} ({industries.length}) <span style={{fontSize:10,fontWeight:400,color:"var(--t3)"}}>· click a row to filter the stocks</span></div>
             <input value={indSearch} onChange={e=>setIndSearch(e.target.value)} placeholder="Search industry..." style={{background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:6,color:"var(--t1)",fontSize:11,padding:"4px 9px",width:160}}/>
           </div>
           <div style={{maxHeight:440,overflowY:"auto"}} className="tower-scroll">
@@ -2597,7 +2664,7 @@ function SectorIndustryTab({ db: baseDb }) {
                 {industries.slice(0,120).map((r,i)=>{
                   const c = sectorColor(r.Sector);
                   return (
-                    <tr key={r.Sector+r.Industry+i} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
+                    <tr key={r.Sector+r.Industry+i} className="sec-row" onClick={()=>pickIndustry(r.Sector,r.Industry)} style={{borderBottom:"1px solid var(--b1)",cursor:"pointer",background:selIndustry===r.Industry&&selSector===r.Sector?"var(--adim)":"transparent"}}>
                       <td style={{padding:"6px 10px",color:"var(--t1)",maxWidth:190,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.Industry}>{r.Industry}{!selSector&&<div style={{fontSize:8.5,color:c}}>{r.Sector}</div>}</td>
                       <td style={{padding:"6px 10px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{r.Total_Stocks}</td>
                       <td style={{padding:"6px 10px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{r.Advance_Decline_Ratio}</td>
@@ -2617,7 +2684,7 @@ function SectorIndustryTab({ db: baseDb }) {
 
         <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
           <div style={{padding:"10px 14px",borderBottom:"1px solid var(--b1)"}}>
-            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",marginBottom:8}}>NR Pattern Distribution {selSector?`— ${selSector}`:""}</div>
+            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",marginBottom:8}}>NR Pattern Distribution {selIndustry?`— ${selIndustry}`:selSector?`— ${selSector}`:""}</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}}>
               {patternTypes.map(p=>(
                 <button key={p} onClick={()=>setNrPattern(p)} style={{padding:"3px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer",border:`1px solid ${nrPattern===p?(patternColor[p]||"var(--acc)"):"var(--b2)"}`,background:nrPattern===p?"var(--adim)":"var(--s2)",color:nrPattern===p?(patternColor[p]||"var(--acc)"):"var(--t2)"}}>{p}</button>
@@ -2655,7 +2722,8 @@ function SectorIndustryTab({ db: baseDb }) {
       {/* Stock browser */}
       <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
         <div style={{padding:"10px 14px",borderBottom:"1px solid var(--b1)",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-          <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>Stocks {selSector?`in ${selSector}`:"— All Sectors"} ({stockRows.length.toLocaleString()})</div>
+          <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>Stocks {selIndustry?`in ${selIndustry}`:selSector?`in ${selSector}`:"— All Sectors"}{fnoOnly?" · F&O":""} ({stockRows.length.toLocaleString()})</div>
+          {selIndustry && <button onClick={()=>setSelIndustry(null)} style={{background:"var(--s2)",border:"1px solid var(--acc)",color:"var(--acc)",padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ {selIndustry}</button>}
           <input value={stockSearch} onChange={e=>setStockSearch(e.target.value)} placeholder="Search symbol or name..." style={{background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:6,color:"var(--t1)",fontSize:11,padding:"4px 9px",width:200}}/>
           <TVCopyBtn symbols={stockRows.slice(0,500).map(r=>r.Symbol)} label={`⎘ Copy ${Math.min(stockRows.length,500)} TV`}/>
         </div>
@@ -3955,6 +4023,27 @@ function mergeDBs(dbs) {
 
 // ─── STOCK QUALITY (Price_Health) — global filter applied to every page ───────
 const HEALTH_LEVELS = ["HEALTHY","WEAK","POOR"];
+
+// ─── INDICES / ETFs — global "hide" filter ─────────────────────────────────────
+// Auto: sector "Indices", symbol with NIFTY / SENSEX / BEES or ending in ETF, or a name with the word ETF /
+// Index Fund / Fund of Funds. Admin lists: `add` = also hide, `keep` = never hide.
+const IDX_SYM_RE = /NIFTY|SENSEX|BEES|ETF$/;
+const IDX_NAME_RE = /\bETF\b|\bindex fund\b|\bfund of funds?\b/i;
+function indexSymbols(versions, rules) {
+  const keep = new Set(rules.keep || []);
+  const out = new Set((rules.add || []).filter(x => !keep.has(x)));
+  const check = (sym, sector, name) => {
+    if (!sym || keep.has(sym)) return;
+    if (String(sector||"").toLowerCase()==="indices" || IDX_SYM_RE.test(sym) || IDX_NAME_RE.test(name||"")) out.add(sym);
+  };
+  versions.forEach(v => {
+    v.db.master.forEach(m => check(m.Symbol, m.Sector, m.Stock_Name));
+    (v.db.zoneLevels||[]).forEach(z => check(z.Symbol, z.Sector, z.Stock_Name));
+    v.db.flat.forEach(r => check(r.Symbol, r.Sector, r.Stock_Name));
+  });
+  return out;
+}
+const dropIndexSector = rows => rows.filter(r => String(r.Sector||"").toLowerCase()!=="indices");
 const HEALTH_DEFAULT = ["HEALTHY"];
 const isHealthDefault = allow => allow.size===HEALTH_DEFAULT.length && HEALTH_DEFAULT.every(h=>allow.has(h));
 const HEALTH_C = { POOR:"var(--short)", WEAK:"var(--mixed)", HEALTHY:"var(--long)" };
@@ -4057,7 +4146,7 @@ const CT_NAV = [
 ];
 const CAP_OPTS = [["all","All stocks"],["n500","Nifty 500"],["large","Large 100"],["mid","Mid 150"],["small","Small 250"]];
 
-const ctFilterCount = (f, health) => (f.dir!=="ALL") + f.fno + (f.cap!=="all") + !!f.sector + !!f.industry
+const ctFilterCount = (f, health) => (f.dir!=="ALL") + f.fno + (f.cap!=="all") + !!f.sector + !!f.industry + !!(health && health.setHideIdx && !health.hideIdx)
   + !!(health && health.hIdx.available && !isHealthDefault(health.allow));
 
 function CTSideNav({ open, setOpen, f, setF, sectors, industries=[], health, onShowList, active, counts }) {
@@ -4075,7 +4164,7 @@ function CTSideNav({ open, setOpen, f, setF, sectors, industries=[], health, onS
     <aside className={`ct-nav ${open?"open":""}`} aria-hidden={!open}>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
         <span style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>Filters</span>
-        {nOn>0 && <button onClick={()=>{ setF({dir:"ALL",fno:false,cap:"all",sector:"",industry:""}); health.setAllow(new Set(HEALTH_DEFAULT)); }} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>Reset ({nOn})</button>}
+        {nOn>0 && <button onClick={()=>{ setF({dir:"ALL",fno:false,cap:"all",sector:"",industry:""}); health.setAllow(new Set(HEALTH_DEFAULT)); health.setHideIdx && health.setHideIdx(true); }} style={{fontSize:10,padding:"2px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>Reset ({nOn})</button>}
         <button onClick={()=>setOpen(false)} title="Close (Esc)" style={{marginLeft:"auto",fontSize:14,width:26,height:26,borderRadius:6,border:"1px solid var(--b2)",background:"var(--s2)",color:"var(--t2)",lineHeight:1}}>✕</button>
       </div>
 
@@ -4093,6 +4182,14 @@ function CTSideNav({ open, setOpen, f, setF, sectors, industries=[], health, onS
         );
       }) : <div style={{fontSize:10.5,color:"var(--t3)",lineHeight:1.5}}>Needs the Price_Health sheet from the new scanner.</div>}
       {health.hIdx.available && <div style={{fontSize:10,color:"var(--t3)",marginTop:2,lineHeight:1.5}}>{health.removed>0?<>{health.removed.toLocaleString()} stocks hidden on every page. </>:null}Stocks with too little history count as Weak.</div>}
+      {health.setHideIdx && (
+        <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontSize:11.5,marginTop:8,color:health.hideIdx?"var(--t1)":"var(--t3)"}}
+          title="Indices, ETFs and index funds (sector 'Indices', NIFTY / SENSEX / BEES / …ETF symbols, 'ETF' in the name). Admins can add or remove symbols in Admin → settings.">
+          <input id="hide-index" type="checkbox" checked={health.hideIdx} onChange={e=>health.setHideIdx(e.target.checked)} style={{accentColor:"var(--acc)"}}/>
+          Hide indices &amp; ETFs <span style={{fontFamily:"var(--mono)",fontSize:10.5,color:"var(--t3)"}}>({health.idxCount.toLocaleString()})</span>
+          <span style={{fontSize:9.5,color:"var(--t3)",marginLeft:"auto"}}>all pages</span>
+        </label>
+      )}
 
       <Lbl>Direction</Lbl>
       <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
@@ -4131,6 +4228,34 @@ function CTSideNav({ open, setOpen, f, setF, sectors, industries=[], health, onS
         </div>
       ))}
     </aside>
+  );
+}
+
+// Compact market mood for the Control Tower header: stock directions (Focus model) + today's price breadth
+function SentimentStrip({ model, db }) {
+  const n = model.list.length || 1;
+  const cnt = { LONG:0, SHORT:0, MIXED:0 };
+  model.list.forEach(s => { cnt[s.dir] = (cnt[s.dir]||0) + 1; });
+  const bull = cnt.LONG/n*100, bear = cnt.SHORT/n*100, mixed = cnt.MIXED/n*100, gap = bull - bear;
+  const [mood, c] = Math.abs(gap) < 5 ? ["Balanced","var(--mixed)"]
+    : gap >= 20 ? ["Strongly bullish","var(--long)"] : gap > 0 ? ["Bullish","var(--long)"]
+    : gap <= -20 ? ["Strongly bearish","var(--short)"] : ["Bearish","var(--short)"];
+  let up = 0, dn = 0, sum = 0, k = 0;
+  db.master.forEach(m => { const v = parseFloat(m.Change_Pct); if (isNaN(v)) return; k++; sum += v; if (v > 0) up++; else if (v < 0) dn++; });
+  const avg = k ? sum/k : 0;
+  const Sep = () => <span style={{width:1,height:14,background:"var(--b2)"}}/>;
+  return (
+    <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10,fontFamily:"var(--mono)",fontSize:10.5,color:"var(--t2)",whiteSpace:"nowrap",flexWrap:"wrap"}}
+      title={`${cnt.LONG} bullish · ${cnt.MIXED} mixed · ${cnt.SHORT} bearish stocks`}>
+      <span style={{fontSize:9,color:"var(--t3)",letterSpacing:".8px",fontWeight:700}}>SENTIMENT</span>
+      <span style={{color:c,fontWeight:700}}>{mood}</span>
+      <div style={{display:"flex",width:96,height:5,borderRadius:3,overflow:"hidden",background:"var(--s3)"}}>
+        <div style={{width:`${bull}%`,background:"var(--long)"}}/><div style={{width:`${mixed}%`,background:"var(--mixed)"}}/><div style={{width:`${bear}%`,background:"var(--short)"}}/>
+      </div>
+      <span><span style={{color:"var(--long)"}}>{bull.toFixed(0)}%</span> / <span style={{color:"var(--short)"}}>{bear.toFixed(0)}%</span></span>
+      {k>0 && <><Sep/><span title="Price breadth today: stocks up / down, and the average % change">A/D <span style={{color:"var(--long)"}}>{up}</span>/<span style={{color:"var(--short)"}}>{dn}</span> · <span style={{color:avg>=0?"var(--long)":"var(--short)"}}>{avg>=0?"+":""}{avg.toFixed(2)}%</span></span></>}
+      <InfoTip>Each stock with signals is <strong>bullish</strong>, <strong>bearish</strong> or <strong>mixed</strong> by its timeframe-weighted zone + NR evidence (same direction as the Priority Radar). Mood = bullish % minus bearish %: under 5 points Balanced, 5–20 Bullish / Bearish, 20+ Strongly. A/D = stocks up / down today and the average change. Follows the data scope and side-nav filters.</InfoTip>
+    </div>
   );
 }
 
@@ -4245,6 +4370,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
               <div onClick={()=>setSel(new Set([n-1]))} style={chipBtn(mode==="latest")}>Latest file</div>
               <div onClick={()=>setSel(new Set(versions.map((_,i)=>i)))} style={{...chipBtn(mode==="all"),opacity:n>1?1:.5,pointerEvents:n>1?"auto":"none"}}>All files ({n})</div>
               <div style={chipBtn(mode==="custom","var(--mixed)")}>Custom{mode==="custom"?` (${safeIdx.length})`:""}</div>
+              <SentimentStrip model={model} db={db}/>
             </div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"stretch"}}>
               {versions.map((v,i)=>{
@@ -4791,6 +4917,8 @@ function SetupCard({ def, rows, open }) {
 function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null }) {
   const [minStack, setMinStack] = useState(3);
   const [stackAll, setStackAll] = useState(false);
+  const [stackDir, setStackDir] = useLockable(lockDir, "ALL");
+  const [stackFno, setStackFno] = useState(false);
   const bySetup = useMemo(()=>{
     const m = {}; SETUP_DEFS.forEach(d=>{ m[d.id]=[]; });
     list.forEach(s=>{ Object.entries(stockSetups(s)).forEach(([id,e])=>{ m[id].push({s,e}); }); });
@@ -4805,7 +4933,11 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
     return { s, sgn, aligned, opposed, rankSum: aligned.reduce((a,d)=>a+d.rank,0) };
   }).filter(r=>r.aligned.length>=minStack)
     .sort((a,b)=>b.aligned.length-a.aligned.length || b.rankSum-a.rankSum || b.s.score-a.s.score),[list,minStack]);
-  const stackVis = stackAll ? stacked : stacked.slice(0,20);
+  const stackBase = stacked.filter(r=>!stackFno || r.s.isFNO);
+  const stackN = { LONG: stackBase.filter(r=>r.sgn>0).length, SHORT: stackBase.filter(r=>r.sgn<0).length,
+                   FNO: stacked.filter(r=>(stackDir==="ALL" || (stackDir==="LONG") === (r.sgn>0)) && r.s.isFNO).length };
+  const stackShown = stackBase.filter(r=>stackDir==="ALL" || (stackDir==="LONG") === (r.sgn>0));
+  const stackVis = stackAll ? stackShown : stackShown.slice(0,20);
   const jump = id => { const el=document.getElementById(`setup-${id}`); if(el) el.scrollIntoView({behavior:"smooth",block:"start"}); };
 
   return (
@@ -4842,8 +4974,12 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
       <FocusCard icon="🏆" title="Stacked Setups — multiple playbooks agree" style={{marginBottom:12}}
         sub={`Stocks qualifying for ${minStack}+ setups in the same direction. Strongest setups listed first.`}
         right={<>
+          {(!lockDir || lockDir==="LONG") && <Pill active={stackDir==="LONG"} color="var(--long)" onClick={()=>setStackDir(stackDir==="LONG"?"ALL":"LONG")}>▲ Bullish · {stackN.LONG}</Pill>}
+          {(!lockDir || lockDir==="SHORT") && <Pill active={stackDir==="SHORT"} color="var(--short)" onClick={()=>setStackDir(stackDir==="SHORT"?"ALL":"SHORT")}>▼ Bearish · {stackN.SHORT}</Pill>}
+          <Pill active={stackFno} color="var(--long)" onClick={()=>setStackFno(v=>!v)}>{stackFno?"✓ ":""}F&amp;O only · {stackN.FNO}</Pill>
+          <span style={{width:1,height:18,background:"var(--b2)"}}/>
           {[2,3,4].map(k=><div key={k} onClick={()=>setMinStack(k)} style={{padding:"3px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer",border:`1px solid ${minStack===k?"var(--acc)":"var(--b2)"}`,color:minStack===k?"var(--acc)":"var(--t2)",background:minStack===k?"var(--adim)":"var(--s2)"}}>{k}+</div>)}
-          <ListCopy symbols={stacked.map(r=>r.s.symbol)}/>
+          <ListCopy symbols={stackShown.map(r=>r.s.symbol)}/>
         </>}
         learn={<>One setup is an idea; several different setups on the same stock pointing the same way is <strong>evidence</strong>. For example a stock that is a <em>Virgin Break</em> + <em>Overlap Zone Break</em> + <em>NR Breakout · Breakdown</em> has three independent reasons to move. Struck-through red chips are setups pointing the <strong>opposite</strong> way — they don't cancel the idea but deserve a look.</>}>
         <div style={{maxHeight:420,overflowY:"auto"}} className="tower-scroll">
@@ -4874,7 +5010,7 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
             </tbody>
           </table>
         </div>
-        {stacked.length>20 && <button onClick={()=>setStackAll(v=>!v)} style={{marginTop:6,fontSize:10.5,color:"var(--acc)",alignSelf:"flex-start"}}>{stackAll?"Show top 20":`Show all ${stacked.length}`}</button>}
+        {stackShown.length>20 && <button onClick={()=>setStackAll(v=>!v)} style={{marginTop:6,fontSize:10.5,color:"var(--acc)",alignSelf:"flex-start"}}>{stackAll?"Show top 20":`Show all ${stackShown.length}`}</button>}
       </FocusCard>
 
       <Anchor id="ct-setupcards"/>
@@ -4975,11 +5111,11 @@ function tfSectorIndustry(db, tf) {
   db.flat.forEach(r=>{
     if (r.Signal_Category!=="ZONE" && r.Signal_Category!=="NR_PATTERN") return;
     if (!(r.Symbol in secOf)) { secOf[r.Symbol]=r.Sector||"Unknown"; indOf[r.Symbol]=r.Industry||"Unknown"; }
-    if (classifySignal(r).tf===tf) (sigs[r.Symbol] = sigs[r.Symbol] || []).push(r);
+    if (tf==="ALL" || classifySignal(r).tf===tf) (sigs[r.Symbol] = sigs[r.Symbol] || []).push(r);
   });
   const change = sym => {
     const z = zl[sym];
-    if (tf==="D") { const v = parseFloat(db.masterMap[sym]?.Change_Pct); if (!isNaN(v)) return v; return z?.Change_Pct ?? null; }
+    if (tf==="D" || tf==="ALL") { const v = parseFloat(db.masterMap[sym]?.Change_Pct); if (!isNaN(v)) return v; return z?.Change_Pct ?? null; }
     return z && z.Price!=null && z.prev[tf] ? (z.Price/z.prev[tf]-1)*100 : null;
   };
   const metrics = syms => {
@@ -5017,9 +5153,20 @@ function tfSectorIndustry(db, tf) {
   return { sectorAnalysis, industryAnalysis };
 }
 
-// "ALL" = the scanner's cumulative sheets as they are; D..Y = recomputed for that timeframe
-function useTfSectors(db, tf) {
-  return useMemo(() => tf==="ALL" ? { sectorAnalysis:db.sectorAnalysis, industryAnalysis:db.industryAnalysis } : tfSectorIndustry(db, tf), [db, tf]);
+// "ALL" = the scanner's cumulative sheets as they are (unless `recompute`, e.g. F&O only); D..Y = recomputed for that timeframe
+function useTfSectors(db, tf, recompute=false) {
+  return useMemo(() => tf==="ALL" && !recompute ? { sectorAnalysis:db.sectorAnalysis, industryAnalysis:db.industryAnalysis } : tfSectorIndustry(db, tf), [db, tf, recompute]);
+}
+
+// NR_Breakout_Sector_Industry rows rebuilt from the flat sheet (for a filtered set of stocks)
+function nrRowsFromFlat(flat) {
+  const m = {};
+  flat.forEach(r => {
+    if (r.Signal_Category!=="NR_PATTERN") return;
+    const k = [r.Sector, r.Industry, r.Signal_Name, r.Signal_Type].join("||");
+    (m[k] = m[k] || { Sector:r.Sector, Industry:r.Industry, NR_Signal:r.Signal_Name, Pattern_Type:r.Signal_Type, syms:new Set() }).syms.add(r.Symbol);
+  });
+  return Object.values(m).map(({ syms, ...r }) => ({ ...r, Stock_Count:syms.size }));
 }
 
 function TfPicker({ value, onChange }) {

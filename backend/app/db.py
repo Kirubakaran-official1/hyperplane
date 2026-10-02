@@ -74,6 +74,8 @@ DEFAULT_SETTINGS = {
     "manual_keep": "all",                   # all | latest  (manual syncs kept per day)
     "telegram_enabled": True,
     "nr_mother_body_pct": 60,               # NR mother candle: body must be at least this % of high-low
+    "index_add": [],                        # symbols the dashboard also treats as index / ETF (hidden)
+    "index_keep": [],                       # symbols never treated as index / ETF, even if auto-detected
 }
 
 

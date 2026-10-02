@@ -179,10 +179,14 @@ Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are Tradi
 - **Global stock-quality filter** (Healthy/Weak/Poor tick-boxes, unrated counts as Weak) is applied to every tab via
   `healthIndex` → `excludedSymbols` → `filterDB`. Default **Healthy only** (`HEALTH_DEFAULT`), remembered in
   localStorage key `hp_health_allow_v2`.
+- **Hide indices & ETFs** (side nav, all pages, default on, localStorage `hp_hide_index`): `indexSymbols()` = sector
+  "Indices" (416 symbols) + symbol matching `NIFTY|SENSEX|BEES|ETF$` + name with the word ETF / Index Fund / Fund of
+  Funds (433 total on 27 Sep, no false positives — FIRSTCRY "Brainbees" is not caught), plus Admin `index_add`, minus
+  `index_keep` (settings, served to all users by `GET /api/index-rules`). Also drops the "Indices" sector rows.
 - **Control Tower** (`ControlTowerCombined`) order: data scope → Sector + Industry bubble panels → Alpha composite
   ranking (`ControlTower`) → Focus Command (Priority radar, HTF×LTF confluence (full width), Alignment matrix,
   Sector×TF heat, Industry hotspots · Near breakout) → Setup Scanner (Zone Breakout Analyser, Stacked setups, setup
-  lists, NR Trap, Zone Retest (`ZoneRetestSection`), Trend Pullback (`TrendPullbackSection`, from the
+  lists (Stacked Setups has Bullish / Bearish / F&O filters), NR Trap, Zone Retest (`ZoneRetestSection`), Trend Pullback (`TrendPullbackSection`, from the
   `last_N…_trend_with_close_nearto_…_zone` signals)) → Opportunities → Return Expectations → Watchlist Builder. Removed on the owner's request
   (2026-09-29): the Market Intelligence header + KPI strip, Top movers, F&O strategy mapper, Timeframe signal flow,
   Market bias distribution, Focus Map, Relative Strength / Weakness, Conflict Zone. Side nav `CTSideNav` (drawer, ☰
@@ -201,6 +205,10 @@ Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are Tradi
   that TF's signals, with breadth/momentum from `Price / Prev_<TF>_Close` (Zone_Levels; D uses master Change_Pct).
   Verified: summing D..Y reproduces the sheet's net bias exactly; D reproduces stocks/advancing/declining. The sheet's
   Total_Signal_Count is a bit higher because the scanner double-counts signals on both the long and mixed lists.
+- Sector & Industry tab: **F&O only** switch (filters to F&O stocks, then recomputes everything with
+  `tfSectorIndustry(db, "ALL")` — verified identical to the sheet when unfiltered — and `nrRowsFromFlat`); clicking an
+  industry (bubble or table row) filters the NR table and the stock list. Horizon and Conviction tabs use the shared
+  `StockFilterBar` (F&O · Nifty 500 · sector · industry, `passSF`).
 - **Compare tab** (`CompareTab`, server.jsx): mode dropdown Intraday / Day over day / Weekly / Monthly / Custom
   (`compareFrom`: previous week = last collection before Monday, previous month = before the 1st), a date + time
   `CollectionPicker` per side, and clickable stat tiles (`STAT_FILTERS`) that filter the table.
@@ -233,6 +241,7 @@ Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are Tradi
 | POST /api/sync | admin | queue a manual collection (returns the running one if busy). The button is in the Admin tab only |
 | GET /api/jobs, /api/jobs/{id} | user | history / live log |
 | POST /api/jobs/{id}/cancel | admin | cancel a queued job |
+| GET /api/index-rules | user | admin's extra / excluded index-ETF symbols |
 | GET /api/compare?a=&b= | user | per stock: price a→b, move %, bias, signals, new/dropped signals, health |
 | GET/PUT /api/admin/settings, POST /api/admin/import, DELETE /api/admin/snapshots/{id}, GET /api/admin/system | admin | schedule, retention, Telegram toggle, import old xlsx, status |
 
@@ -243,7 +252,8 @@ failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSO
 
 ### Settings (Admin tab; defaults in `db.DEFAULT_SETTINGS`)
 schedule_times ["09:45","14:30"] · weekdays_only true · skip_dates [] (NSE holidays) · catch_up_minutes 180 ·
-retention_days 0 (forever) · manual_keep all|latest · telegram_enabled true · nr_mother_body_pct 60.
+retention_days 0 (forever) · manual_keep all|latest · telegram_enabled true · nr_mother_body_pct 60 ·
+index_add [] · index_keep [] (symbols the dashboard also hides / never hides as index-ETF).
 
 ### Worker
 Polls every 15 s: queue due slots → claim next queued job → `run_scanner()` in `data/runs/job_N` (chdir, stdout
