@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 """
 
+# Bullish / bearish levels per timeframe (Admin). BB and Supertrend need none: above = bullish, below = bearish.
+TECH_TF_DEFAULT = {"rsi_bull": 70, "rsi_bear": 30, "adx_mode": "below", "adx_value": 40,
+                   "macd_bull": 0, "macd_bear": 0, "cci_bull": 150, "cci_bear": -150}
+
 DEFAULT_SETTINGS = {
     "schedule_times": ["09:45", "14:30"],   # IST, one collection per time
     "weekdays_only": True,
@@ -76,6 +80,10 @@ DEFAULT_SETTINGS = {
     "nr_mother_body_pct": 60,               # NR mother candle: body must be at least this % of high-low
     "index_add": [],                        # symbols the dashboard also treats as index / ETF (hidden)
     "index_keep": [],                       # symbols never treated as index / ETF, even if auto-detected
+    "tech_enabled": True,                   # use the Technicals sheet in the Control Tower
+    "tech_weight": 1.0,                     # a timeframe's technicals, all agreeing = this many zone breaks on that TF
+    "tech": {tf: dict(TECH_TF_DEFAULT) for tf in "DWMQY"},
+    "algos": None,                          # Technical Quant algorithms (admin-managed); None = the ready-made set
 }
 
 

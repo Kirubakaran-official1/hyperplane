@@ -8,7 +8,7 @@ Hyperplane API.
   /api/sync                 start a collection now
   /api/jobs                 collection history + live log
   /api/compare?a=&b=        stock-by-stock change between two collections (morning vs afternoon)
-  /api/index-rules          admin's extra / excluded index-ETF symbols (the dashboard hides indices)
+  /api/view-config          dashboard options set in Admin: index/ETF lists, technical indicator levels
   /api/admin/*              settings, import old Excel files, delete collections, system status
 """
 import os
@@ -24,7 +24,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from . import config
-from .db import DEFAULT_SETTINGS, get_meta, get_settings, init_db, pool, put_settings
+from .db import DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_meta, get_settings, init_db, pool, put_settings
 from .schedule import TZ, next_runs, now, parse_hhmm
 from .store import save_snapshot, taken_at_from_filename, workbook_to_sheets
 
@@ -254,16 +254,73 @@ class SettingsIn(BaseModel):
     nr_mother_body_pct: float = 60
     index_add: list[str] = []
     index_keep: list[str] = []
+    tech_enabled: bool = True
+    tech_weight: float = 1.0
+    tech: dict = {}
+    algos: list | None = None
 
 
 def _symbols(items):
     return sorted({s.strip().upper().replace("NSE:", "").strip(",") for s in items if s.strip()})
 
 
-@app.get("/api/index-rules")
-def index_rules(user=Depends(current_user)):
+def _tech_levels(raw):
+    out = {}
+    for tf in "DWMQY":
+        given, cfg = (raw or {}).get(tf) or {}, {}
+        for k, d in TECH_TF_DEFAULT.items():
+            v = given.get(k, d)
+            if k == "adx_mode":
+                cfg[k] = v if v in ("below", "above") else d
+            else:
+                try:
+                    cfg[k] = float(v)
+                except (TypeError, ValueError):
+                    raise HTTPException(422, f"{tf} {k}: '{v}' is not a number")
+        out[tf] = cfg
+    return out
+
+
+ALGO_TFS = set("DWMQY")
+ALGO_FIELDS = {"close", "prev", "rsi", "adx", "cci", "macd", "st", "bbu", "bbl", "tz", "tn", "bn", "bz"}
+ALGO_OPS = {">", ">=", "<", "<=", "=", "!="}
+
+
+def _algos(raw):
+    """Technical Quant algorithms from the Admin editor -> a clean list (None = use the ready-made set)."""
+    if raw is None:
+        return None
+    out = []
+    for n, a in enumerate(raw[:100], 1):
+        name = str(a.get("name") or f"Algorithm {n}").strip()[:80]
+        rules = []
+        for r in (a.get("rules") or [])[:30]:
+            tf, f, op, rhs = r.get("tf"), r.get("f"), r.get("op"), r.get("rhs", "num")
+            if tf not in ALGO_TFS or f not in ALGO_FIELDS or op not in ALGO_OPS or rhs not in ("num", "field"):
+                raise HTTPException(422, f"'{name}': a condition is incomplete")
+            rule = {"tf": tf, "f": f, "op": op, "rhs": rhs}
+            if rhs == "num":
+                try:
+                    rule["v"] = float(r.get("v"))
+                except (TypeError, ValueError):
+                    raise HTTPException(422, f"'{name}': '{r.get('v')}' is not a number")
+            else:
+                rtf, rf = r.get("rtf") or tf, r.get("rf")
+                if rtf not in ALGO_TFS or rf not in ALGO_FIELDS:
+                    raise HTTPException(422, f"'{name}': pick the value to compare with")
+                rule.update(rtf=rtf, rf=rf)
+            rules.append(rule)
+        out.append({"id": str(a.get("id") or f"a{n}")[:40], "name": name,
+                    "dir": 1 if (a.get("dir") or 1) >= 0 else -1, "rules": rules})
+    return out
+
+
+@app.get("/api/view-config")
+def view_config(user=Depends(current_user)):
     s = get_settings()
-    return {"add": s["index_add"], "keep": s["index_keep"]}
+    return {"index_add": s["index_add"], "index_keep": s["index_keep"],
+            "tech_enabled": s["tech_enabled"], "tech_weight": s["tech_weight"], "tech": _tech_levels(s["tech"]),
+            "algos": s["algos"]}
 
 
 @app.get("/api/admin/settings")
@@ -287,7 +344,8 @@ def write_settings(body: SettingsIn, user=Depends(admin_user)):
     s = body.model_dump()
     s.update(schedule_times=times, skip_dates=skips, retention_days=max(0, body.retention_days),
              catch_up_minutes=max(0, min(body.catch_up_minutes, 720)),
-             index_add=_symbols(body.index_add), index_keep=_symbols(body.index_keep))
+             index_add=_symbols(body.index_add), index_keep=_symbols(body.index_keep),
+             tech=_tech_levels(body.tech), tech_weight=max(0.0, min(body.tech_weight, 5.0)), algos=_algos(body.algos))
     put_settings(s)
     return read_settings(user)
 

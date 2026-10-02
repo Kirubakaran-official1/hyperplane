@@ -78,7 +78,7 @@ TELEGRAM_RETRY_WAIT = 15        # seconds before the 1st retry (then 30, 45 ...)
 USE_MASTER_SCRAPE = True        # 1 extra page: official Marketcap labels for Master_Stock_Data.
                                 # If it fails, Master_Stock_Data is built from raw-data-5 instead.
 SAVE_RAW_SNAPSHOT = True        # keep the raw tables in raw_YYYYMMDD/ so you can re-run with --offline
-MIN_EXPECTED_ROWS = {'daily_zones': 500, 'week_month': 500, 'quarter_year': 500, 'virgin_zones': 100}
+MIN_EXPECTED_ROWS = {'daily_zones': 500, 'week_month': 500, 'quarter_year': 500, 'virgin_zones': 100, 'technicals': 500}
                                 # safety check: a raw table with fewer rows = page did not load fully
                                 # -> treated as a failed scrape and retried
 
@@ -90,7 +90,9 @@ RAW_DATA_URLS = {
     'week_month':   'https://chartink.com/screener/week-and-month-data',        # weekly + monthly OHLC 0..12
     'quarter_year': 'https://chartink.com/screener/quarterly-and-yearly-data',  # quarterly + yearly OHLC 0..12
     'virgin_zones': 'https://chartink.com/screener/virgin-data',                # top/bottom zone of the current + last 4 W/M/Q/Y bars
+    'technicals':   'https://chartink.com/screener/technical-data-29',          # RSI, ADX, BB upper/lower, MACD, Supertrend, CCI for D/W/M/Q/Y
 }
+OPTIONAL_RAW_TABLES = {'technicals'}   # if one of these fails to load, the run continues without it
 exclude_words = ['liquid', 'etf', 'nifty', 'bees']   # symbols containing these are skipped
 
 # ---------------------------------------------------------------- NR (mother candle) --
@@ -1478,6 +1480,9 @@ def scrape_raw_tables(urls_dict, snapshot_dir=None):
                     driver = setup_driver()
 
             if not text:
+                if key in OPTIONAL_RAW_TABLES:
+                    print(f"  ⚠ Optional raw table '{key}' could not be scraped — continuing without it")
+                    continue
                 raise Exception(f"Raw table '{key}' could not be scraped")
             texts[key] = text
             if snapshot_dir:
@@ -1528,6 +1533,29 @@ def normalize_virgin_frame(df):
     return df[keep].rename(columns=rename)
 
 
+# technical-data columns -> tech_<tf>_<rsi|adx|bbu|bbl|macd|st|cci>
+_TECH_HDR = re.compile(r'^(d|w|m|q|y|daily|weekly|monthly|quaterly|yearly)_(.+)$')
+_TECH_KEYS = (('upper', 'bbu'), ('lower', 'bbl'), ('macd', 'macd'), ('super', 'st'), ('cci', 'cci'), ('rsi', 'rsi'), ('adx', 'adx'))
+TECH_INDICATORS = ('rsi', 'adx', 'bbu', 'bbl', 'macd', 'st', 'cci')
+
+
+def normalize_technical_frame(df):
+    if df.empty:
+        return df
+    rename = {}
+    for c in df.columns:
+        m = _TECH_HDR.match(c)
+        if not m:
+            continue
+        tf = _VZ_TF.get(m.group(1), m.group(1))
+        ind = next((k for word, k in _TECH_KEYS if word in m.group(2)), None)
+        name = f"tech_{tf}_{ind}" if ind else None
+        if name and name not in rename.values():
+            rename[c] = name
+    print(f"  • technicals: {len(rename)} indicator columns recognised")
+    return df[['symbol'] + list(rename.keys())].rename(columns=rename)
+
+
 def build_market_frame(raw_texts):
     """Merge the 4 raw tables on Symbol into one numeric frame (one row per stock)."""
     frames = {k: parse_wide_table_clipboard(v) for k, v in raw_texts.items()}
@@ -1540,6 +1568,10 @@ def build_market_frame(raw_texts):
 
     if 'virgin_zones' in frames:
         frames['virgin_zones'] = normalize_virgin_frame(frames['virgin_zones'])
+    if 'technicals' in frames:
+        tech = normalize_technical_frame(frames['technicals'])
+        if not tech.empty:
+            base = base.merge(tech, on='symbol', how='left')        # technicals never add stocks
 
     for key in ('week_month', 'quarter_year', 'virgin_zones'):
         other = frames.get(key, pd.DataFrame())
@@ -3273,6 +3305,7 @@ def generate_telegram_insights(combined_stock_map, stock_zone_signal_map, stock_
 #     Price_Health      long-term price quality (POOR / WEAK / HEALTHY) from the yearly candles
 #     Failed_NR         failed NR breakout / breakdown, price back at the opposite mother edge (trap)
 #     Zone_Retest       last bar closed beyond its own zone, price now back at the current zone's other band
+#     Technicals        RSI / ADX / BB / MACD / Supertrend / CCI per timeframe (only when the technical-data scrape worked)
 # ============================================================================
 
 _TF_LABEL = {'d': 'D', 'w': 'W', 'm': 'M', 'q': 'Q', 'y': 'Y'}
@@ -3562,6 +3595,31 @@ def build_zone_retest_rows(frame, zone_rows, health_rows=None):
     return rows
 
 
+def build_technical_rows(frame, zone_rows):
+    """One row per stock: price + RSI / ADX / BB upper / BB lower / MACD / Supertrend / CCI for D W M Q Y
+    (raw values from the technical-data screener; bullish / bearish levels are set in the dashboard's Admin tab)."""
+    cols = [f"tech_{tf}_{ind}" for tf in 'dwmqy' for ind in TECH_INDICATORS]
+    if not any(c in frame.columns for c in cols):
+        return []
+    x = _Ctx(frame)
+    zinfo = {z['Symbol']: z for z in zone_rows}
+    label = {'rsi': 'RSI', 'adx': 'ADX', 'bbu': 'BB_Upper', 'bbl': 'BB_Lower', 'macd': 'MACD', 'st': 'Supertrend', 'cci': 'CCI'}
+    rows = []
+    for i, sym in enumerate(frame['symbol'].tolist()):
+        if sym not in zinfo:
+            continue
+        row = {'Symbol': sym, 'Price': _r2(x.c[i])}
+        have = False
+        for tf in 'dwmqy':
+            for ind in TECH_INDICATORS:
+                v = _r2(x.col(f"tech_{tf}_{ind}")[i])
+                row[f"{_TF_LABEL[tf]}_{label[ind]}"] = v
+                have = have or v is not None
+        if have:
+            rows.append(row)
+    return rows
+
+
 def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
     """Append Zone_Levels + Return_Potential to the already-saved workbook."""
     try:
@@ -3570,12 +3628,15 @@ def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
         ret_rows = build_return_potential_rows(zone_rows, health_rows)
         failed_rows = build_failed_nr_rows(frame, zone_rows, health_rows)
         retest_rows = build_zone_retest_rows(frame, zone_rows, health_rows)
+        tech_rows = build_technical_rows(frame, zone_rows)
         with pd.ExcelWriter(filename, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
             pd.DataFrame(zone_rows).to_excel(writer, sheet_name='Zone_Levels', index=False)
             pd.DataFrame(ret_rows).to_excel(writer, sheet_name='Return_Potential', index=False)
             pd.DataFrame(health_rows).to_excel(writer, sheet_name='Price_Health', index=False)
             pd.DataFrame(failed_rows).to_excel(writer, sheet_name='Failed_NR', index=False)
             pd.DataFrame(retest_rows).to_excel(writer, sheet_name='Zone_Retest', index=False)
+            if tech_rows:
+                pd.DataFrame(tech_rows).to_excel(writer, sheet_name='Technicals', index=False)
         n_long = sum(1 for r in ret_rows if r['Direction'] == 'LONG')
         print(f"  ✓ Added Zone_Levels ({len(zone_rows)} stocks) + Return_Potential ({n_long} long / {len(ret_rows) - n_long} short setups)")
         return True
@@ -3674,6 +3735,7 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         return_rows = build_return_potential_rows(zone_level_rows, health_rows)
         failed_nr_rows = build_failed_nr_rows(frame, zone_level_rows, health_rows)
         retest_rows = build_zone_retest_rows(frame, zone_level_rows, health_rows)
+        tech_rows = build_technical_rows(frame, zone_level_rows)
         n_long = sum(1 for r in return_rows if r['Direction'] == 'LONG')
         n_poor = sum(1 for r in health_rows if r['Health'] == 'POOR')
         n_weak = sum(1 for r in health_rows if r['Health'] == 'WEAK')
@@ -3681,6 +3743,7 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         print(f"  • Price_Health: {n_poor} poor, {n_weak} weak, {len(health_rows) - n_poor - n_weak} healthy")
         print(f"  • Failed_NR: {len(failed_nr_rows)} trap setups")
         print(f"  • Zone_Retest: {len(retest_rows)} retest setups")
+        print(f"  • Technicals: {len(tech_rows)} stocks" if tech_rows else "  • Technicals: no technical-data table this run")
 
         current_step = "Saving Excel"
         filename = save_excel_with_enhanced_sheets(
@@ -3690,7 +3753,8 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
             nr_detail_rows=nr_detail_rows, master_stock_records=master_stock_records,
             extra_sheets={'Zone_Levels': zone_level_rows, 'Return_Potential': return_rows,
                           'Price_Health': health_rows, 'Failed_NR': failed_nr_rows,
-                          'Zone_Retest': retest_rows}
+                          'Zone_Retest': retest_rows,
+                          **({'Technicals': tech_rows} if tech_rows else {})}
         )
         if not filename:
             raise Exception("Failed to generate Excel file")

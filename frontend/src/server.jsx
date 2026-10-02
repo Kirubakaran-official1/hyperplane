@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Dashboard, mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell,
   ListCopy, HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, EqRow, formatDateLabel,
-  InfoTip, classifySignal, TF_WEIGHT,
+  InfoTip, classifySignal, TF_WEIGHT, AlgoEditor, prebuiltAlgos, ruleText,
 } from "./dashboard.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -149,6 +149,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [imp, setImp] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [algoSel, setAlgoSel] = useState(0);
   const load = useCallback(async () => {
     const [s, c, j] = await Promise.all([api("/api/admin/system"), api("/api/admin/settings"), api("/api/jobs?limit=40")]);
     setSys(s); setCfg(c); setJobs(j);
@@ -321,6 +322,87 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
           <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 6, lineHeight: 1.5 }}>To add or remove a user or change a password, edit <code>config.ini</code> on the server under <code>[users]</code>. It is picked up automatically — no restart.</div>
         </FocusCard>
       </EqRow>
+
+      <FocusCard icon="📊" title="Technical indicators (Control Tower)" style={{ marginBottom: 12 }}
+        sub="From the technical-data screener. When on, the Control Tower adds each timeframe's technical reading to every score, sector ranking and setup, and shows the Technical Quant algo builder. Other tabs are not affected.">
+        <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 10, fontSize: 12 }}>
+          <label style={{ display: "flex", gap: 7, alignItems: "center", cursor: "pointer", fontWeight: 700 }}>
+            <input id="tech-on" type="checkbox" checked={!!form.tech_enabled} onChange={e => setForm(f => ({ ...f, tech_enabled: e.target.checked }))} /> Use technical indicators
+          </label>
+          <label style={{ fontSize: 11.5 }} title="How much one timeframe's technicals count when all indicators agree, in 'zone breaks on that timeframe'. 0 = show the readings but don't score them.">
+            Weight <input id="tech-weight" type="number" min="0" max="5" step="0.1" value={form.tech_weight} onChange={e => setForm(f => ({ ...f, tech_weight: e.target.value === "" ? "" : +e.target.value }))} style={{ ...input, width: 60 }} /> × a zone break
+          </label>
+          <span style={{ fontSize: 10.5, color: "var(--t3)" }}>Bollinger: close above upper = bullish, below lower = bearish · Supertrend: close above = bullish, below = bearish (no levels needed)</span>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 11.5, opacity: form.tech_enabled ? 1 : .55 }}>
+            <thead><tr>{["TF", "RSI bullish ≥", "RSI bearish ≤", "ADX", "ADX value", "MACD bullish >", "MACD bearish <", "CCI bullish ≥", "CCI bearish ≤"].map(h => <th key={h} style={{ ...TH, position: "static" }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {["D", "W", "M", "Q", "Y"].map(tf => {
+                const c = (form.tech || {})[tf] || {};
+                const set = (k, v) => setForm(f => ({ ...f, tech: { ...(f.tech || {}), [tf]: { ...((f.tech || {})[tf] || {}), [k]: v } } }));
+                const num = k => <input id={`tech-${tf}-${k}`} type="number" step="any" value={c[k] ?? ""} onChange={e => set(k, e.target.value)} style={{ ...input, width: 70 }} />;
+                return (
+                  <tr key={tf} style={{ borderBottom: "1px solid var(--b1)" }}>
+                    <td style={{ ...TD, fontWeight: 700 }}>{{ D: "Daily", W: "Weekly", M: "Monthly", Q: "Quarterly", Y: "Yearly" }[tf]}</td>
+                    <td style={TD}>{num("rsi_bull")}</td><td style={TD}>{num("rsi_bear")}</td>
+                    <td style={TD}>
+                      <select id={`tech-${tf}-adx_mode`} value={c.adx_mode || "below"} onChange={e => set("adx_mode", e.target.value)} style={input} title="below = trend recently started · above = strong, established trend">
+                        <option value="below">below (fresh trend)</option><option value="above">above (strong trend)</option>
+                      </select>
+                    </td>
+                    <td style={TD}>{num("adx_value")}</td>
+                    <td style={TD}>{num("macd_bull")}</td><td style={TD}>{num("macd_bear")}</td>
+                    <td style={TD}>{num("cci_bull")}</td><td style={TD}>{num("cci_bear")}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 6, lineHeight: 1.5 }}>ADX has no direction of its own: when it meets your rule it confirms the trend in the direction of that timeframe's Supertrend.</div>
+        <div style={{ marginTop: 8 }}><button onClick={save} disabled={saving} style={btn(true)}>{saving ? "Saving…" : "Save settings"}</button></div>
+      </FocusCard>
+
+      {(() => {
+        const usingDefault = !form.algos;
+        const algos = form.algos || prebuiltAlgos(form.tech || {});
+        const i = Math.min(algoSel, Math.max(0, algos.length - 1)), cur = algos[i];
+        const setAlgos = fn => setForm(f => ({ ...f, algos: fn(f.algos || prebuiltAlgos(f.tech || {})) }));
+        const small = { fontSize: 10.5, padding: "3px 8px", borderRadius: 5, border: "1px solid var(--b2)", color: "var(--t2)", background: "var(--s2)" };
+        return (
+          <FocusCard icon="🧪" title="Algorithms (Technical Quant)" style={{ marginBottom: 12 }}
+            sub="The algorithms every user sees in the Control Tower's Technical Quant section. Only admins can create or change them here. Press Save settings to publish.">
+            {usingDefault && <div style={{ fontSize: 11, color: "var(--mixed)", marginBottom: 8 }}>Showing the ready-made set (built from the indicator levels above). Change anything and save to make it your own list.</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(190px,230px) minmax(0,1fr)", gap: 12 }}>
+              <div>
+                <div style={{ maxHeight: 340, overflowY: "auto", border: "1px solid var(--b1)", borderRadius: 8, padding: 6 }} className="tower-scroll">
+                  {algos.map((a, k) => (
+                    <div key={a.id + k} onClick={() => setAlgoSel(k)} className="sec-row" style={{ padding: "5px 7px", borderRadius: 6, cursor: "pointer", fontSize: 11.5, color: a.dir >= 0 ? "var(--long)" : "var(--short)", background: k === i ? "var(--adim)" : "transparent", fontWeight: k === i ? 700 : 500 }}>
+                      {a.dir >= 0 ? "▲" : "▼"} {a.name} <span style={{ color: "var(--t3)", fontWeight: 400 }}>· {a.rules.length}</span>
+                    </div>
+                  ))}
+                  {!algos.length && <div style={{ fontSize: 11, color: "var(--t3)", padding: 6 }}>No algorithms.</div>}
+                </div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+                  <button onClick={() => { setAlgos(l => [...l, { id: `a${Date.now()}`, name: "New algorithm", dir: 1, rules: [{ tf: "D", f: "rsi", op: ">", rhs: "num", v: 70 }] }]); setAlgoSel(algos.length); }} style={{ ...small, color: "var(--acc)", borderColor: "var(--acc)" }}>＋ New</button>
+                  {cur && <button onClick={() => { setAlgos(l => [...l, { ...cur, id: `a${Date.now()}`, name: `${cur.name} (copy)` }]); setAlgoSel(algos.length); }} style={small}>Duplicate</button>}
+                  {cur && <button onClick={() => { setAlgos(l => l.filter((_, k) => k !== i)); setAlgoSel(Math.max(0, i - 1)); }} style={{ ...small, color: "var(--short)", borderColor: "var(--short)" }}>Delete</button>}
+                  {cur && i > 0 && <button onClick={() => { setAlgos(l => { const n = [...l]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n; }); setAlgoSel(i - 1); }} style={small} title="Move up">↑</button>}
+                  {cur && i < algos.length - 1 && <button onClick={() => { setAlgos(l => { const n = [...l]; [n[i + 1], n[i]] = [n[i], n[i + 1]]; return n; }); setAlgoSel(i + 1); }} style={small} title="Move down">↓</button>}
+                  {!usingDefault && <button onClick={() => { setForm(f => ({ ...f, algos: null })); setAlgoSel(0); }} style={small} title="Go back to the ready-made set built from the indicator levels">Reset to ready-made</button>}
+                </div>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                {cur ? <AlgoEditor algo={cur} onChange={a => setAlgos(l => l.map((x, k) => k === i ? a : x))} />
+                     : <div style={{ fontSize: 11.5, color: "var(--t3)" }}>Create an algorithm with ＋ New.</div>}
+                {cur && <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 8, lineHeight: 1.6 }}>Reads as: {cur.rules.map(ruleText).join("  AND  ") || "—"}</div>}
+              </div>
+            </div>
+            <div style={{ marginTop: 10 }}><button onClick={save} disabled={saving} style={btn(true)}>{saving ? "Saving…" : "Save settings"}</button></div>
+          </FocusCard>
+        );
+      })()}
 
       <FocusCard icon="📉" title="Indices & ETFs" sub="The dashboard hides these when “Hide indices & ETFs” is on (side nav, on by default). Found automatically: sector “Indices”, symbols with NIFTY / SENSEX / BEES or ending in ETF, and names with the word ETF / Index Fund / Fund of Funds.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12 }}>
@@ -642,9 +724,11 @@ export default function Root() {
   }, []);
 
   useEffect(() => { if (user) reloadSnaps().catch(e => notify(e.message, "err")); }, [user]);
-  const [indexRules, setIndexRules] = useState({ add: [], keep: [] });
-  const loadIndexRules = useCallback(() => api("/api/index-rules").then(setIndexRules).catch(() => {}), []);
-  useEffect(() => { if (user) loadIndexRules(); }, [user]);
+  const [viewCfg, setViewCfg] = useState(null);
+  const loadViewCfg = useCallback(() => api("/api/view-config").then(setViewCfg).catch(() => {}), []);
+  useEffect(() => { if (user) loadViewCfg(); }, [user]);
+  const indexRules = useMemo(() => ({ add: (viewCfg && viewCfg.index_add) || [], keep: (viewCfg && viewCfg.index_keep) || [] }), [viewCfg]);
+  const tech = useMemo(() => viewCfg ? { enabled: viewCfg.tech_enabled, weight: viewCfg.tech_weight, cfg: viewCfg.tech, algos: viewCfg.algos } : null, [viewCfg]);
 
   // Load the selected collections (cached — a collection never changes once stored)
   useEffect(() => {
@@ -720,7 +804,7 @@ export default function Root() {
   const shown = local || versions;
   const extraTabs = [
     { id: "compare", label: "⏱ Compare", render: ({ health, db }) => <CompareTab snaps={snaps} health={health} db={db} /> },
-    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} onSaved={loadIndexRules} /> }] : []),
+    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} onSaved={loadViewCfg} /> }] : []),
   ];
   const empty = (
     <div style={{ padding: "60px 22px", textAlign: "center", color: "var(--t2)" }}>
@@ -734,7 +818,7 @@ export default function Root() {
   );
   return (
     <div className={`app-shell theme-${theme}`}>
-      <Dashboard rawVersions={shown} theme={theme} setTheme={setTheme} extraTabs={extraTabs} emptyState={empty} indexRules={indexRules}
+      <Dashboard rawVersions={shown} theme={theme} setTheme={setTheme} extraTabs={extraTabs} emptyState={empty} indexRules={indexRules} tech={tech}
         headerCenter={local
           ? <div style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ fontSize: 11, color: "var(--mixed)" }}>📂 Local file{local.length > 1 ? "s" : ""}: {local.map(v => v.fileName).join(", ").slice(0, 60)}</span><button onClick={() => setLocal(null)} style={btn(true)}>Back to stored data</button></div>
           : <DataPicker snaps={snaps} sel={sel} setSel={setSel} loading={loading} />}

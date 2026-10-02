@@ -100,6 +100,7 @@ scanner adds reaches the dashboard with no database change**.
 | week_month | week-and-month-data | weekly + monthly OHLC 0..12 |
 | quarter_year | quarterly-and-yearly-data | quarterly + yearly OHLC 0..12 |
 | virgin_zones | virgin-data | top/bottom zone of the current + last 4 bars for W/M/Q/Y (parsed positionally, `vz_<tf><i>_<top|bottom>`) |
+| technicals | technical-data-29 | **optional** (`OPTIONAL_RAW_TABLES`: a failed scrape doesn't stop the run). `d_rsi`…`y_cci` → `tech_<tf>_<rsi|adx|bbu|bbl|macd|st|cci>` by keyword, left-merged (never adds stocks) |
 
 Index lists (`capital_urls`): FNO, Nifty_LargeCap_100, Midcap_150, SmallCap_250, MicroCap_250, Nifty_500.
 The raw scans already keep only LTP > 10 — **the code applies no extra price filter.**
@@ -157,13 +158,14 @@ Zone vocabulary per timeframe (from raw-data-5): **top band** = `top_near .. top
 | Zone_Levels | per stock: price, prev closes, per TF `{L}_Top_Zone/_Top_Near/_Bottom_Near/_Bottom_Zone/_Position/_Dist_Top_Pct/_Dist_Bottom_Pct`, Is_FNO, Is_Nifty_500 |
 | Return_Potential | monthly-zone breakout entry → Q/Y zone targets; stop = other edge of the monthly band; Status Triggered / Near Entry (≤ `NEAR_ENTRY_PCT`) / Waiting / Target Q/Y Hit |
 | Price_Health | long-term quality from yearly candles: **POOR** > 70% below multi-year peak · **WEAK** > 50% below peak or lower than 5 years ago · **HEALTHY** otherwise (`HEALTH_*` settings) |
+| Technicals | per stock: Price + `{TF}_RSI/_ADX/_BB_Upper/_BB_Lower/_MACD/_Supertrend/_CCI` (raw values; only written when the technicals scrape worked) |
 | Zone_Retest | see "Zone retest" above: per stock + TF + side, previous close vs previous bar's zone, current zone + band, `Dist_To_Zone_Edge_Pct`, Health |
 | Failed_NR | NR trap: after the mother, bar(s) closed beyond one edge (failed BO/BD), no close beyond the other edge, other bodies inside, latest close back inside and near the OPPOSITE edge (same 1.9/2 rule). Failed BO → LONG at mother Low (stop Low, target High); mirror SHORT. Biggest mother per stock+TF kept. |
 
-All 19 sheets: Detailed_Signals, Flat_Data_For_Slicers, Signal_Matrix, Signal_Summary, Top_Opportunities,
+All 20 sheets (Technicals only when scraped): Detailed_Signals, Flat_Data_For_Slicers, Signal_Matrix, Signal_Summary, Top_Opportunities,
 Bias_Distribution, Signal_Type_Analysis, Multi_Timeframe_NR, Strong_Conviction, Virgin_BO_BD_Analysis,
 Sector_Analysis, Industry_Analysis, NR_Breakout_Sector_Industry, Master_Stock_Data, Zone_Levels, Return_Potential,
-Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are TradingView style `NSE:SYM,` — always clean with
+Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slicers are TradingView style `NSE:SYM,` — always clean with
 `replace("NSE:","").replace(",","").strip()` (JS `cleanSym`, Python `store.stock_rows`).
 
 ---
@@ -182,7 +184,7 @@ Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are Tradi
 - **Hide indices & ETFs** (side nav, all pages, default on, localStorage `hp_hide_index`): `indexSymbols()` = sector
   "Indices" (416 symbols) + symbol matching `NIFTY|SENSEX|BEES|ETF$` + name with the word ETF / Index Fund / Fund of
   Funds (433 total on 27 Sep, no false positives — FIRSTCRY "Brainbees" is not caught), plus Admin `index_add`, minus
-  `index_keep` (settings, served to all users by `GET /api/index-rules`). Also drops the "Indices" sector rows.
+  `index_keep` (settings, served to all users by `GET /api/view-config`). Also drops the "Indices" sector rows.
 - **Control Tower** (`ControlTowerCombined`) order: data scope → Sector + Industry bubble panels → Alpha composite
   ranking (`ControlTower`) → Focus Command (Priority radar, HTF×LTF confluence (full width), Alignment matrix,
   Sector×TF heat, Industry hotspots · Near breakout) → Setup Scanner (Zone Breakout Analyser, Stacked setups, setup
@@ -209,6 +211,25 @@ Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are Tradi
   `tfSectorIndustry(db, "ALL")` — verified identical to the sheet when unfiltered — and `nrRowsFromFlat`); clicking an
   industry (bubble or table row) filters the NR table and the stock list. Horizon and Conviction tabs use the shared
   `StockFilterBar` (F&O · Nifty 500 · sector · industry, `passSF`).
+- **Technicals (Control Tower only, Admin `tech_enabled`)**: `techReadings` classifies each indicator per TF with the
+  Admin levels (RSI ≥ bull / ≤ bear, MACD > / <, CCI ≥ / ≤, BB = price outside the bands, Supertrend = price above /
+  below, ADX below/above its value confirms the Supertrend side). `withTechSignals` adds ONE `TECH` flat row per stock
+  per TF (net of its indicators, weight = `tech_weight` × |net|/6, so full agreement = one zone break on that TF) and
+  ONLY for stocks that already have zone/NR signals. `classifySignal` returns kind/event `TECH`; everything built on
+  the model (radar, confluence, setups, opportunities, sentiment, report) follows. Sector panels recompute "All" when
+  technicals are on (tech adds to bull/bear, not to signal counts). Alpha ranking adds `sign(bias) × wnet × weight`.
+  `TechCtx` + `TechBadge` = a 5px dot on the corner of every Control Tower ticker (green / red / grey by net
+  readings, counts on hover). It is absolutely positioned on purpose: an inline chip overflowed fixed-width ticker
+  cells (radar cards, confluence rows, return bars). Other tabs ignore technicals.
+  The stock report shows technicals in their own colour-coded table (`TechTable`, built on `techCells`); TECH rows
+  are hidden from the timeframe ladder.
+- **Technical Quant** (`TechQuantSection`, anchor `ct-quant`, only when technicals are on): breadth grid + algo
+  builder. Rules = `{tf, f, op, rhs:"num"|"field", v | rtf+rf}` over close / prev / RSI / ADX / CCI / MACD /
+  Supertrend / BB / zone top, top-near, bottom-near, bottom. 10 ready-made algos (`prebuiltAlgos`: per TF bullish =
+  close > zone top + RSI/CCI/MACD bull + close > ST + close > BB upper + ADX rule; bearish mirror) built from the Admin
+  levels; operators > ≥ < ≤ = ≠; "Match: all / at least N". Algorithms are **admin-managed and shared**: setting
+  `algos` (None = the ready-made set), edited in Admin → Algorithms with `AlgoEditor`, validated by `_algos` in
+  main.py, delivered to everyone via `/api/view-config`. The Control Tower section is read-only.
 - **Compare tab** (`CompareTab`, server.jsx): mode dropdown Intraday / Day over day / Weekly / Monthly / Custom
   (`compareFrom`: previous week = last collection before Monday, previous month = before the 1st), a date + time
   `CollectionPicker` per side, and clickable stat tiles (`STAT_FILTERS`) that filter the table.
@@ -241,7 +262,7 @@ Price_Health, Failed_NR, Zone_Retest. Symbols in Flat_Data_For_Slicers are Tradi
 | POST /api/sync | admin | queue a manual collection (returns the running one if busy). The button is in the Admin tab only |
 | GET /api/jobs, /api/jobs/{id} | user | history / live log |
 | POST /api/jobs/{id}/cancel | admin | cancel a queued job |
-| GET /api/index-rules | user | admin's extra / excluded index-ETF symbols |
+| GET /api/view-config | user | Admin options the dashboard needs: index/ETF lists, technicals on/off, weight and levels |
 | GET /api/compare?a=&b= | user | per stock: price a→b, move %, bias, signals, new/dropped signals, health |
 | GET/PUT /api/admin/settings, POST /api/admin/import, DELETE /api/admin/snapshots/{id}, GET /api/admin/system | admin | schedule, retention, Telegram toggle, import old xlsx, status |
 
@@ -253,7 +274,9 @@ failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSO
 ### Settings (Admin tab; defaults in `db.DEFAULT_SETTINGS`)
 schedule_times ["09:45","14:30"] · weekdays_only true · skip_dates [] (NSE holidays) · catch_up_minutes 180 ·
 retention_days 0 (forever) · manual_keep all|latest · telegram_enabled true · nr_mother_body_pct 60 ·
-index_add [] · index_keep [] (symbols the dashboard also hides / never hides as index-ETF).
+index_add [] · index_keep [] (symbols the dashboard also hides / never hides as index-ETF) · tech_enabled true ·
+tech_weight 1.0 · tech {D..Y: rsi_bull 70, rsi_bear 30, adx_mode below, adx_value 40, macd_bull 0, macd_bear 0,
+cci_bull 150, cci_bear −150} (`TECH_TF_DEFAULT`) · algos null (Technical Quant algorithms; null = ready-made).
 
 ### Worker
 Polls every 15 s: queue due slots → claim next queued job → `run_scanner()` in `data/runs/job_N` (chdir, stdout

@@ -271,13 +271,25 @@ function CopyBtn({ text }) {
 
 // Any ticker inside a provider opens the stock report drawer
 const StockOpenCtx = React.createContext(null);
+// Control Tower technicals: { idx: {SYM: {tfs, bull, bear, wnet}}, weight }
+const TechCtx = React.createContext(null);
+
+function TechBadge({ sym }) {
+  const ctx = React.useContext(TechCtx);
+  const t = ctx && ctx.idx[sym];
+  if (!t) return null;
+  const net = t.bull - t.bear, c = net>0 ? "var(--long)" : net<0 ? "var(--short)" : "var(--t3)";
+  const tip = ["Y","Q","M","W","D"].map(tf => { const l=t.tfs[tf]; return `${tf} ▲${l.filter(x=>x.dir>0).length} ▼${l.filter(x=>x.dir<0).length}`; }).join(" · ");
+  return <span title={`Technicals ▲${t.bull} ▼${t.bear}  (${tip})`}
+    style={{position:"absolute",top:-1,right:-6,width:5,height:5,borderRadius:"50%",background:c,boxShadow:"0 0 0 1.5px var(--s1)",pointerEvents:"auto"}}/>;
+}
 
 function SymCell({ sym, size=11 }) {
   const open = React.useContext(StockOpenCtx);
   return (
     <div className="sym-cell">
       <span onClick={open ? e=>{ e.stopPropagation(); open(sym); } : undefined} title={open ? "Open the stock report" : undefined}
-        style={{fontFamily:"var(--mono)",fontSize:size,fontWeight:700,color:"var(--acc)",cursor:open?"pointer":"default",borderBottom:open?"1px dotted var(--accborder)":"none"}}>{sym}</span>
+        style={{position:"relative",fontFamily:"var(--mono)",fontSize:size,fontWeight:700,color:"var(--acc)",cursor:open?"pointer":"default",borderBottom:open?"1px dotted var(--accborder)":"none"}}>{sym}<TechBadge sym={sym}/></span>
       <CopyBtn text={sym} />
     </div>
   );
@@ -634,10 +646,18 @@ function mapDB(rawDB) {
     return o;
   }).filter(r => r.Symbol && r.Trade);
 
-  const hasSheet = name => !!Object.keys(rawDB).find(k=>k.toLowerCase().replace(/[\s_]/g,"")===name);
-  const has = { priceHealth: hasSheet("pricehealth"), failedNR: hasSheet("failednr"), zoneRetest: hasSheet("zoneretest") };
+  // Technicals (RSI / ADX / BB / MACD / Supertrend / CCI per timeframe, raw values)
+  const TECH_COLS = { rsi:"RSI", adx:"ADX", bbu:"BB_Upper", bbl:"BB_Lower", macd:"MACD", st:"Supertrend", cci:"CCI" };
+  const technicals = find("Technicals").map(r => {
+    const o = { Symbol: cleanSym(r.Symbol), Price: numOrNull(r.Price) };
+    ["D","W","M","Q","Y"].forEach(t => { o[t] = {}; Object.entries(TECH_COLS).forEach(([k,col]) => { o[t][k] = numOrNull(r[`${t}_${col}`]); }); });
+    return o;
+  }).filter(r => r.Symbol);
 
-  return { flat, top, summary, strong, mtnr, virgin, sig_stocks, master, masterMap, sectorAnalysis, industryAnalysis, nrSectorIndustry, zoneLevels, returnPotential, priceHealth, failedNR, zoneRetest, has };
+  const hasSheet = name => !!Object.keys(rawDB).find(k=>k.toLowerCase().replace(/[\s_]/g,"")===name);
+  const has = { priceHealth: hasSheet("pricehealth"), failedNR: hasSheet("failednr"), zoneRetest: hasSheet("zoneretest"), technicals: hasSheet("technicals") };
+
+  return { flat, top, summary, strong, mtnr, virgin, sig_stocks, master, masterMap, sectorAnalysis, industryAnalysis, nrSectorIndustry, zoneLevels, returnPotential, priceHealth, failedNR, zoneRetest, technicals, has };
 }
 
 function classifyHorizons(flat) {
@@ -833,7 +853,7 @@ const TABS = [
 const TREND_TAB = { id:"trend", label:"📈 Trend & Versions" };
 const NO_INDEX_RULES = { add:[], keep:[] };
 
-export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, headerRight=null, extraTabs=[], emptyState=null, indexRules=NO_INDEX_RULES }) {
+export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, headerRight=null, extraTabs=[], emptyState=null, indexRules=NO_INDEX_RULES, tech=null }) {
   const [activeIdx, setActiveIdx] = useState(Math.max(0, rawVersions.length-1));
   useEffect(() => { setActiveIdx(Math.max(0, rawVersions.length-1)); }, [rawVersions]);
   const [tab, setTab]     = useState("tower");
@@ -927,7 +947,7 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
 
         <StockReportHost db={db}>
           {!db && !extra && (emptyState || null)}
-          {db && tab==="tower"   && <ControlTowerCombined versions={versions} health={health} navOpen={navOpen} setNavOpen={setNavOpen} onFilterCount={setCtFilters} />}
+          {db && tab==="tower"   && <ControlTowerCombined versions={versions} health={health} navOpen={navOpen} setNavOpen={setNavOpen} onFilterCount={setCtFilters} tech={tech} />}
           {db && tab==="sector"  && <SectorIndustryTab db={db} />}
           {db && tab==="flat"    && <FlatSlicer     db={db} />}
           {db && tab==="opp"     && <Opportunities  db={db} />}
@@ -1161,6 +1181,7 @@ function IndexConcentration({ db }) {
 
 // ─── ALPHA IDEAS ──────────────────────────────────────────────────────────────
 function AlphaIdeasPanel({ db }) {
+  const techCtx = React.useContext(TechCtx);
   const ideas = useMemo(()=>{
     const strongMap={}, mtnrMap={}, topMap={}, virginMap={};
     db.strong.forEach(r=>{strongMap[r.Symbol]=r;});
@@ -1171,9 +1192,13 @@ function AlphaIdeasPanel({ db }) {
     const out=[];
     allSyms.forEach(sym=>{
       const s=strongMap[sym], m=mtnrMap[sym], t=topMap[sym], v=virginMap[sym];
-      const score=(s?+s.Conviction_Score*2:0)+(m?+m.NR_Signal_Count*3:0)+(t?+t.Total_Signals:0)+(v?+v.Virgin_Signal_Count*4:0);
-      if(score>0) out.push({
-        sym, score:Math.round(score),
+      const base=(s?+s.Conviction_Score*2:0)+(m?+m.NR_Signal_Count*3:0)+(t?+t.Total_Signals:0)+(v?+v.Virgin_Signal_Count*4:0);
+      const biasTxt=(s?.Conviction_Type)||t?.Trading_Bias||"";
+      const sgn=biasTxt.includes("LONG")?1:biasTxt.includes("SHORT")?-1:0;
+      const tx=techCtx&&techCtx.idx[sym];
+      const score=base+(tx&&sgn?sgn*tx.wnet*techCtx.weight:0);
+      if(base>0) out.push({
+        sym, score:Math.max(0,Math.round(score)),
         bias:(s?.Conviction_Type)||t?.Trading_Bias||"MIXED",
         convScore:s?.Conviction_Score||"-", nrCount:m?.NR_Signal_Count||"-", tfCount:m?.Timeframe_Count||"-",
         totalSigs:t?.Total_Signals||"-", isVirgin:!!v, virginType:v?.Virgin_Type||"",
@@ -1185,7 +1210,7 @@ function AlphaIdeasPanel({ db }) {
       });
     });
     return out.sort((a,b)=>b.score-a.score).slice(0,30);
-  },[db]);
+  },[db,techCtx]);
 
   const maxScore=ideas[0]?.score||1;
   const tagColor={CONV:"var(--mixed)",NR:"var(--a2)",OPP:"var(--acc)",VIR:"var(--ret)"};
@@ -1196,7 +1221,7 @@ function AlphaIdeasPanel({ db }) {
       <div style={{padding:"12px 16px",borderBottom:"1px solid var(--b1)",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>💎 Alpha Composite Rankings</div>
-          <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Cross-referenced: Conviction × NR × Opportunity × Virgin × Sector — top {ideas.length}</div>
+          <div style={{fontSize:11,color:"var(--t2)",marginTop:2}}>Cross-referenced: Conviction × NR × Opportunity × Virgin × Sector{techCtx?" × Technicals":""} — top {ideas.length}</div>
         </div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           <TVCopyBtn symbols={allSyms} label="⎘ Copy All TV"/>
@@ -1423,15 +1448,15 @@ function genInsights(biasCnt, total, db) {
 }
 
 // ─── CONTROL TOWER ────────────────────────────────────────────────────────────
-function ControlTower({ db }) {
+function ControlTower({ db, techOn=false }) {
   const [pickSec, setPickSec] = useState(null);
   const [secTf, setSecTf] = useState("ALL");
   return (
     <div style={{padding:"18px 22px 0"}}>
       <Anchor id="ct-sector"/>
       <EqRow height={440} cols="minmax(0,1fr) minmax(0,1fr)">
-        <SectorLeaderboardPanelV2 db={db} tf={secTf} setTf={setSecTf} selected={pickSec} onSelect={setPickSec}/>
-        <IndustryMomentumPanelV2 db={db} tf={secTf} setTf={setSecTf} sector={pickSec} onClearSector={()=>setPickSec(null)}/>
+        <SectorLeaderboardPanelV2 db={db} tf={secTf} setTf={setSecTf} selected={pickSec} onSelect={setPickSec} recompute={techOn}/>
+        <IndustryMomentumPanelV2 db={db} tf={secTf} setTf={setSecTf} sector={pickSec} onClearSector={()=>setPickSec(null)} recompute={techOn}/>
       </EqRow>
       <Anchor id="ct-alpha"/>
       <div style={{marginBottom:12}}>
@@ -3206,6 +3231,7 @@ const EVENT_META = {
   PULLBACK:  { kind:"PULLBACK",w:0.5,  label:"Pullback" },
   RECLAIM:   { kind:"TRIGGER", w:0.7,  label:"Back to NR" },
   NEAR:      { kind:"SETUP",   w:0.35, label:"Near Level" },
+  TECH:      { kind:"TECH",    w:1.0,  label:"Technicals" },
 };
 const TF_WORDS = { daily:"D", weekly:"W", monthly:"M", quarterly:"Q", quaterly:"Q", yearly:"Y" };
 
@@ -3222,6 +3248,7 @@ function tfRefsIn(s) {
 
 const _sigCache = {};
 function classifySignal(row) {
+  if (row.Signal_Category === "TECH") return { tf:row.Tech_TF, event:"TECH", dir:row.Tech_Dir, kind:"TECH", w:row.Tech_W };
   const name = row.Signal_Name, key = name + "|" + row.Signal_Type + "|" + row.Timeframe;
   if (_sigCache[key]) return _sigCache[key];
   const nl = name.toLowerCase();
@@ -3265,6 +3292,7 @@ function classifySignal(row) {
 }
 
 function humanizeSignal(row) {
+  if (row.Signal_Category === "TECH") return row.Tech_Text;
   const c = classifySignal(row);
   const n = row.Signal_Name;
   if (row.Signal_Category === "NR_PATTERN") {
@@ -3451,7 +3479,7 @@ function FocusCard({ icon, title, sub, learn, right, children, style }) {
 function FocusSym({ sym, onOpen, size=11.5 }) {
   return (
     <div className="sym-cell">
-      <span onClick={e=>{e.stopPropagation();onOpen(sym);}} title="Open deep-dive" style={{fontFamily:"var(--mono)",fontSize:size,fontWeight:700,color:"var(--acc)",cursor:"pointer",borderBottom:"1px dotted var(--accborder)"}}>{sym}</span>
+      <span onClick={e=>{e.stopPropagation();onOpen(sym);}} title="Open deep-dive" style={{position:"relative",fontFamily:"var(--mono)",fontSize:size,fontWeight:700,color:"var(--acc)",cursor:"pointer",borderBottom:"1px dotted var(--accborder)"}}>{sym}<TechBadge sym={sym}/></span>
       <CopyBtn text={sym}/>
     </div>
   );
@@ -3492,6 +3520,7 @@ function tfWeightedNet(s, tfs) { return tfs.reduce((a,t)=>a+s.ladder[t].net*TF_W
 
 // ─── STOCK DEEP-DIVE DRAWER ───────────────────────────────────────────────────
 function StockDeepDive({ s, onClose }) {
+  const techCtx = React.useContext(TechCtx);
   if (!s) return null;
   const d = s.sgn>0 ? "bullish" : "bearish";
   const pct = Math.round(Math.abs(s.net)*100);
@@ -3577,7 +3606,7 @@ function StockDeepDive({ s, onClose }) {
         <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px"}}>
           <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>🪜 Timeframe ladder — biggest picture on top</div>
           {[...FOCUS_TFS].reverse().map(t=>{
-            const l=s.ladder[t], sigs=s.tfs[t].signals;
+            const l=s.ladder[t], sigs=s.tfs[t].signals.filter(g=>g.kind!=="TECH"), hasTech=s.tfs[t].signals.length>sigs.length;
             const c = l.state>0?"var(--long)":l.state<0?"var(--short)":"var(--t3)";
             return (
               <div key={t} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:"1px solid var(--b1)"}}>
@@ -3586,7 +3615,7 @@ function StockDeepDive({ s, onClose }) {
                   <div style={{fontSize:9.5,color:"var(--t3)"}}>{l.state>0?"▲ bullish":l.state<0?"▼ bearish":"— quiet"}</div>
                 </div>
                 <div style={{flex:1,minWidth:0}}>
-                  {sigs.length===0 && <div style={{fontSize:10.5,color:"var(--t3)"}}>No signals on this timeframe.</div>}
+                  {sigs.length===0 && <div style={{fontSize:10.5,color:"var(--t3)"}}>{hasTech?"No zone / NR signals — only technicals (table below).":"No signals on this timeframe."}</div>}
                   {sigs.map((g,i)=>(
                     <div key={i} style={{display:"flex",gap:6,alignItems:"baseline",marginBottom:3}}>
                       <span style={{fontSize:8.5,padding:"1px 5px",borderRadius:3,fontWeight:700,fontFamily:"var(--mono)",flexShrink:0,
@@ -3601,6 +3630,7 @@ function StockDeepDive({ s, onClose }) {
             );
           })}
         </div>
+        {techCtx && <TechTable sym={s.symbol}/>}
       </div>
     </div>
   );
@@ -3628,8 +3658,9 @@ function NoSignalReport({ sym, db, onClose }) {
         <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginBottom:12,fontSize:12,color:"var(--t2)",lineHeight:1.6}}>
           No zone or NR signals for <strong style={{color:"var(--t1)"}}>{sym}</strong> in the data shown here — it has no active setup, or it is hidden by your filters (stock quality, segment, sector).
         </div>
+        <TechTable sym={sym}/>
         {z && (
-          <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px"}}>
+          <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginTop:12}}>
             <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>🧱 Where price sits in each timeframe's zones</div>
             {[...FOCUS_TFS].reverse().map(t=>{ const x=z[t]; if (!x || x.tz==null) return null; const [lbl,c]=POS[x.pos]||[x.pos||"—","var(--t3)"];
               return (
@@ -4014,7 +4045,9 @@ function mergeDBs(dbs) {
       priceHealth: latestBy("priceHealth", bySym),
       failedNR: latestBy("failedNR", r => r.Symbol + "|" + r.Timeframe),
       zoneRetest: latestBy("zoneRetest", r => r.Symbol + "|" + r.Timeframe + "|" + r.Trade),
-      has: { priceHealth: dbs.some(d=>d.has&&d.has.priceHealth), failedNR: dbs.some(d=>d.has&&d.has.failedNR), zoneRetest: dbs.some(d=>d.has&&d.has.zoneRetest) },
+      technicals: latestBy("technicals", bySym),
+      has: { priceHealth: dbs.some(d=>d.has&&d.has.priceHealth), failedNR: dbs.some(d=>d.has&&d.has.failedNR), zoneRetest: dbs.some(d=>d.has&&d.has.zoneRetest),
+             technicals: dbs.some(d=>d.has&&d.has.technicals) },
     },
     presence, nFiles: dbs.length,
   };
@@ -4084,7 +4117,7 @@ function filterDB(db, ex) {
     summary: db.summary.map(r => ({ ...r, Stock_Count: String(sigCount[r.Signal_Name]||0) })),
     top: db.top.filter(keep), strong: db.strong.filter(keep), mtnr: db.mtnr.filter(keep), virgin: db.virgin.filter(keep),
     zoneLevels: (db.zoneLevels||[]).filter(keep), returnPotential: (db.returnPotential||[]).filter(keep),
-    failedNR: (db.failedNR||[]).filter(keep), zoneRetest: (db.zoneRetest||[]).filter(keep),
+    failedNR: (db.failedNR||[]).filter(keep), zoneRetest: (db.zoneRetest||[]).filter(keep), technicals: (db.technicals||[]).filter(keep),
     healthFiltered: ex.size };
 }
 
@@ -4141,6 +4174,8 @@ const CT_NAV = [
     ["ct-special","🎯","Hotspots · near breakout"] ]},
   { group:"Setups", items:[
     ["ct-intraday","🚀","Zone breakout analyser"], ["ct-stacked","🏆","Stacked setups"], ["ct-setupcards","🎯","Setup lists"], ["ct-trap","🪤","NR trap"], ["ct-retest","🔁","Zone retest"], ["ct-trend","📈","Trend pullback"] ]},
+  { group:"Technical Quant", items:[
+    ["ct-quant","🧪","Algo builder"] ]},
   { group:"Trade ideas", items:[
     ["ct-opps","🔮","Opportunities"], ["ct-returns","💰","Return expectations"], ["ct-watch","📌","Watchlist builder"] ]},
 ];
@@ -4231,6 +4266,107 @@ function CTSideNav({ open, setOpen, f, setF, sectors, industries=[], health, onS
   );
 }
 
+// ─── TECHNICALS ENGINE (Control Tower only) ────────────────────────────────────
+// Per timeframe, each indicator reads bullish (+1), bearish (−1) or neutral with the Admin levels.
+// BB / Supertrend: price above / below. ADX has no direction: when it meets its rule it confirms the Supertrend side.
+const TECH_COLS = [["RSI","RSI"],["MACD","MACD"],["CCI","CCI"],["Supertrend","Supertrend"],["BB","Bollinger"],["ADX","ADX"]];
+
+// One timeframe: every indicator's value and whether it reads bullish (1), bearish (−1) or neutral (0) by the Admin levels.
+function techCells(v, price, c) {
+  const out = {};
+  const stDir = price != null && v.st != null ? (price > v.st ? 1 : price < v.st ? -1 : 0) : 0;
+  if (v.rsi != null) out.RSI = { val:v.rsi, dir:v.rsi >= +c.rsi_bull ? 1 : v.rsi <= +c.rsi_bear ? -1 : 0, note:`bullish ≥ ${c.rsi_bull} · bearish ≤ ${c.rsi_bear}` };
+  if (v.macd != null) out.MACD = { val:v.macd, dir:v.macd > +c.macd_bull ? 1 : v.macd < +c.macd_bear ? -1 : 0, note:`bullish > ${c.macd_bull} · bearish < ${c.macd_bear}` };
+  if (v.cci != null) out.CCI = { val:v.cci, dir:v.cci >= +c.cci_bull ? 1 : v.cci <= +c.cci_bear ? -1 : 0, note:`bullish ≥ ${c.cci_bull} · bearish ≤ ${c.cci_bear}` };
+  if (v.st != null && price != null) out.Supertrend = { val:v.st, dir:stDir, note:`price ${price} is ${stDir>0?"above":stDir<0?"below":"at"} the Supertrend` };
+  if (price != null && (v.bbu != null || v.bbl != null)) {
+    const dir = v.bbu != null && price > v.bbu ? 1 : v.bbl != null && price < v.bbl ? -1 : 0;
+    out.BB = { val:`${v.bbl ?? "—"} – ${v.bbu ?? "—"}`, dir, note:dir>0 ? "price above the upper band" : dir<0 ? "price below the lower band" : "price inside the bands" };
+  }
+  if (v.adx != null) {
+    const ok = c.adx_mode === "above" ? v.adx > +c.adx_value : v.adx < +c.adx_value;
+    out.ADX = { val:v.adx, dir:ok ? stDir : 0, note:`rule: ${c.adx_mode} ${c.adx_value} → ${ok ? "met, confirms the Supertrend side" : "not met"}` };
+  }
+  return out;
+}
+
+function techReadings(t, price, cfg) {
+  const out = {};
+  FOCUS_TFS.forEach(tf => {
+    const cells = techCells(t[tf] || {}, price, cfg[tf] || {});
+    out[tf] = TECH_COLS.filter(([k]) => cells[k] && cells[k].dir).map(([k]) => ({ ind:k, dir:cells[k].dir, text:`${k} ${cells[k].val}` }));
+  });
+  return out;
+}
+
+// Colour-coded indicator table for the stock report (Control Tower, technicals on)
+function TechTable({ sym }) {
+  const ctx = React.useContext(TechCtx);
+  const t = ctx && ctx.idx[sym];
+  if (!t) return null;
+  const C = d => d>0 ? { color:"var(--long)", background:"var(--longd)" } : d<0 ? { color:"var(--short)", background:"var(--shortd)" } : { color:"var(--t2)", background:"transparent" };
+  const TH = {padding:"5px 7px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",borderBottom:"1px solid var(--b1)",whiteSpace:"nowrap"};
+  return (
+    <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginTop:12}}>
+      <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>📊 Technicals {t.price!=null && <span style={{textTransform:"none",letterSpacing:0,fontWeight:500}}>· price {t.price}</span>}</div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"separate",borderSpacing:"0 3px",fontSize:10.5,fontFamily:"var(--mono)"}}>
+          <thead><tr><th style={TH}>TF</th>{TECH_COLS.map(([k,l])=><th key={k} style={TH}>{l}</th>)}<th style={TH}>Net</th></tr></thead>
+          <tbody>
+            {[...FOCUS_TFS].reverse().map(tf => {
+              const cells = techCells(t.raw[tf] || {}, t.price, ctx.cfg[tf] || {});
+              const b = Object.values(cells).filter(x=>x.dir>0).length, r = Object.values(cells).filter(x=>x.dir<0).length;
+              return (
+                <tr key={tf}>
+                  <td style={{padding:"4px 7px",fontWeight:700,color:"var(--t1)",fontFamily:"var(--sans, inherit)"}}>{TF_NAME[tf]}</td>
+                  {TECH_COLS.map(([k]) => { const x = cells[k];
+                    return <td key={k} title={x ? x.note : "no data"} style={{padding:"4px 7px",borderRadius:4,whiteSpace:"nowrap",...(x ? C(x.dir) : { color:"var(--t3)" })}}>
+                      {x ? <>{x.dir>0?"▲ ":x.dir<0?"▼ ":""}{x.val}</> : "—"}
+                    </td>; })}
+                  <td style={{padding:"4px 7px",whiteSpace:"nowrap",fontWeight:700}}><span style={{color:"var(--long)"}}>▲{b}</span> <span style={{color:"var(--short)"}}>▼{r}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{fontSize:9.5,color:"var(--t3)",marginTop:6,lineHeight:1.5}}>Green = bullish, red = bearish, plain = neutral by the levels in Admin. Supertrend and Bollinger are compared with the price. ADX has no direction: when it meets its rule it takes the Supertrend side. Hover a cell for the rule.</div>
+    </div>
+  );
+}
+
+function buildTechIndex(db, tech) {
+  const idx = {};
+  const zl = {}; (db.zoneLevels||[]).forEach(z => { zl[z.Symbol] = z; });
+  (db.technicals||[]).forEach(t => {
+    const price = t.Price ?? (zl[t.Symbol] && zl[t.Symbol].Price);
+    const tfs = techReadings(t, price, tech.cfg || {});
+    let bull = 0, bear = 0, wnet = 0;
+    FOCUS_TFS.forEach(tf => { const b = tfs[tf].filter(x=>x.dir>0).length, r = tfs[tf].filter(x=>x.dir<0).length; bull += b; bear += r; wnet += (b-r)/6*TF_WEIGHT[tf]; });
+    idx[t.Symbol] = { tfs, bull, bear, wnet, raw:t, price };
+  });
+  return idx;
+}
+
+// One TECH signal per stock and timeframe (net of its indicators), only for stocks that already have zone / NR
+// signals — technicals weigh price-action ideas, they don't create new ones. Full agreement = `weight` zone breaks.
+function withTechSignals(db, idx, weight) {
+  if (!weight) return db;
+  const first = {}; db.flat.forEach(r => { if (!first[r.Symbol]) first[r.Symbol] = r; });
+  const rows = [];
+  Object.entries(idx).forEach(([sym, t]) => {
+    const base = first[sym]; if (!base) return;
+    FOCUS_TFS.forEach(tf => {
+      const l = t.tfs[tf], b = l.filter(x=>x.dir>0).length, r = l.filter(x=>x.dir<0).length, net = b - r;
+      if (!net) return;
+      rows.push({ ...base, Signal_Name:`TECH_${tf}_${net>0?"BULL":"BEAR"}`, Signal_Category:"TECH", Signal_Type:net>0?"LONG":"SHORT",
+        Timeframe:TF_NAME[tf], Tech_TF:tf, Tech_Dir:net>0?1:-1, Tech_W:weight*Math.abs(net)/6,
+        Tech_Text:`${TF_NAME[tf]} technicals ▲${b} ▼${r}: ${l.map(x=>`${x.dir>0?"▲":"▼"} ${x.text}`).join(" · ")}` });
+    });
+  });
+  return rows.length ? { ...db, flat: [...db.flat, ...rows] } : db;
+}
+
 // Compact market mood for the Control Tower header: stock directions (Focus model) + today's price breadth
 function SentimentStrip({ model, db }) {
   const n = model.list.length || 1;
@@ -4277,7 +4413,7 @@ function symbolAttrs(db) {
   return a;
 }
 
-function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen=()=>{}, onFilterCount=()=>{} }) {
+function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen=()=>{}, onFilterCount=()=>{}, tech=null }) {
   const n = versions.length;
   const [sel, setSel] = useState(()=>new Set([n-1]));
   const selIdx = useMemo(()=>[...sel].filter(i=>i<n).sort((a,b)=>a-b), [sel, n]);
@@ -4290,7 +4426,11 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
   const [healthList, setHealthList] = useState(null);
   const [active, setActive] = useState("ct-sector");
 
-  const attrs = useMemo(()=>symbolAttrs(merged.db), [merged]);
+  const techOn = !!(tech && tech.enabled);
+  const techIdx = useMemo(()=>techOn ? buildTechIndex(merged.db, tech) : null, [merged, tech, techOn]);
+  const techCtx = useMemo(()=>techIdx ? { idx:techIdx, weight:+tech.weight||0, cfg:tech.cfg||{} } : null, [techIdx, tech]);
+  const mergedT = useMemo(()=>techIdx ? withTechSignals(merged.db, techIdx, +tech.weight||0) : merged.db, [merged, techIdx, tech]);
+  const attrs = useMemo(()=>symbolAttrs(mergedT), [mergedT]);
   const sectors = useMemo(()=>[...new Set(Object.values(attrs).map(x=>x.sector).filter(Boolean))].sort(), [attrs]);
   const industries = useMemo(()=>[...new Set(Object.values(attrs).filter(x=>!f.sector||x.sector===f.sector).map(x=>x.industry).filter(Boolean))].sort(), [attrs, f.sector]);
   const scopeEx = useMemo(()=>{
@@ -4302,7 +4442,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
     });
     return ex;
   }, [attrs, f.fno, f.cap, f.sector, f.industry]);
-  const db = useMemo(()=>filterDB(merged.db, scopeEx), [merged, scopeEx]);
+  const db = useMemo(()=>filterDB(mergedT, scopeEx), [mergedT, scopeEx]);
   const model = useMemo(()=>buildFocusModel(db, merged.presence, merged.nFiles), [db, merged]);
   const modelBySym = useMemo(()=>{ const m={}; model.list.forEach(s=>{ m[s.symbol]=s; }); return m; }, [model]);
   // Long / Short: market widgets keep only stocks whose overall direction matches
@@ -4356,6 +4496,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
 
   return (
     <StockOpenCtx.Provider value={setOpenSym}>
+    <TechCtx.Provider value={techCtx}>
     <div className={`ct-layout ${navOpen?"nav-open":""}`}>
       <CTSideNav open={navOpen} setOpen={setNavOpen} f={f} setF={setF} sectors={sectors} industries={industries} health={hp}
         onShowList={h=>{ setHealthList(h); window.scrollTo({top:0,behavior:"smooth"}); }} active={active} counts={{shown:shownN,total:totalN}}/>
@@ -4396,7 +4537,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
           </div>
         </div>
 
-        <ControlTower db={dbDir}/>
+        <ControlTower db={dbDir} techOn={techOn}/>
         <Divider/>
         <FocusCommandTab db={db} presence={merged.presence} nFiles={merged.nFiles} embedded gDir={f.dir}
           setupExtra={<>
@@ -4405,6 +4546,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
             <TrendPullbackSection db={db} lockDir={lock}/>
           </>}
           afterSetups={<>
+            {techOn && <TechQuantSection db={db} tech={tech}/>}
             <Anchor id="ct-opps"/>
             <OpportunitiesSection db={db} model={model} open={setOpenSym} lockDir={lockLS}/>
             <Anchor id="ct-returns"/>
@@ -4419,6 +4561,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
           : <NoSignalReport sym={openSym} db={db} onClose={()=>setOpenSym(null)}/>)}
       </div>
     </div>
+    </TechCtx.Provider>
     </StockOpenCtx.Provider>
   );
 }
@@ -5109,7 +5252,7 @@ function tfSectorIndustry(db, tf) {
   db.master.forEach(m=>{ secOf[m.Symbol]=m.Sector; indOf[m.Symbol]=m.Industry; });
   const sigs = {};
   db.flat.forEach(r=>{
-    if (r.Signal_Category!=="ZONE" && r.Signal_Category!=="NR_PATTERN") return;
+    if (r.Signal_Category!=="ZONE" && r.Signal_Category!=="NR_PATTERN" && r.Signal_Category!=="TECH") return;
     if (!(r.Symbol in secOf)) { secOf[r.Symbol]=r.Sector||"Unknown"; indOf[r.Symbol]=r.Industry||"Unknown"; }
     if (tf==="ALL" || classifySignal(r).tf===tf) (sigs[r.Symbol] = sigs[r.Symbol] || []).push(r);
   });
@@ -5119,7 +5262,7 @@ function tfSectorIndustry(db, tf) {
     return z && z.Price!=null && z.prev[tf] ? (z.Price/z.prev[tf]-1)*100 : null;
   };
   const metrics = syms => {
-    let adv=0, dec=0, unch=0, sum=0, n=0, withZ=0, withN=0;
+    let adv=0, dec=0, unch=0, sum=0, n=0, withZ=0, withN=0, techBull=0, techBear=0;
     const k = { LONG:0, SHORT:0, RETRACEMENT:0, MIXED:0, Breakout:0, Breakdown:0, "Near High":0, "Near Low":0, "Back to NR":0 };
     syms.forEach(s => {
       const c = change(s);
@@ -5127,15 +5270,19 @@ function tfSectorIndustry(db, tf) {
       const list = sigs[s] || [];
       if (list.some(r=>r.Signal_Category==="ZONE")) withZ++;
       if (list.some(r=>r.Signal_Category==="NR_PATTERN")) withN++;
-      list.forEach(r=>{ if (r.Signal_Type in k) k[r.Signal_Type]++; });
+      list.forEach(r=>{
+        if (r.Signal_Category==="TECH") { if (r.Tech_Dir>0) techBull+=r.Tech_W; else techBear+=r.Tech_W; return; }
+        if (r.Signal_Type in k) k[r.Signal_Type]++;
+      });
     });
     const total = Object.values(k).reduce((a,b)=>a+b,0);
-    const bull = k.LONG + k.Breakout, bear = k.SHORT + k.Breakdown;
+    const r1 = v => Math.round(v*10)/10;
+    const bull = r1(k.LONG + k.Breakout + techBull), bear = r1(k.SHORT + k.Breakdown + techBear);
     return { Total_Stocks:syms.length, Advancing:adv, Declining:dec, Unchanged:unch, Avg_Change_Pct:n?Math.round(sum/n*100)/100:0,
       Stocks_With_Zone_Signal:withZ, Zone_Long_Count:k.LONG, Zone_Short_Count:k.SHORT, Zone_Retracement_Count:k.RETRACEMENT, Zone_Mixed_Count:k.MIXED,
       Stocks_With_NR_Signal:withN, NR_Breakout_Count:k.Breakout, NR_Breakdown_Count:k.Breakdown, NR_Near_High_Count:k["Near High"],
       NR_Near_Low_Count:k["Near Low"], NR_Back_To_NR_Count:k["Back to NR"], Total_Signal_Count:total,
-      Bullish_Score:bull, Bearish_Score:bear, Net_Bias_Score:bull-bear,
+      Bullish_Score:bull, Bearish_Score:bear, Net_Bias_Score:r1(bull-bear),
       Advance_Decline_Ratio:adv+dec ? Math.round(adv/(adv+dec)*1000)/1000 : 0.5,
       Signal_Density:syms.length ? Math.round(total/syms.length*1000)/1000 : 0 };
   };
@@ -5180,11 +5327,11 @@ function TfPicker({ value, onChange }) {
 }
 
 // ─── SECTOR / INDUSTRY with list ↔ bubble toggle ──────────────────────────────
-function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, selected=null, onSelect=null }) {
+function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, selected=null, onSelect=null, recompute=false }) {
   const [view, setView] = useState("bubble");
   const [tfLocal, setTfLocal] = useState("ALL");
   const tf = tfIn || tfLocal, setTf = setTfIn || setTfLocal;
-  const tfd = useTfSectors(baseDb, tf);
+  const tfd = useTfSectors(baseDb, tf, recompute);
   const db = { ...baseDb, ...tfd };
   const sectors = useMemo(()=>[...tfd.sectorAnalysis].sort((a,b)=>b.Strength_Score-a.Strength_Score),[tfd.sectorAnalysis]);
   const top10 = sectors.slice(0,10);
@@ -5230,12 +5377,12 @@ function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, select
   );
 }
 
-function IndustryMomentumPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, sector=null, onClearSector=null }) {
+function IndustryMomentumPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, sector=null, onClearSector=null, recompute=false }) {
   const [view, setView] = useState("bubble");
   const [mode, setMode] = useState("top");
   const [tfLocal, setTfLocal] = useState("ALL");
   const tf = tfIn || tfLocal, setTf = setTfIn || setTfLocal;
-  const tfd = useTfSectors(baseDb, tf);
+  const tfd = useTfSectors(baseDb, tf, recompute);
   const inds = useMemo(()=> sector ? tfd.industryAnalysis.filter(r=>r.Sector===sector) : tfd.industryAnalysis, [tfd.industryAnalysis, sector]);
   const db = { ...baseDb, ...tfd, industryAnalysis: inds };
   const sorted = useMemo(()=>[...inds].sort((a,b)=>b.Net_Bias_Score-a.Net_Bias_Score),[inds]);
@@ -6291,6 +6438,177 @@ function TrendPullbackSection({ db, lockDir=null }) {
   );
 }
 
+// ─── TECHNICAL QUANT — algo builder (Control Tower, technicals on) ─────────────
+const QF = [["close","Close"],["prev","Prev close"],["rsi","RSI"],["adx","ADX"],["cci","CCI"],["macd","MACD"],["st","Supertrend"],
+            ["bbu","BB upper"],["bbl","BB lower"],["tz","Zone top"],["tn","Zone top-near"],["bn","Zone bottom-near"],["bz","Zone bottom"]];
+const QF_LABEL = Object.fromEntries(QF);
+const Q_OPS = { ">":(a,b)=>a>b, ">=":(a,b)=>a>=b, "<":(a,b)=>a<b, "<=":(a,b)=>a<=b, "=":(a,b)=>Math.abs(a-b)<1e-9, "!=":(a,b)=>Math.abs(a-b)>=1e-9 };
+const Q_OP_TXT = { ">":">", ">=":"≥", "<":"<", "<=":"≤", "=":"=", "!=":"≠" };
+const ruleText = r => `${r.tf} ${QF_LABEL[r.f]} ${Q_OP_TXT[r.op]} ${r.rhs==="num" ? r.v : `${r.rtf||r.tf} ${QF_LABEL[r.rf]}`}`;
+
+function prebuiltAlgos(cfg) {
+  const out = [];
+  FOCUS_TFS.forEach(tf => {
+    const c = cfg[tf] || {}, adxOp = c.adx_mode === "above" ? ">" : "<";
+    const F = (f, op, rf) => ({ tf, f, op, rhs:"field", rf, rtf:tf }), N = (f, op, v) => ({ tf, f, op, rhs:"num", v:+v });
+    out.push({ id:`pre-${tf}-L`, pre:true, dir:1, name:`${TF_NAME[tf]} bullish breakout`,
+      rules:[F("close",">","tz"), N("rsi",">=",c.rsi_bull), N("cci",">=",c.cci_bull), N("macd",">",c.macd_bull), F("close",">","st"), F("close",">","bbu"), N("adx",adxOp,c.adx_value)] });
+    out.push({ id:`pre-${tf}-S`, pre:true, dir:-1, name:`${TF_NAME[tf]} bearish breakdown`,
+      rules:[F("close","<","bz"), N("rsi","<=",c.rsi_bear), N("cci","<=",c.cci_bear), N("macd","<",c.macd_bear), F("close","<","st"), F("close","<","bbl"), N("adx",adxOp,c.adx_value)] });
+  });
+  return out;
+}
+
+// Rule editor — used by Admin → Algorithms (admins only)
+function AlgoEditor({ algo, onChange }) {
+  const sel = { background:"var(--s2)", border:"1px solid var(--b2)", color:"var(--t1)", borderRadius:5, fontSize:11, padding:"3px 5px" };
+  const upd = (i, patch) => onChange({ ...algo, rules: algo.rules.map((x,j)=>j===i?{...x,...patch}:x) });
+  return (
+    <div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
+        <input value={algo.name} onChange={e=>onChange({...algo,name:e.target.value})} placeholder="Algorithm name" style={{...sel,fontSize:13,fontWeight:700,padding:"4px 8px",width:260}}/>
+        <select value={algo.dir>=0?1:-1} onChange={e=>onChange({...algo,dir:+e.target.value})} style={sel} title="Colour / side in the list"><option value={1}>▲ Bullish</option><option value={-1}>▼ Bearish</option></select>
+      </div>
+      {algo.rules.map((q,i)=>(
+        <div key={i} style={{display:"flex",alignItems:"center",gap:5,marginBottom:5,flexWrap:"wrap",fontSize:11.5}}>
+          <span style={{width:18,color:"var(--t3)",fontFamily:"var(--mono)"}}>{i+1}.</span>
+          <select value={q.tf} onChange={e=>upd(i,{tf:e.target.value})} style={sel}>{FOCUS_TFS.map(t=><option key={t} value={t}>{TF_NAME[t]}</option>)}</select>
+          <select value={q.f} onChange={e=>upd(i,{f:e.target.value})} style={sel}>{QF.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
+          <select value={q.op} onChange={e=>upd(i,{op:e.target.value})} style={sel}>{Object.keys(Q_OPS).map(o=><option key={o} value={o}>{Q_OP_TXT[o]}</option>)}</select>
+          <select value={q.rhs} onChange={e=>upd(i,{rhs:e.target.value,rf:q.rf||"tz",rtf:q.rtf||q.tf})} style={sel}><option value="num">number</option><option value="field">value</option></select>
+          {q.rhs==="num"
+            ? <input type="number" step="any" value={q.v ?? ""} onChange={e=>upd(i,{v:e.target.value})} style={{...sel,width:80}}/>
+            : <>
+                <select value={q.rtf||q.tf} onChange={e=>upd(i,{rtf:e.target.value})} style={sel}>{FOCUS_TFS.map(t=><option key={t} value={t}>{TF_NAME[t]}</option>)}</select>
+                <select value={q.rf} onChange={e=>upd(i,{rf:e.target.value})} style={sel}>{QF.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
+              </>}
+          <button onClick={()=>onChange({...algo,rules:algo.rules.filter((_,j)=>j!==i)})} title="Remove" style={{fontSize:11,padding:"1px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>✕</button>
+        </div>
+      ))}
+      <button onClick={()=>onChange({...algo,rules:[...algo.rules,{tf:"D",f:"close",op:">",rhs:"field",rf:"st",rtf:"D"}]})} style={{fontSize:11,padding:"3px 9px",borderRadius:6,border:"1px solid var(--b2)",color:"var(--acc)",background:"var(--s2)",marginTop:2}}>＋ Add condition</button>
+    </div>
+  );
+}
+
+// Algorithms are managed by admins (Admin → Algorithms) and shared with everyone; until an admin saves a set,
+// the ready-made ones built from the current indicator levels are used.
+function TechQuantSection({ db, tech }) {
+  const cfg = tech.cfg || {};
+  const algos = useMemo(() => (tech.algos && tech.algos.length ? tech.algos : prebuiltAlgos(cfg)), [tech.algos, cfg]);
+  const [selId, setSelId] = useState(null);
+  const [minMatch, setMinMatch] = useState(0);              // 0 = all rules
+  const [fnoOnly, setFnoOnly] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const algo = algos.find(a=>a.id===selId) || algos[0] || { name:"", rules:[] };
+
+  const rows = useMemo(() => {
+    const zl = {}; (db.zoneLevels||[]).forEach(z => { zl[z.Symbol] = z; });
+    const fl = {}; db.flat.forEach(r => { if (!fl[r.Symbol]) fl[r.Symbol] = r; });
+    return (db.technicals||[]).map(t => {
+      const z = zl[t.Symbol], price = t.Price ?? (z && z.Price), o = { sym:t.Symbol, price, sector:(z&&z.Sector)||(fl[t.Symbol]&&fl[t.Symbol].Sector)||"",
+        fno:(z&&z.Is_FNO==="Yes")||(fl[t.Symbol]&&fl[t.Symbol].Is_FNO==="Yes") };
+      FOCUS_TFS.forEach(tf => { const zz = z && z[tf]; o[tf] = { ...t[tf], close:price, prev:z && z.prev ? z.prev[tf] : null,
+        tz:zz?zz.tz:null, tn:zz?zz.tn:null, bn:zz?zz.bn:null, bz:zz?zz.bz:null }; });
+      return o;
+    });
+  }, [db.technicals, db.zoneLevels, db.flat]);
+
+  const breadth = useMemo(() => {
+    const m = {}; FOCUS_TFS.forEach(tf => { m[tf] = {}; });
+    rows.forEach(r => { const rd = techReadings(r, r.price, cfg); FOCUS_TFS.forEach(tf => rd[tf].forEach(x => { const c = (m[tf][x.ind] = m[tf][x.ind] || { b:0, s:0 }); x.dir>0 ? c.b++ : c.s++; })); });
+    return m;
+  }, [rows, cfg]);
+
+  const val = (r, tf, f) => { const v = r[tf] && r[tf][f]; return v == null ? null : +v; };
+  const evalRule = (r, q) => {
+    const a = val(r, q.tf, q.f), b = q.rhs === "num" ? (q.v === "" || q.v == null ? null : +q.v) : val(r, q.rtf || q.tf, q.rf);
+    return a != null && b != null && !isNaN(b) && Q_OPS[q.op](a, b);
+  };
+  const need = minMatch || algo.rules.length;
+  const results = useMemo(() => rows.filter(r => !fnoOnly || r.fno).map(r => {
+    const hits = algo.rules.map(q => evalRule(r, q));
+    return { r, hits, n:hits.filter(Boolean).length };
+  }).filter(x => algo.rules.length && x.n >= need).sort((a,b) => b.n-a.n || (b.r.price||0)-(a.r.price||0)), [rows, algo, need, fnoOnly]);
+  const vis = showAll ? results : results.slice(0, 50);
+  const sel = { background:"var(--s2)", border:"1px solid var(--b2)", color:"var(--t1)", borderRadius:5, fontSize:11, padding:"3px 5px" };
+  const TH = {position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"6px 8px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",whiteSpace:"nowrap",zIndex:1};
+  const IND = ["RSI","MACD","CCI","Supertrend","BB","ADX"];
+  const pick = id => { setSelId(id); setMinMatch(0); setShowAll(false); };
+
+  return (
+    <div style={{padding:"4px 22px 8px"}}>
+      <Anchor id="ct-quant"/>
+      <SectionTitle icon="🧪" title="Technical Quant — algo builder"
+        sub="Pick an algorithm to list the stocks that meet its conditions. Algorithms are created and edited by admins in Admin → Algorithms and are the same for every user."/>
+      {!(db.has && db.has.technicals) && !(db.technicals||[]).length ? (
+        <div style={{background:"var(--s1)",border:"1px dashed var(--b2)",borderRadius:12,padding:22,textAlign:"center",color:"var(--t2)",fontSize:12.5,lineHeight:1.7,marginBottom:14}}>
+          This collection has no <strong>Technicals</strong> sheet yet.<br/>It appears from the next scanner run that loads the technical-data screener.
+        </div>
+      ) : (<>
+        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",marginBottom:12,overflowX:"auto"}}>
+          <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:6}}>Technical breadth — stocks bullish ▲ / bearish ▼ per indicator</div>
+          <table style={{borderCollapse:"collapse",fontSize:11,fontFamily:"var(--mono)"}}>
+            <thead><tr><th style={{...TH,position:"static"}}>TF</th>{IND.map(i=><th key={i} style={{...TH,position:"static"}}>{i}</th>)}</tr></thead>
+            <tbody>{FOCUS_TFS.map(tf=>(
+              <tr key={tf} style={{borderBottom:"1px solid var(--b1)"}}>
+                <td style={{padding:"4px 8px",fontWeight:700}}>{tf}</td>
+                {IND.map(i=>{ const c = breadth[tf][i] || {b:0,s:0}; return <td key={i} style={{padding:"4px 10px",whiteSpace:"nowrap"}}><span style={{color:"var(--long)"}}>▲{c.b}</span> <span style={{color:"var(--short)"}}>▼{c.s}</span></td>; })}
+              </tr>))}</tbody>
+          </table>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"minmax(200px,240px) minmax(0,1fr)",gap:12,marginBottom:14}}>
+          <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 10px",maxHeight:560,overflowY:"auto"}} className="tower-scroll">
+            <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:6}}>Algorithms ({algos.length})</div>
+            {algos.map(a=>(
+              <div key={a.id} onClick={()=>pick(a.id)} className="sec-row" style={{padding:"5px 7px",borderRadius:6,cursor:"pointer",fontSize:11.5,marginBottom:2,
+                color:a.dir>=0?"var(--long)":"var(--short)",background:algo.id===a.id?"var(--adim)":"transparent",fontWeight:algo.id===a.id?700:500}}>{a.dir>=0?"▲":"▼"} {a.name}</div>
+            ))}
+          </div>
+
+          <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
+              <div style={{fontSize:13.5,fontWeight:700,color:algo.dir>=0?"var(--long)":"var(--short)"}}>{algo.name}</div>
+              <span style={{marginLeft:"auto",fontSize:11,color:"var(--t3)"}}>Match</span>
+              <select value={minMatch} onChange={e=>{setMinMatch(+e.target.value);setShowAll(false);}} style={sel} title="How many of the conditions a stock must meet">
+                <option value={0}>all {algo.rules.length} conditions</option>
+                {algo.rules.map((_,i)=>algo.rules.length-1-i).filter(n=>n>=1).map(n=><option key={n} value={n}>at least {n}</option>)}
+              </select>
+              <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)}>{fnoOnly?"✓ ":""}F&amp;O only</Pill>
+            </div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:4}}>
+              {algo.rules.map((q,i)=><span key={i} style={{fontSize:10.5,fontFamily:"var(--mono)",padding:"2px 7px",borderRadius:4,border:"1px solid var(--b2)",color:"var(--t1)",background:"var(--s2)"}}>{i+1}. {ruleText(q)}</span>)}
+            </div>
+
+            <div style={{display:"flex",alignItems:"center",gap:8,margin:"12px 0 6px"}}>
+              <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>{results.length} stocks</div>
+              <span style={{fontSize:10.5,color:"var(--t3)"}}>most conditions met first</span>
+              <span style={{marginLeft:"auto"}}><ListCopy symbols={results.map(x=>x.r.sym)}/></span>
+            </div>
+            <div style={{maxHeight:380,overflow:"auto"}} className="tower-scroll">
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                <thead><tr><th style={TH}>Symbol</th><th style={TH}>Price</th><th style={TH}>Met</th>{algo.rules.map((q,i)=><th key={i} style={TH} title={ruleText(q)}>{q.tf} {QF_LABEL[q.f]}</th>)}</tr></thead>
+                <tbody>
+                  {vis.map(({r,hits,n})=>(
+                    <tr key={r.sym} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
+                      <td style={{padding:"5px 8px",whiteSpace:"nowrap"}}><SymCell sym={r.sym}/><div style={{fontSize:8.5,color:sectorColor(r.sector)}}>{r.sector}{r.fno?" · FNO":""}</div></td>
+                      <td style={{padding:"5px 8px",fontFamily:"var(--mono)"}}>{r.price}</td>
+                      <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:n===algo.rules.length?"var(--long)":"var(--mixed)"}}>{n}/{algo.rules.length}</td>
+                      {algo.rules.map((q,i)=>{ const v = val(r,q.tf,q.f); return <td key={i} style={{padding:"5px 8px",fontFamily:"var(--mono)",whiteSpace:"nowrap",color:hits[i]?"var(--long)":"var(--t3)"}}>{hits[i]?"✓":"✗"} {v==null?"—":v}</td>; })}
+                    </tr>
+                  ))}
+                  {!vis.length && <tr><td colSpan={3+algo.rules.length} style={{padding:16,textAlign:"center",color:"var(--t3)"}}>No stock meets {minMatch?`${minMatch}+ of these conditions`:"all these conditions"} — try "Match: at least …".</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            {results.length>50 && <button onClick={()=>setShowAll(v=>!v)} style={{marginTop:6,fontSize:10.5,color:"var(--acc)"}}>{showAll?"Show top 50":`Show all ${results.length}`}</button>}
+          </div>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
 export { mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell, ListCopy,
          HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, InfoTip, EqRow, CopyBtn, biasBadge, formatDateLabel,
-         classifySignal, TF_WEIGHT, TF_NAME };
+         classifySignal, TF_WEIGHT, TF_NAME, AlgoEditor, prebuiltAlgos, ruleText };
