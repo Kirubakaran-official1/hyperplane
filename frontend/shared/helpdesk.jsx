@@ -395,7 +395,7 @@ export const HD_CSS = `
 .hd-item .r2{font-size:11.5px;color:var(--t3);margin:3px 0 4px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.hd-item .r2 b{color:var(--t2);font-weight:600}
 .hd-item .r3{display:flex;gap:8px;align-items:center;font-size:10.5px;color:var(--t3);margin-left:10px}.hd-item .r3 .at{margin-left:auto}
 .hd-item .st.open{color:var(--acc)}.hd-item .st.closed{color:var(--t3)}
-.hd-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--acc);color:#04121a;font:700 10.5px/18px var(--mono);text-align:center}
+.hd-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--acc);color:var(--on-acc,#04121a);font:700 10.5px/18px var(--mono);text-align:center}
 .hd-none{padding:28px 14px;text-align:center;color:var(--t3);font-size:12px;line-height:1.8}
 .hd-main{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg,var(--s1))}
 .hd-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--t3);padding:30px;text-align:center}
@@ -403,7 +403,7 @@ export const HD_CSS = `
 .hd-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);color:var(--t1);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}
 .hd-btn:hover{border-color:var(--acc)}.hd-btn:disabled{opacity:.6;cursor:default}
 .hd-btn.primary{border-color:var(--acc);color:var(--acc);background:var(--adim)}
-.hd-btn.send{background:var(--acc);border-color:var(--acc);color:#04121a;padding:8px 18px;font-weight:700}
+.hd-btn.send{background:var(--acc);border-color:var(--acc);color:var(--on-acc,#04121a);padding:8px 18px;font-weight:700}
 .hd-btn.ghost{background:none}.hd-btn.danger{border-color:#ff4454;color:#ff4454}
 .hd-link{background:none;border:0;color:var(--acc);font:inherit;cursor:pointer;padding:0;text-decoration:underline}
 .hd-mono{font-family:var(--mono)}.hd-grow{flex:1}
@@ -416,7 +416,7 @@ export const HD_CSS = `
 .hd-field>label{width:64px;flex-shrink:0;font-size:12px;color:var(--t3)}
 .hd-field input{border:0;background:none;padding:4px 0;font-size:14px;flex:1;outline:none!important}
 .hd-to{display:inline-flex;align-items:center;gap:7px;padding:3px 10px 3px 3px;border-radius:999px;background:var(--s2);border:1px solid var(--b2);font-size:12.5px}
-.hd-to-av{width:20px;height:20px;border-radius:50%;background:var(--acc);color:#04121a;font:800 11px/20px var(--mono);text-align:center}
+.hd-to-av{width:20px;height:20px;border-radius:50%;background:var(--acc);color:var(--on-acc,#04121a);font:800 11px/20px var(--mono);text-align:center}
 .hd-sev{display:flex;gap:6px}.hd-sev button{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
 .hd-sev .dot{width:7px;height:7px;border-radius:50%}.hd-sev-help{font-size:11px;color:var(--t3)}
 .hd-compose-body{flex:1;overflow-y:auto;min-height:0;padding:4px 14px}
@@ -439,7 +439,7 @@ export const HD_CSS = `
 .hd-msg.mine{align-self:flex-end;background:var(--adim);border-color:var(--acc);border-radius:14px 4px 14px 14px;border-left-width:1px}
 .hd-msg-h{display:flex;align-items:center;gap:7px;font-size:11.5px;margin-bottom:5px;color:var(--t2)}.hd-msg-h b{color:var(--t1)}
 .hd-av{width:20px;height:20px;border-radius:50%;background:var(--s3);color:var(--t1);font:700 10.5px/20px var(--mono);text-align:center;flex-shrink:0}
-.hd-msg.staff .hd-av{background:var(--acc);color:#04121a}
+.hd-msg.staff .hd-av{background:var(--acc);color:var(--on-acc,#04121a)}
 .hd-tag{font-size:9.5px;font-weight:700;padding:0 6px;border-radius:4px;border:1px solid var(--b2);color:var(--t2);text-transform:uppercase;letter-spacing:.5px}
 .hd-tag.staff{border-color:var(--acc);color:var(--acc)}.hd-at{margin-left:auto;font-size:10.5px;color:var(--t3);white-space:nowrap}
 .hd-msg-b{font-size:13.5px;line-height:1.6;color:var(--t1);word-break:break-word}

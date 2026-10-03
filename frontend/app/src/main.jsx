@@ -92,6 +92,62 @@ function combinedView(od, bi, sec, ind) {
   return { tone: v[0], title: v[1], text: v[2] };
 }
 
+// ─── theme (dark default, light optional; remembered on this device) ───
+const THEME_KEY = "qf_theme";
+const getTheme = () => { try { return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"; } catch { return "dark"; } };
+const applyTheme = t => { document.documentElement.dataset.theme = t; try { localStorage.setItem(THEME_KEY, t); } catch { /* storage blocked */ } };
+function useTheme() {
+  const [theme, setTheme] = useState(getTheme);
+  return [theme, t => { applyTheme(t); setTheme(t); }];
+}
+
+// ─── account menu: name ▾ → Account · Appearance · Sign out ───
+function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
+  const [open, setOpen] = useState(false); const [acct, setAcct] = useState(false);
+  const [theme, setTheme] = useTheme();
+  const ref = useRef(null);
+  useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  useEffect(() => { const k = e => { if (e.key === "Escape") { setOpen(false); setAcct(false); } }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
+  const initial = (me.name || "?")[0].toUpperCase();
+  return (
+    <div className="acct" ref={ref}>
+      <button type="button" className={`acct-btn ${open ? "on" : ""}`} onClick={() => setOpen(v => !v)} aria-haspopup="menu" aria-expanded={open}>
+        <span className="avatar">{initial}{unread > 0 && <span className="acct-dot" title={`${unread} new helpdesk message${unread > 1 ? "s" : ""}`}/>}</span><span className="hide-sm">{me.name}</span><span className="caret">▾</span>
+      </button>
+      {open && (
+        <div className="acct-menu" role="menu">
+          <div className="acct-h"><span className="avatar lg">{initial}</span><div><b>{me.name}</b><div className="sub">{me.email}</div></div></div>
+          <button type="button" role="menuitem" className="acct-it" onClick={() => { setAcct(true); setOpen(false); }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Account</button>
+          <button type="button" role="menuitem" className="acct-it" onClick={() => { setOpen(false); onHelpdesk(); }}><HelpdeskIcon/>Helpdesk{unread > 0 && <span className="tab-n acct-n">{unread}</span>}</button>
+          <button type="button" role="menuitem" className="acct-it" onClick={() => { setOpen(false); onDocs(); }}><GuideIcon/>Docs<span className="acct-hint">how to use · golden rules</span></button>
+          <div className="acct-it static">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>Appearance
+            <div className="sg acct-theme">{[["dark", "Dark"], ["light", "Light"]].map(([k, l]) => <button key={k} type="button" className={theme === k ? "on" : ""} onClick={() => setTheme(k)}>{l}</button>)}</div>
+          </div>
+          <button type="button" role="menuitem" className="acct-it out" onClick={onSignOut}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>Sign out</button>
+        </div>
+      )}
+      {acct && (
+        <div className="overlay" onClick={() => setAcct(false)}>
+          <div className="modal acct-modal" onClick={e => e.stopPropagation()} role="dialog" aria-label="Account">
+            <button className="x" onClick={() => setAcct(false)} aria-label="Close">✕</button>
+            <div className="acct-h big"><span className="avatar xl">{initial}</span><div><div className="m-name">{me.name}</div><div className="sub">Hyperplane by QuantFriday</div></div></div>
+            <div className="acct-rows">
+              <div><span className="lbl">Email</span><span>{me.email}</span></div>
+              <div><span className="lbl">Access until</span><span>{me.expires_on ? new Date(me.expires_on + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "No end date"}</span></div>
+              <div><span className="lbl">Appearance</span><div className="sg">{[["dark", "Dark"], ["light", "Light"]].map(([k, l]) => <button key={k} type="button" className={theme === k ? "on" : ""} onClick={() => setTheme(k)}>{l}</button>)}</div></div>
+            </div>
+            <p className="sub">To change your email or password, or to renew your access, raise a query in the <b>Helpdesk</b>.</p>
+            <div className="acct-f"><button type="button" className="acct-out" onClick={onSignOut}>Sign out</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── small pieces ────────────────────────────────────────────────────────────
 function Logo({ size = 32 }) {
   return (
@@ -298,8 +354,8 @@ function QuadrantChart({ items, selected, onSelect, height = 360 }) {
         return (
           <g key={n.key} onClick={() => onSelect && onSelect(n.key)} onMouseEnter={() => setHover(n.key)} onMouseLeave={() => setHover(k => k === n.key ? null : k)} style={{ cursor:"pointer", opacity: dim && hover !== n.key ? .28 : 1 }}>
             {on && <circle cx={n.x} cy={n.y} r={r + 5} fill="none" stroke={n.color} strokeOpacity=".45" strokeWidth="1" strokeDasharray="3 3"/>}
-            <circle cx={n.x} cy={n.y} r={r} fill={n.color} fillOpacity={on ? .6 : .22} stroke={on ? "#fff" : n.color} strokeWidth={on ? 2 : 1.4}/>
-            <text x={n.x} y={n.y + 3.5} textAnchor="middle" className="b-t" fill={on ? "#fff" : n.color}>{n.label.length > 12 ? n.label.slice(0, 11) + "…" : n.label}</text>
+            <circle cx={n.x} cy={n.y} r={r} fill={n.color} fillOpacity={on ? .6 : .22} stroke={n.color} style={on ? { stroke:"var(--sel-t)" } : undefined} strokeWidth={on ? 2 : 1.4}/>
+            <text x={n.x} y={n.y + 3.5} textAnchor="middle" className="b-t" fill={n.color} style={on ? { fill:"var(--sel-t)" } : undefined}>{n.label.length > 12 ? n.label.slice(0, 11) + "…" : n.label}</text>
             <title>{n.tip}</title>
           </g>
         );
@@ -494,17 +550,19 @@ function Home({ me, onOut }) {
   return (
     <div className="page">
       <header className="top">
-        <Brand/>
-        <nav className="tabs" role="tablist">
-          <button role="tab" aria-selected={view === "tower"} className={view === "tower" ? "on" : ""} onClick={() => setView("tower")}><TowerIcon/>Control Tower</button>
-          <button role="tab" aria-selected={view === "helpdesk"} className={view === "helpdesk" ? "on" : ""} onClick={() => setView("helpdesk")}><HelpdeskIcon/>Helpdesk{unread.total > 0 && <span className="tab-n">{unread.total}</span>}</button>
-          <button role="tab" aria-selected={view === "guide"} className={view === "guide" ? "on" : ""} onClick={() => { setView("guide"); window.scrollTo(0, 0); }}><GuideIcon/>Docs</button>
-        </nav>
+        <button type="button" className="brand-home" onClick={() => setView("tower")} title="Control Tower"><Brand/></button>
         <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>
         <InboxBell unread={unread} onOpen={openHelpdesk}/>
-        <div className="who"><span className="avatar">{(me.name || "?")[0].toUpperCase()}</span><span className="hide-sm">{me.name}</span>
-          <button className="ghost" onClick={async () => { await api("/app/api/logout", { method:"POST" }).catch(() => {}); onOut(); }}>Sign out</button></div>
+        <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}
+          onSignOut={async () => { await api("/app/api/logout", { method:"POST" }).catch(() => {}); onOut(); }}/>
       </header>
+      {view !== "tower" && (
+        <div className="crumb">
+          <button type="button" onClick={() => setView("tower")}><TowerIcon/>← Control Tower</button>
+          <span className="crumb-sep">/</span>
+          <span className="crumb-here">{view === "helpdesk" ? <><HelpdeskIcon/>Helpdesk</> : <><GuideIcon/>Docs</>}</span>
+        </div>
+      )}
 
       {view === "guide" && <Guide disclaimer={DISCLAIMER}/>}
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
@@ -608,7 +666,15 @@ const CSS = `
   --bg:#060b14;--s1:#0d1520;--s2:#131e2e;--s3:#192540;--b1:#1b2d48;--b2:#243859;
   --acc:#00e5ff;--adim:rgba(0,229,255,.1);--accb:rgba(0,229,255,.25);
   --long:#00c896;--longd:rgba(0,200,150,.12);--short:#ff4454;--shortd:rgba(255,68,84,.12);--mixed:#ffaa00;--mixedd:rgba(255,170,0,.12);
-  --ret:#a259ff;--retd:rgba(162,89,255,.12);--t1:#d0dff0;--t2:#6a86a6;--t3:#46607d;color-scheme:dark}
+  --ret:#a259ff;--retd:rgba(162,89,255,.12);--t1:#d0dff0;--t2:#6a86a6;--t3:#46607d;color-scheme:dark;
+  --on-acc:#04121a;--glass:rgba(13,21,32,.96);--hover:rgba(255,255,255,.03);--pop:#0a1220;--sel-t:#fff}
+:root[data-theme="light"]{--bg:#f3f6fa;--s1:#ffffff;--s2:#f3f6fa;--s3:#e2e8f0;--b1:#dfe6ef;--b2:#c9d4e2;
+  --acc:#0891b2;--adim:rgba(8,145,178,.09);--accb:rgba(8,145,178,.32);
+  --long:#059669;--longd:rgba(5,150,105,.1);--short:#dc2626;--shortd:rgba(220,38,38,.08);--mixed:#d97706;--mixedd:rgba(217,119,6,.1);
+  --ret:#7c3aed;--retd:rgba(124,58,237,.08);--t1:#0f1b2d;--t2:#4b5f7a;--t3:#8394aa;color-scheme:light;
+  --on-acc:#ffffff;--glass:rgba(255,255,255,.94);--hover:rgba(15,27,45,.04);--pop:#ffffff;--sel-t:#0f1b2d}
+:root[data-theme="light"] .b-t{filter:brightness(.6) saturate(1.5);stroke:none}
+:root[data-theme="light"] .modal{box-shadow:0 30px 70px -20px rgba(15,27,45,.35)}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--t1);font:13.5px/1.5 var(--sans)}
 button{font:inherit;cursor:pointer;color:inherit}a{color:var(--acc)}.mono{font-family:var(--mono)}
 .muted{color:var(--t2)}.sub{font-size:11.5px;color:var(--t2)}.small{font-size:11.5px}.dim{color:var(--t3)}.fine{font-size:10.5px;color:var(--t3);line-height:1.55;max-width:920px}.center{text-align:center;margin:0 auto}
@@ -618,7 +684,7 @@ button{font:inherit;cursor:pointer;color:inherit}a{color:var(--acc)}.mono{font-f
 .loading{min-height:100vh;display:flex;align-items:center;justify-content:center}
 input,select{font:inherit;color:var(--t1);background:var(--s2);border:1px solid var(--b2);border-radius:7px;padding:9px 11px;width:100%;min-width:0;color-scheme:dark}
 input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
-.primary{background:linear-gradient(135deg,#00e5ff,#3b82f6);color:#04121c;border:0;border-radius:8px;padding:11px;font-weight:800;font-size:14.5px;letter-spacing:.3px;box-shadow:0 10px 28px -12px rgba(0,229,255,.6)}
+.primary{background:linear-gradient(135deg,#00e5ff,#3b82f6);color:var(--on-acc);border:0;border-radius:8px;padding:11px;font-weight:800;font-size:14.5px;letter-spacing:.3px;box-shadow:0 10px 28px -12px rgba(0,229,255,.6)}
 .primary:disabled{opacity:.6}.ghost{background:var(--s2);border:1px solid var(--b2);border-radius:7px;padding:6px 12px;white-space:nowrap;font-size:12px;color:var(--t1)}.ghost:disabled{opacity:.35;cursor:default}
 .err{color:var(--short);font-size:12.5px}.ok{background:var(--longd);color:var(--long);border:1px solid rgba(0,200,150,.3);border-radius:8px;padding:10px 12px;font-size:12.5px}
 /* auth */
@@ -644,20 +710,39 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 /* page */
 .page{max-width:1380px;margin:0 auto;padding:0 20px 30px}
 .tabs{display:flex;gap:4px;margin:12px 0 0;border-bottom:1px solid var(--b1)}.tabs button{position:relative;display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border:0;border-bottom:2px solid transparent;background:none;color:var(--t2);font-size:13px;font-weight:600;margin-bottom:-1px}.tabs button:hover{color:var(--t1)}.tabs button.on{color:var(--acc);border-bottom-color:var(--acc)}.bgtag{font-weight:700}.bgtag.S{color:var(--long)}.bgtag.M{color:var(--mixed)}.bgtag.W{color:var(--short)}
+.brand-home{border:0;background:none;padding:0;text-align:left;color:inherit}
+.crumb{display:flex;align-items:center;gap:8px;margin:12px 0 0;font-size:12.5px}
+.crumb button{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border:1px solid var(--b2);border-radius:8px;background:var(--s2);color:var(--t2);font-weight:600}
+.crumb button:hover{border-color:var(--acc);color:var(--acc)}.crumb-sep{color:var(--t3)}.crumb-here{display:inline-flex;align-items:center;gap:7px;color:var(--t1);font-weight:700}
+.avatar{position:relative}.acct-dot{position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;background:#ff4454;box-shadow:0 0 0 2px var(--s2)}
+.acct-n{margin-left:auto}.acct-hint{margin-left:auto;font-size:10.5px;color:var(--t3)}
+.acct{position:relative}.acct-btn{display:flex;align-items:center;gap:9px;padding:4px 10px 4px 4px;border:1px solid var(--b2);border-radius:999px;background:var(--s2);font-size:12.5px;font-weight:600;color:var(--t1)}
+.acct-btn:hover,.acct-btn.on{border-color:var(--acc)}.acct-btn .caret{font-size:10px;color:var(--t2)}
+.acct-menu{position:absolute;right:0;top:calc(100% + 8px);z-index:700;width:270px;background:var(--pop);border:1px solid var(--b2);border-radius:12px;box-shadow:0 18px 40px -12px rgba(0,0,0,.5);padding:6px;display:flex;flex-direction:column}
+.acct-h{display:flex;align-items:center;gap:10px;padding:8px 8px 10px;border-bottom:1px solid var(--b1);margin-bottom:4px}.acct-h b{font-size:13px}.acct-h .sub{word-break:break-all}
+.acct-it{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:0;border-radius:8px;background:none;color:var(--t1);font-size:13px;text-align:left}
+.acct-it:hover{background:var(--hover)}.acct-it.static{cursor:default}.acct-it.static:hover{background:none}.acct-it svg{color:var(--t2)}
+.acct-it.out{color:var(--short);border-top:1px solid var(--b1);border-radius:0 0 8px 8px;margin-top:4px}.acct-it.out svg{color:var(--short)}
+.acct-theme{margin-left:auto;height:26px}.acct-theme button{padding:0 10px}
+.avatar.lg{width:34px;height:34px;font-size:14px}.avatar.xl{width:46px;height:46px;font-size:18px}
+.acct-modal{max-width:440px}.acct-h.big{border:0;padding:0 0 14px}
+.acct-rows{display:flex;flex-direction:column;border:1px solid var(--b1);border-radius:10px;background:var(--s1);margin-bottom:12px}
+.acct-rows>div{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--b1)}.acct-rows>div:last-child{border-bottom:0}
+.acct-f{display:flex;justify-content:flex-end;margin-top:12px}.acct-out{padding:8px 16px;border-radius:8px;border:1px solid var(--short);background:var(--shortd);color:var(--short);font-weight:700}
 .tab-n{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#ff4454;color:#fff;font:700 10px/18px var(--mono);text-align:center}
-.page>.hd{margin-top:14px}
+.page>.hd,.page>.guide{margin-top:12px}
 .top{display:flex;align-items:stretch;gap:16px;min-height:56px;flex-wrap:wrap;border-bottom:1px solid var(--b1)}.top>*{align-self:center}.top .tabs{align-self:center;margin:0 0 0 14px;border:0;display:flex;gap:6px}.top .tabs button{margin:0;padding:0 14px;height:34px;border:1px solid var(--b2);border-radius:8px;background:var(--s2);color:var(--t2);transition:border-color .15s,background .15s,color .15s}.top .tabs button:hover{border-color:var(--accb);color:var(--t1)}.top .tabs button.on{border-color:var(--acc);background:var(--adim);color:var(--acc);box-shadow:0 0 0 1px var(--accb) inset}.asof{font:11px var(--mono);color:var(--t2);margin-left:auto;letter-spacing:.4px}.asof b{color:var(--t1)}
 .who{display:flex;align-items:center;gap:10px;font-size:12.5px}.avatar{width:28px;height:28px;border-radius:50%;background:var(--adim);border:1px solid var(--accb);color:var(--acc);display:flex;align-items:center;justify-content:center;font:700 12px var(--mono)}
-.fbar{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 14px;padding:9px 12px;margin:12px 0 12px;background:rgba(13,21,32,.96);backdrop-filter:blur(10px);border:1px solid var(--b1);border-radius:10px}
+.fbar{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 14px;padding:9px 12px;margin:12px 0 12px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--b1);border-radius:10px}
 .fg{display:flex;flex-direction:column;gap:5px}.fl{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--t2);text-transform:uppercase;letter-spacing:.9px;font-weight:700;height:13px}
 .sg{display:inline-flex;border:1px solid var(--b2);border-radius:6px;overflow:hidden;background:var(--s2);height:27px}
 .sg button{background:transparent;border:0;border-right:1px solid var(--b2);padding:0 8px;font-size:11px;font-weight:600;color:var(--t2);white-space:nowrap}
-.sg button:last-child{border-right:0}.sg button:hover{color:var(--t1);background:rgba(255,255,255,.03)}
+.sg button:last-child{border-right:0}.sg button:hover{color:var(--t1);background:var(--hover)}
 .sg button.on{background:var(--adim);color:var(--acc)}.sg button.on.up{background:var(--longd);color:var(--long)}.sg button.on.down{background:var(--shortd);color:var(--short)}.sg button.on.bi{background:var(--retd);color:var(--ret)}.sg button.on.side{background:var(--mixedd);color:var(--mixed)}.sg button.on.flat{background:rgba(106,134,166,.16);color:var(--t1)}
 .reset{margin-left:auto;height:27px;padding:0 12px;border:1px solid var(--b2);border-radius:6px;background:transparent;color:var(--t2);font-size:11.5px;font-weight:600}.reset:hover{border-color:var(--short);color:var(--short)}
 .info{position:relative;display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;border:1px solid var(--t3);color:var(--t2);font:700 8.5px/1 var(--sans);text-transform:none;letter-spacing:0;cursor:help;flex-shrink:0;vertical-align:1px}
 .info:hover,.info:focus{border-color:var(--acc);color:var(--acc);outline:none}
-.info-pop{display:none;position:absolute;top:calc(100% + 7px);left:-10px;z-index:50;width:250px;padding:9px 11px;border-radius:8px;background:#0a1220;border:1px solid var(--b2);box-shadow:0 14px 30px -10px rgba(0,0,0,.8);font:400 11.5px/1.5 var(--sans);color:var(--t1);white-space:normal;text-align:left}
+.info-pop{display:none;position:absolute;top:calc(100% + 7px);left:-10px;z-index:50;width:250px;padding:9px 11px;border-radius:8px;background:var(--pop);border:1px solid var(--b2);box-shadow:0 14px 30px -10px rgba(0,0,0,.8);font:400 11.5px/1.5 var(--sans);color:var(--t1);white-space:normal;text-align:left}
 .info-pop.r{left:auto;right:-10px}.info:hover .info-pop,.info:focus .info-pop{display:block}
 .chip{border:1px solid var(--b2);background:var(--s2);color:var(--t2);border-radius:6px;padding:5px 11px;font-size:12px;font-weight:600;white-space:nowrap}
 .chip:hover{border-color:var(--accb);color:var(--t1)}.chip.on{border-color:var(--acc);background:var(--adim);color:var(--acc)}
@@ -691,7 +776,7 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .tcopy{display:inline-flex;align-items:center;gap:6px;padding:3px 4px 3px 9px;border:1px solid var(--b2);border-radius:7px;background:var(--s2)}
 .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}
 th{position:sticky;top:0;background:var(--s2);text-align:left;font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:var(--t2);font-weight:700;padding:9px 12px;border-bottom:1px solid var(--b1);white-space:nowrap}
-td{padding:8px 12px;border-bottom:1px solid var(--b1);vertical-align:middle}tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus{background:rgba(255,255,255,.03);outline:none}
+td{padding:8px 12px;border-bottom:1px solid var(--b1);vertical-align:middle}tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus{background:var(--hover);outline:none}
 th.num,td.num{text-align:center}.hl{background:rgba(0,229,255,.05)}td.cur{min-width:120px}td.cur .sbar{margin-top:5px}
 .sym{font:700 12.5px var(--mono);color:var(--acc)}.pct{font:700 13px var(--mono)}.pct.up{color:var(--long)}.pct.down{color:var(--short)}.pct.side{color:var(--t2)}.sel-t{fill:var(--acc)}.sec{font-size:11.5px;font-weight:600}
 .fno{margin-left:6px;font:700 8.5px var(--mono);padding:1px 4px;border-radius:3px;background:var(--longd);color:var(--long);vertical-align:2px}
@@ -732,5 +817,6 @@ footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 @media (max-width:640px){.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
 `;
 
+document.documentElement.dataset.theme = getTheme();
 const style = document.createElement("style"); style.textContent = CSS + GUIDE_CSS; document.head.appendChild(style);
 createRoot(document.getElementById("root")).render(<App/>);

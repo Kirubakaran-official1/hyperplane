@@ -31,11 +31,14 @@ const SECTIONS = [
   { id: "welcome", t: "Welcome", body: <>
     <p><b>Hyperplane</b> shows you, in one screen, <b>which way Indian stocks are trending and how strong that trend is</b> — stock by
       stock, and also for every <b>sector</b> and <b>industry</b>. It helps you find good candidates quickly and avoid weak ones.</p>
-    <p>It has three tabs at the top:</p>
+    <p>The <b>Control Tower</b> is the main page — filters, summary tiles, sector and industry charts, and the full stock list.
+      Click the <b>Hyperplane</b> logo (top left) to come back to it from anywhere. The menu under <b>your name</b> (top right) has:</p>
     <ul>
-      <li><b>Control Tower</b> — the market view: filters, summary tiles, sector and industry charts, and the full stock list.</li>
-      <li><b>Helpdesk</b> — ask us anything; our replies arrive here and on the 🔔 bell.</li>
+      <li><b>Account</b> — your details and how long your access lasts.</li>
+      <li><b>Helpdesk</b> — ask us anything; our replies arrive there and on the 🔔 bell.</li>
       <li><b>Docs</b> — this page. Sections <b className="g-gold">9</b> and <b className="g-gold">10</b> are a must-read.</li>
+      <li><b>Appearance</b> — switch between the dark and the light screen. Your choice is remembered on this device.</li>
+      <li><b>Sign out</b>.</li>
     </ul>
     <p><b>Data as of</b> (top right) tells you when the data was taken. Trends change during the day, so always glance at it.</p>
     <Tip kind="warn" title="Hyperplane is a filter, not a buy / sell signal">It tells you where the strength is. It does not tell you
@@ -228,11 +231,11 @@ const SECTIONS = [
 
   { id: "helpdesk", t: "Helpdesk & notifications", body: <>
     <ol className="g-steps">
-      <li>Open <b>Helpdesk</b> and press <b>New query</b>.</li>
+      <li>Open the menu under <b>your name</b> (top right) → <b>Helpdesk</b>, and press <b>New query</b>.</li>
       <li>Write a short <b>Subject</b> and choose a <b>Severity</b>: <b>High</b> = something is broken or blocking you,
         <b> Medium</b> = something is not working as expected, <b>Low</b> = a question or a suggestion.</li>
       <li>Describe the issue. You can <b>paste or drop screenshots</b> right into the text (images only — other files are not allowed).</li>
-      <li>Press <b>Send</b>. Our replies appear in the conversation, with a red number on the <b>🔔 bell</b> and on the Helpdesk tab.</li>
+      <li>Press <b>Send</b>. Our replies appear in the conversation, with a red number on the <b>🔔 bell</b> and a red dot on your name. Click the bell to jump straight to the reply.</li>
       <li>When your question is solved, press <b>Close query</b>. Need more help later? Just raise a new one.</li>
     </ol>
   </> },
@@ -308,7 +311,7 @@ export const GUIDE_CSS = `
 .g-sec code{font:12px var(--mono);background:var(--s2);border:1px solid var(--b2);border-radius:4px;padding:0 5px}
 .g-sec .dirtag{margin:0 3px;vertical-align:middle}
 .g-steps{counter-reset:s;list-style:none;padding-left:0!important}.g-steps li{counter-increment:s;position:relative;padding-left:36px;margin-bottom:9px}
-.g-steps li:before{content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;border-radius:50%;background:var(--acc);color:#04121a;font:700 12px/24px var(--mono);text-align:center}
+.g-steps li:before{content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;border-radius:50%;background:var(--acc);color:var(--on-acc);font:700 12px/24px var(--mono);text-align:center}
 .g-defs{display:flex;flex-direction:column;gap:8px;margin:6px 0 10px}.g-defs>div{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:center}
 .g-table{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:13px}.g-table td,.g-table th{padding:8px 10px;border-bottom:1px solid var(--b1);vertical-align:top;text-align:left}
 .g-table td:first-child{width:190px;white-space:nowrap}.g-table th{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3)}

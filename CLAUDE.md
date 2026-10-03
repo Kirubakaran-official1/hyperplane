@@ -313,6 +313,12 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   only (weak stock, strong group) / Avoid / No edge; bidirectional downgrades Best case. `groupState`: strong = st ≥ 55
   or rank in top 25 %, weak = st < 45 and rank in bottom 50 % (absolute-only made 22/25 top stocks "weak" in a weak
   market). Thresholds chosen by Claude — owner may tune.
+- Customer navigation + theme (2026-10-03): NO tab buttons in the top bar. Control Tower is the landing page; the logo
+  (`.brand-home`) returns to it; `AccountMenu` (name ▾) = Account (modal: email, access until, appearance) · Helpdesk
+  (unread count; red dot on the avatar) · Docs · Appearance Dark/Light · Sign out. Helpdesk / Docs pages show a
+  "← Control Tower / <page>" crumb. 🔔 bell still jumps to the Helpdesk. Light theme = `:root[data-theme="light"]`
+  variable set (+ `--on-acc --glass --hover --pop --sel-t`), dark default, stored in localStorage `qf_theme`, applied
+  before first paint (login page too). Shared helpdesk CSS uses `var(--on-acc,#04121a)`.
 - Customer Docs tab (2026-10-03, was "Guide"; file `frontend/app/src/guide.jsx`, `GUIDE_CSS`): third header tab after Helpdesk.
   Sections 9 (golden rules) and 10 (examples) are `must: true` → gold number + "★ Must read". Sideways (2026-10-03):
   KPI tile ◆ Sideways (`cats.side`) and Trend filter ◆ Sideways (tone `flat`); the four state tiles add up to Stocks in view. 12 sections
