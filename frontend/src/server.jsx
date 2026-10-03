@@ -5,7 +5,7 @@ import {
   ListCopy, HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, EqRow, formatDateLabel,
   InfoTip, classifySignal, TF_WEIGHT, AlgoEditor, prebuiltAlgos, exprText,
 } from "./dashboard.jsx";
-import { Helpdesk, InboxBell, useHelpdeskUnread } from "../shared/helpdesk.jsx";
+import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../shared/helpdesk.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 let onUnauthorized = () => {};
@@ -973,7 +973,7 @@ export default function Root() {
   const shown = local || versions;
   const extraTabs = [
     { id: "compare", label: "⏱ Compare", render: ({ health, db }) => <CompareTab snaps={snaps} health={health} db={db} /> },
-    { id: "helpdesk", label: `🎧 Helpdesk${unread.total ? ` (${unread.total})` : ""}`, render: () => <div style={{ padding: "18px 22px" }}><Helpdesk api={api} base="/api/helpdesk" staff={user.admin} openReq={hdReq} onChanged={unread.refresh} /></div> },
+    { id: "helpdesk", label: <span style={{ display: "inline-flex", alignItems: "center", gap: 6, verticalAlign: "middle" }}><HelpdeskIcon size={14} />Helpdesk{unread.total ? <span style={{ minWidth: 17, height: 17, padding: "0 5px", borderRadius: 9, background: "#ff4454", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "17px", textAlign: "center" }}>{unread.total}</span> : null}</span>, render: () => <div style={{ padding: "18px 22px" }}><Helpdesk api={api} base="/api/helpdesk" staff={user.admin} openReq={hdReq} onChanged={unread.refresh} /></div> },
     ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminArea snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} onSaved={loadViewCfg} /> }] : []),
   ];
   const empty = (

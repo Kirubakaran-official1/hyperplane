@@ -180,7 +180,10 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   when >1 version), + extraTabs from server.jsx (Compare, 🎧 Helpdesk, ⚙ Admin). `tabReq={id,n}` switches tab from
   outside (the helpdesk bell). Conviction, Multi-TF NR and Virgin BO/BD tabs were REMOVED on the owner's request
   (2026-10-03): Virgin is a Control Tower setup list; Multi-TF NR is `MTNRCard`, a half-width card in the Setup
-  Scanner's setup-card grid (2 per row, uses the Control Tower's filtered list + 2+/3+/4+ TF and F&O chips, nav chip).
+  Scanner's setup-card grid (2 per row, uses the Control Tower's filtered list, nav chip). The sheet holds stocks with
+  2+ NR patterns on several TFs OR several NR lengths in one TF (Q NR4…NR12); `nrByTf` parses NR_Signals
+  (`Q_N_9Q_HN`, `W_NR_4W_BD` → TF, length, BO/BD/HN/LW/B2NR) and the card shows "Monthly ×2 NR4–5 near high" per TF.
+  Chips: All (default) · Stacked in one TF · 2+ / 3+ / 4+ TF · F&O only.
 - **Global stock-quality filter** (Healthy/Weak/Poor tick-boxes, unrated counts as Weak) is applied to every tab via
   `healthIndex` → `excludedSymbols` → `filterDB`. Default **Healthy only** (`HEALTH_DEFAULT`), remembered in
   localStorage key `hp_health_allow_v2`.
@@ -305,6 +308,25 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   keys) — several sectors filter the industry panel; industry bubbles/rows are selectable with one copy for all their
   stocks. Sector & Industry tab: `selSecs` / `selInds` from bubbles, sector cards, industry rows; detail panel only when
   exactly one sector is picked. Both: changing sectors drops industries outside them (all when none left).
+- Customer stock card "Combined view" (2026-10-03): stock summary + its sector + industry on the Combined TF and a
+  verdict (`combinedView`): Best case / Careful (strong stock, weak sector or industry) / Okay (average group) / Watch
+  only (weak stock, strong group) / Avoid / No edge; bidirectional downgrades Best case. `groupState`: strong = st ≥ 55
+  or rank in top 25 %, weak = st < 45 and rank in bottom 50 % (absolute-only made 22/25 top stocks "weak" in a weak
+  market). Thresholds chosen by Claude — owner may tune.
+- Customer Docs tab (2026-10-03, was "Guide"; file `frontend/app/src/guide.jsx`, `GUIDE_CSS`): third header tab after Helpdesk.
+  Sections 9 (golden rules) and 10 (examples) are `must: true` → gold number + "★ Must read". Sideways (2026-10-03):
+  KPI tile ◆ Sideways (`cats.side`) and Trend filter ◆ Sideways (tone `flat`); the four state tiles add up to Stocks in view. 12 sections
+  with a sticky contents list: Welcome, Quick start in 5 steps, Key words (trend states, strength bands 75/50/24, timeframes,
+  reliability, sector vs industry), filter bar, tiles, sector & industry charts (quadrant meanings), Master data, stock card,
+  "How to think — the golden rules" (top-down; good stock in a weak sector/industry = avoid; timeframes agree; match TF
+  to holding period; strong reliability; sideways = no edge; market mood; strength ≠ target; risk), examples, helpdesk,
+  FAQ, disclaimer. Explains meanings only — never formulas. The golden-rule wording was written by Claude from the owner's
+  brief ("even if the stock is good, if the sector / industry is not good, avoid") — owner to review / edit.
+  Tab icons are line SVGs (`TowerIcon`, `HelpdeskIcon` from shared/helpdesk.jsx, `GuideIcon`); dashboard Helpdesk tab too.
+- Customer strength display (2026-10-03): the owner said "▲ 84%" read like an upside price move. No arrows on
+  strength any more: master table per-TF cells = `Meter` (5 signal bars lit by |v|/20, colour = direction, "84%",
+  tooltip "trend strength … not a price move") under a grouped header "Trend strength by timeframe (0–100%)";
+  column "Trend strength"; stock card = `StrengthTag` "81% strength" per TF + "Combined trend strength"; peers = Meter.
 - Customer header (2026-10-03): tabs Control Tower | Helpdesk sit in the top bar next to the brand (56 px bar);
   the filter bar is one line from 1300 px up (`.fbar` nowrap, Sector/Industry `.fg.grow` shrink to fit Reset), wraps
   below. The Background filter is labelled "Stock reliability" (card: "<x> reliability").

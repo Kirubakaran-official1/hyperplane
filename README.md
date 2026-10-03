@@ -190,6 +190,12 @@ bash deploy/deploy.sh
 - Customers only see labels (Good / Moderate / Weak per timeframe, sector & industry bubbles, top 10). The customer
   service runs in its own container with a database login that can't read collections, signals or settings.
 
+## Docs (customer page)
+
+The customer page has a **Docs** tab: how to use every part of the screen in simple words, plus the golden rules
+(go top-down, avoid good stocks in weak sectors / industries, let timeframes agree, manage risk). Edit the text in
+`frontend/app/src/guide.jsx`.
+
 ## Helpdesk
 
 Customers (🎧 Helpdesk tab on `/app`) and dashboard users (🎧 Helpdesk tab) raise queries like writing an email:

@@ -3,6 +3,12 @@
 // Messages travel as plain blocks [{t:"text",v}, {t:"img",src|id}] and are rendered as text — never as HTML.
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
+// Line icon for the helpdesk (two speech bubbles) — used on the tabs of both apps
+export const HelpdeskIcon = ({ size = 15 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+    <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>
+  </svg>
+);
 export const SEV = { high: ["High", "#ff4454"], medium: ["Medium", "#ffaa00"], low: ["Low", "#00c896"] };
 const MAX_IMAGES = 3, MAX_BYTES = 1_100_000, MAX_SIDE = 1600;
 

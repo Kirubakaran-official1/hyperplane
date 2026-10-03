@@ -2,7 +2,8 @@
 // Self-contained on purpose: it must never import the dashboard code. It only shows what the server publishes.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Helpdesk, InboxBell, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
+import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
+import Guide, { GUIDE_CSS } from "./guide.jsx";
 
 // ─── vocabulary ──────────────────────────────────────────────────────────────
 const TFS = [["D","Daily","short term"],["W","Weekly","weeks"],["M","Monthly","months"],["Q","Quarterly","quarters"],["Y","Yearly","long term"]];
@@ -71,6 +72,26 @@ function summaryOf(s) {
   return "Sideways on every timeframe — no clear trend yet.";
 }
 
+// Group state on the Combined timeframe, by level AND rank (so a weak market doesn't make every group "weak"):
+// strong = strength ≥ 55% or in the top quarter of all sectors / industries; weak = under 45% and in the bottom half.
+const groupState = g => !g ? null : (g.st >= 55 || g.rank / g.of <= 0.25) ? "up" : (g.st < 45 && g.rank / g.of > 0.5) ? "down" : "side";
+const GROUP_WORD = { up:"strong", side:"average", down:"weak" };
+function combinedView(od, bi, sec, ind) {
+  const gs = [sec && ["sector", groupState(sec)], ind && ["industry", groupState(ind)]].filter(Boolean);
+  const weak = gs.filter(([, st]) => st === "down").map(([n]) => n), strong = gs.length > 0 && gs.every(([, st]) => st === "up");
+  const which = weak.join(" and ");
+  let v;
+  if (od === 1) v = strong ? ["good", "✓ Best case — with the tide", "Strong stock in a strong industry and a strong sector. Everything points the same way."]
+    : weak.length ? ["warn", "⚠ Careful — against its group", `The stock is strong, but its ${which} ${weak.length > 1 ? "are" : "is"} weak. It is moving against its own group — avoid or wait (golden rule 2).`]
+    : ["mid", "◐ Okay — group is only average", "The stock is strong, but its group is only average. Candidates in stronger sectors / industries are better."];
+  else if (od === -1) v = strong ? ["watch", "👁 Watch only — a laggard", "A weak stock inside a strong group. It may catch up later — or keep lagging. Not a buy yet."]
+    : ["bad", "✕ Avoid for buying", weak.length ? `A weak stock in a weak ${which}. Nothing is supporting it.` : "The stock is in a downtrend and its group is not helping."];
+  else if (od === 0) v = ["mid", "◆ No edge yet", strong ? "No clear trend yet, but its group is strong — watch for the stock to pick a direction." : "No clear trend in the stock — there are better candidates."];
+  else return null;
+  if (bi && v[0] === "good") v = ["mid", "◐ Good group, mixed timeframes", "Its sector and industry are strong, but the stock's timeframes disagree — wait for them to line up (golden rule 3)."];
+  return { tone: v[0], title: v[1], text: v[2] };
+}
+
 // ─── small pieces ────────────────────────────────────────────────────────────
 function Logo({ size = 32 }) {
   return (
@@ -84,14 +105,24 @@ function Logo({ size = 32 }) {
     </svg>
   );
 }
+const TowerIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>);
+const GuideIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>);
 const Brand = () => <div className="brand"><Logo/><div><div className="brand-name">Hyperplane</div><div className="brand-by">by QuantFriday</div></div></div>;
 
-function TrendCell({ v, d, wide }) {                     // ▲ 78 / ▼ 64 / ◆ 12
-  if (v == null) return <span className="tc none">—</span>;
-  const k = d === 1 ? "up" : d === -1 ? "down" : "side";
-  return <span className={`tc ${k} ${wide ? "wide" : ""}`} title={d === 1 ? `Uptrend · strength ${Math.abs(v)}%` : d === -1 ? `Downtrend · strength ${Math.abs(v)}%` : `Sideways · no clear trend (${Math.abs(v)}%)`}>
-    {d === 1 ? "▲" : d === -1 ? "▼" : "◆"} {Math.abs(v)}%</span>;
+const dirKey = d => d === 1 ? "up" : d === -1 ? "down" : "side";
+const dirWord = d => d === 1 ? "uptrend" : d === -1 ? "downtrend" : "sideways";
+function Meter({ v, d, label = "" }) {                     // ▂▃▅▆█ 84%  (bars lit = strength, colour = direction)
+  if (v == null) return <span className="meter none">—</span>;
+  const a = Math.abs(v), lit = Math.max(1, Math.min(5, Math.ceil(a / 20)));
+  return <span className={`meter ${dirKey(d)}`} title={`${label ? label + ": " : ""}${dirWord(d)} · trend strength ${a}% (not a price move)`}>
+    <span className="bars" aria-hidden="true">{[1, 2, 3, 4, 5].map(i => <i key={i} className={i <= lit ? "on" : ""}/>)}</span>{a}%</span>;
 }
+const StrengthTag = ({ v, d, big }) => v == null ? <span className="stag none">No data</span>
+  : <span className={`stag ${dirKey(d)} ${big ? "big" : ""}`} title={`Trend strength ${Math.abs(v)}% (${dirWord(d)}) — not a price move`}><b>{Math.abs(v)}%</b> strength</span>;
 const StrengthBar = ({ v, d }) => <div className="sbar"><div className={`sbar-f ${d === 1 ? "up" : d === -1 ? "down" : "side"}`} style={{ width:`${v == null ? 0 : Math.abs(v)}%` }}/></div>;
 
 function CopyBtns({ syms, compact }) {
@@ -337,6 +368,14 @@ function StockCard({ s, data, onOpen, onClose }) {
     const i = list.findIndex(r => ind ? r.k === s.ind && r.sec === s.sec : r.k === s.sec);
     return i < 0 ? null : { ...list[i], rank:i + 1, of:list.length }; };
   const top = indPeers.slice(0, 5), showSelf = indRank > 5;
+  const secA = data ? ctx("A", false) : null, indA = data ? ctx("A", true) : null;
+  const view = combinedView(od, bi, secA, indA);
+  const grp = (kind, name, g) => (
+    <div className="cv-row"><span className="cv-k">{kind}</span>
+      <span className="cv-v"><b>{name}</b>{g
+        ? <> is <span className={`cv-st ${groupState(g)}`}>{GROUP_WORD[groupState(g)]}</span> <span className="dim mono">· {Math.round(g.st)}% · #{g.rank} of {g.of}</span></>
+        : <span className="dim"> — no data</span>}</span></div>
+  );
   return (
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-label={s.n}>
@@ -347,16 +386,23 @@ function StockCard({ s, data, onOpen, onClose }) {
           <div className="m-price"><div className="mono">₹{s.p}</div>{s.c != null && <div className={`mono ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}% today</div>}</div>
         </div>
         <div className="m-overall">
-          <div className="mo-cell"><span className="lbl">Combined trend</span><TrendCell v={s.os} d={od} wide/><span className="grp-w">{od === 0 ? "Sideways" : od === 1 ? `${strengthWord(Math.abs(s.os))} uptrend` : od === -1 ? `${strengthWord(Math.abs(s.os))} downtrend` : "—"}</span></div>
+          <div className="mo-cell"><span className="lbl">Combined trend strength</span><StrengthTag v={s.os} d={od} big/><span className="grp-w">{od === 0 ? "Sideways" : od === 1 ? `${strengthWord(Math.abs(s.os))} uptrend` : od === -1 ? `${strengthWord(Math.abs(s.os))} downtrend` : "—"}</span></div>
           <div className="mo-cell"><span className="lbl">Direction</span><span className={`dirtag ${bi ? "bi" : od === 1 ? "up" : od === -1 ? "down" : "side"}`}>{bi ? "⇅ Bidirectional" : ups.length && !dns.length ? "▲ One-directional up" : dns.length && !ups.length ? "▼ One-directional down" : "◆ Sideways"}</span></div>
-          <div className="mo-sum">{summaryOf(s)}</div>
+          {view && <div className={`cv-verdict ${view.tone}`}>{view.title}</div>}
+          <div className="mo-sum">
+            <div className="lbl">Combined view <Info text="The stock, its sector and its industry read together (Combined timeframe). A group is strong when it ranks in the top quarter or is above 55%, weak when it is in the bottom half and under 45%. The best ideas have all three pointing the same way — see Docs → golden rules."/></div>
+            <div className="cv-row"><span className="cv-k">Stock</span><span className="cv-v">{summaryOf(s)}</span></div>
+            {grp("Sector", s.sec, secA)}
+            {grp("Industry", s.ind, indA)}
+            {view && <div className={`cv-say ${view.tone}`}>{view.text}</div>}
+          </div>
         </div>
         <div className="m-rows">
           {rows.map(r => (
             <div key={r.k} className="m-row">
               <div className="m-l"><b>{r.l}</b><span className="sub">{r.hint}</span></div>
               <StrengthBar v={r.v} d={r.d}/>
-              <TrendCell v={r.v} d={r.d}/>
+              <StrengthTag v={r.v} d={r.d}/>
               <span className={`dirtag sm ${r.d === 1 ? "up" : r.d === -1 ? "down" : "side"}`}>{r.v == null ? "No data" : r.d === 1 ? "Uptrend" : r.d === -1 ? "Downtrend" : "Sideways"}</span>
             </div>
           ))}
@@ -386,7 +432,7 @@ function StockCard({ s, data, onOpen, onClose }) {
           <div className="peers">
             {[...top.map((p, i) => [p, i + 1]), ...(showSelf ? [[s, indRank]] : [])].map(([p, rk]) => (
               <button key={p.s} type="button" className={`peer ${p.s === s.s ? "me" : ""} ${showSelf && p.s === s.s ? "gap" : ""}`} onClick={() => p.s !== s.s && onOpen(p)} title={p.s === s.s ? "This stock" : `Open ${p.n}`}>
-                <span className="mono dim">#{rk}</span><span className="sym">{p.s}</span><span className="sub pn">{p.n}</span><TrendCell v={p.os} d={dirVal(p.os)}/>
+                <span className="mono dim">#{rk}</span><span className="sym">{p.s}</span><span className="sub pn">{p.n}</span><Meter v={p.os} d={dirVal(p.os)} label="Combined"/>
               </button>))}
           </div>
         </>}
@@ -450,8 +496,9 @@ function Home({ me, onOut }) {
       <header className="top">
         <Brand/>
         <nav className="tabs" role="tablist">
-          <button role="tab" aria-selected={view === "tower"} className={view === "tower" ? "on" : ""} onClick={() => setView("tower")}>🏛 Control Tower</button>
-          <button role="tab" aria-selected={view === "helpdesk"} className={view === "helpdesk" ? "on" : ""} onClick={() => setView("helpdesk")}>🎧 Helpdesk{unread.total > 0 && <span className="tab-n">{unread.total}</span>}</button>
+          <button role="tab" aria-selected={view === "tower"} className={view === "tower" ? "on" : ""} onClick={() => setView("tower")}><TowerIcon/>Control Tower</button>
+          <button role="tab" aria-selected={view === "helpdesk"} className={view === "helpdesk" ? "on" : ""} onClick={() => setView("helpdesk")}><HelpdeskIcon/>Helpdesk{unread.total > 0 && <span className="tab-n">{unread.total}</span>}</button>
+          <button role="tab" aria-selected={view === "guide"} className={view === "guide" ? "on" : ""} onClick={() => { setView("guide"); window.scrollTo(0, 0); }}><GuideIcon/>Docs</button>
         </nav>
         <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>
         <InboxBell unread={unread} onOpen={openHelpdesk}/>
@@ -459,14 +506,15 @@ function Home({ me, onOut }) {
           <button className="ghost" onClick={async () => { await api("/app/api/logout", { method:"POST" }).catch(() => {}); onOut(); }}>Sign out</button></div>
       </header>
 
+      {view === "guide" && <Guide disclaimer={DISCLAIMER}/>}
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
       {view === "tower" && <>
       <div className="fbar">
         <div className="fg"><span className="fl">Timeframe <Info text="Combined = all five timeframes together. Pick one timeframe, or several (they must all agree for Uptrend / Downtrend)."/></span>
           <Seg items={[["A","Combined",null,"All five timeframes together"], ...TFS.map(([k, l]) => [k, k, null, l])]} isOn={k => k === "A" ? !tfs.length : tfs.includes(k)}
             onPick={k => k === "A" ? setTfs([]) : toggleTf(k)}/></div>
-        <div className="fg"><span className="fl">Trend <Info text="Uptrend / Downtrend = direction on the chosen timeframe(s). Bidirectional = up on some timeframes and down on others."/></span>
-          <Seg items={[["all","All"],["up","▲ Up","up"],["down","▼ Down","down"],["bi","⇅ Bidirectional","bi"]]} isOn={k => f.trend === k} onPick={setTrend}/></div>
+        <div className="fg"><span className="fl">Trend <Info text="Uptrend / Downtrend = direction on the chosen timeframe(s). Sideways = no clear direction. Bidirectional = up on some timeframes and down on others."/></span>
+          <Seg items={[["all","All"],["up","▲ Up","up"],["down","▼ Down","down"],["side","◆ Sideways","flat"],["bi","⇅ Bidirectional","bi"]]} isOn={k => f.trend === k} onPick={setTrend}/></div>
         <div className="fg"><span className="fl">Market cap</span>
           <Seg items={SIZES.map(z => [z, z])} isOn={z => f.sizes.includes(z)} onPick={z => pick("sizes", z)}/></div>
         {hasBg && <div className="fg"><span className="fl">Stock reliability <Info text="How reliable the stock's longer-term price history is. Strong = healthy, Moderate = average, Weak = poor. Pick one or more."/></span>
@@ -485,6 +533,7 @@ function Home({ me, onOut }) {
           <div className="card kpi"><span className="lbl">Stocks in view <Info text={`Stocks that match the market-cap, segment, sector and industry filters (${scope}).`}/></span><b className="mono">{base.length.toLocaleString()}</b></div>
           <div className="card kpi up"><span className="lbl">▲ Uptrend <Info text="Stocks in an uptrend on the chosen timeframe(s)."/></span><b className="mono">{nUp.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? nUp / base.length * 100 : 0}%` }}/></div></div>
           <div className="card kpi down"><span className="lbl">▼ Downtrend <Info text="Stocks in a downtrend on the chosen timeframe(s)."/></span><b className="mono">{nDown.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? nDown / base.length * 100 : 0}%` }}/></div></div>
+          <div className="card kpi side"><span className="lbl">◆ Sideways <Info text="Stocks with no clear trend on the chosen timeframe(s) — price is going nowhere."/></span><b className="mono">{cats.side.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? cats.side / base.length * 100 : 0}%` }}/></div></div>
           <div className="card kpi bi"><span className="lbl">⇅ Bidirectional <Info text="Stocks in an uptrend on some timeframes and a downtrend on others — the timeframes disagree."/></span><b className="mono">{nBi.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? nBi / base.length * 100 : 0}%` }}/></div></div>
           <div className="card kpi"><span className="lbl">Strongest sector <Info text="Highest sector strength (0–100) on the chosen timeframe."/></span><b className="kname">{secRows[0] ? secRows[0].k : "—"}</b>{secRows[0] && <small className="mono">strength {secRows[0].st}</small>}</div>
           <div className="card kpi"><span className="lbl">Weakest sector <Info right text="Lowest sector strength (0–100) on the chosen timeframe."/></span><b className="kname">{secRows.length ? secRows[secRows.length - 1].k : "—"}</b>{secRows.length > 0 && <small className="mono">strength {secRows[secRows.length - 1].st}</small>}</div>
@@ -510,8 +559,13 @@ function Home({ me, onOut }) {
           </div>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>#</th><th>Stock</th><th className="hide-sm">Sector · Industry</th><th className="num">Price</th><th>Trend</th><th>Strength</th>
-                {TFS.map(([k, l]) => <th key={k} className={`num hide-sm ${tfs.includes(k) ? "hl" : ""}`} title={`${l} strength`}>{l}</th>)}<th className="hide-sm">Ticker copy</th></tr></thead>
+              <thead>
+                <tr><th rowSpan={2}>#</th><th rowSpan={2}>Stock</th><th rowSpan={2} className="hide-sm">Sector · Industry</th><th rowSpan={2} className="num">Price</th><th rowSpan={2}>Trend</th>
+                  <th rowSpan={2} title="How strong the trend is on the chosen timeframe(s), 0–100% — not a price move">Trend strength</th>
+                  <th colSpan={5} className="hide-sm grp-h" title="How strong the trend is on each timeframe, 0–100%. Bars lit = strength, colour = direction. Not a price move.">Trend strength by timeframe <span>(0–100%)</span></th>
+                  <th rowSpan={2} className="hide-sm">Ticker copy</th></tr>
+                <tr>{TFS.map(([k, l]) => <th key={k} className={`num hide-sm ${tfs.includes(k) ? "hl" : ""}`} title={`${l} trend strength`}>{l}</th>)}</tr>
+              </thead>
               <tbody>
                 {sorted.slice(page * PAGE, page * PAGE + PAGE).map((s, i) => { const v = focusOf(s, tfs), d = focusDir(s, tfs), cat = categoryOf(s, tfs); return (
                   <tr key={s.s} onClick={() => setOpen(s)} tabIndex={0} onKeyDown={e => e.key === "Enter" && setOpen(s)}>
@@ -520,8 +574,8 @@ function Home({ me, onOut }) {
                     <td className="hide-sm"><span className="sec" style={{ color:colorOf(s.sec) }}>● {s.sec}</span><div className="sub">{s.ind}</div></td>
                     <td className="num mono">₹{s.p}{s.c != null && <div className={`small ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}%</div>}</td>
                     <td>{cat ? <span className={`dirtag ${CAT[cat][1]}`}>{CAT[cat][0]}</span> : <span className="dim">—</span>}</td>
-                    <td className="cur"><span className={`pct ${d === 1 ? "up" : d === -1 ? "down" : "side"}`}>{pct(v)}</span><StrengthBar v={v} d={d}/></td>
-                    {TFS.map(([k], j) => <td key={k} className={`num hide-sm ${tfs.includes(k) ? "hl" : ""}`}><TrendCell v={s.sc[j]} d={dirTf(s, j)}/></td>)}
+                    <td className="cur" title={v == null ? "" : `Trend strength ${Math.abs(v)}% — not a price move`}><span className={`pct ${dirKey(d)}`}>{pct(v)}</span><StrengthBar v={v} d={d}/></td>
+                    {TFS.map(([k], j) => <td key={k} className={`num hide-sm ${tfs.includes(k) ? "hl" : ""}`}><Meter v={s.sc[j]} d={dirTf(s, j)} label={TFS[j][1]}/></td>)}
                     <td className="hide-sm"><CopyBtns syms={[s.s]} compact/></td>
                   </tr>); })}
                 {!sorted.length && <tr><td colSpan={13} className="empty">No stocks match these filters.</td></tr>}
@@ -599,7 +653,7 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .sg{display:inline-flex;border:1px solid var(--b2);border-radius:6px;overflow:hidden;background:var(--s2);height:27px}
 .sg button{background:transparent;border:0;border-right:1px solid var(--b2);padding:0 8px;font-size:11px;font-weight:600;color:var(--t2);white-space:nowrap}
 .sg button:last-child{border-right:0}.sg button:hover{color:var(--t1);background:rgba(255,255,255,.03)}
-.sg button.on{background:var(--adim);color:var(--acc)}.sg button.on.up{background:var(--longd);color:var(--long)}.sg button.on.down{background:var(--shortd);color:var(--short)}.sg button.on.bi{background:var(--retd);color:var(--ret)}.sg button.on.side{background:var(--mixedd);color:var(--mixed)}
+.sg button.on{background:var(--adim);color:var(--acc)}.sg button.on.up{background:var(--longd);color:var(--long)}.sg button.on.down{background:var(--shortd);color:var(--short)}.sg button.on.bi{background:var(--retd);color:var(--ret)}.sg button.on.side{background:var(--mixedd);color:var(--mixed)}.sg button.on.flat{background:rgba(106,134,166,.16);color:var(--t1)}
 .reset{margin-left:auto;height:27px;padding:0 12px;border:1px solid var(--b2);border-radius:6px;background:transparent;color:var(--t2);font-size:11.5px;font-weight:600}.reset:hover{border-color:var(--short);color:var(--short)}
 .info{position:relative;display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;border:1px solid var(--t3);color:var(--t2);font:700 8.5px/1 var(--sans);text-transform:none;letter-spacing:0;cursor:help;flex-shrink:0;vertical-align:1px}
 .info:hover,.info:focus{border-color:var(--acc);color:var(--acc);outline:none}
@@ -619,7 +673,7 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-bottom:12px}
 .kpi{padding:11px 14px;display:flex;flex-direction:column;gap:3px;position:relative}.kpi::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:10px 10px 0 0;background:var(--acc);opacity:.5}
 .kpi .lbl{display:flex;align-items:center;gap:5px}
-.kpi.up::before{background:var(--long)}.kpi.down::before{background:var(--short)}.kpi.bi::before{background:var(--ret)}
+.kpi.up::before{background:var(--long)}.kpi.down::before{background:var(--short)}.kpi.bi::before{background:var(--ret)}.kpi.side::before{background:var(--t3)}.kpi.side b{color:var(--t1)}.kpi.side .kbar div{background:var(--t3)}.kpi.bi .kbar div{background:var(--ret)}
 .kpi b{font-size:22px;font-weight:700}.kpi.up b{color:var(--long)}.kpi.down b{color:var(--short)}.kpi.bi b{color:var(--ret)}.kpi b.kname{font:700 15px var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.kpi small{color:var(--t2);font-size:11px}
 .kbar{height:3px;background:var(--s3);border-radius:2px;overflow:hidden;margin-top:5px}.kbar div{height:100%}.kpi.up .kbar div{background:var(--long)}.kpi.down .kbar div{background:var(--short)}
 .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:10px;margin-bottom:12px}
@@ -644,6 +698,9 @@ th.num,td.num{text-align:center}.hl{background:rgba(0,229,255,.05)}td.cur{min-wi
 .bi-tag{margin-left:5px;font-size:11px;color:var(--ret)}
 .tc{display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:50px;padding:2px 7px;border-radius:5px;font:700 11.5px var(--mono);white-space:nowrap}
 .tc.wide{min-width:62px;font-size:13px;padding:3px 9px}.tc.up{background:var(--longd);color:var(--long)}.tc.down{background:var(--shortd);color:var(--short)}.tc.side{background:rgba(106,134,166,.12);color:var(--t2)}.tc.none{color:var(--t3)}
+.meter{display:inline-flex;align-items:center;gap:6px;font:700 12px var(--mono);white-space:nowrap}.meter.up{color:var(--long)}.meter.down{color:var(--short)}.meter.side{color:var(--t2)}.meter.none{color:var(--t3)}.bars{display:inline-flex;align-items:flex-end;gap:2px;height:13px}.bars i{display:block;width:3px;border-radius:1px;background:var(--s3)}.bars i:nth-child(1){height:4px}.bars i:nth-child(2){height:6px}.bars i:nth-child(3){height:8px}.bars i:nth-child(4){height:10.5px}.bars i:nth-child(5){height:13px}.meter.up .bars i.on{background:var(--long)}.meter.down .bars i.on{background:var(--short)}.meter.side .bars i.on{background:var(--t3)}
+.stag{display:inline-flex;align-items:baseline;gap:5px;font-size:11px;color:var(--t2);white-space:nowrap;padding:3px 9px;border-radius:6px;background:var(--s2);border:1px solid var(--b2)}.stag b{font:700 13px var(--mono)}.stag.up b{color:var(--long)}.stag.down b{color:var(--short)}.stag.side b{color:var(--t2)}.stag.up{border-color:rgba(0,200,150,.35)}.stag.down{border-color:rgba(255,68,84,.35)}.stag.big b{font-size:16px}.stag.none{color:var(--t3)}
+th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h span{font-weight:500;opacity:.75}
 .sbar{height:4px;background:var(--s3);border-radius:2px;overflow:hidden;min-width:60px}.sbar-f{height:100%;border-radius:2px}.sbar-f.up{background:var(--long)}.sbar-f.down{background:var(--short)}.sbar-f.side{background:var(--t3)}
 .copybtns{display:inline-flex;gap:4px}.cbtn{background:var(--s1);border:1px solid var(--b2);border-radius:5px;padding:3px 8px;font:600 11px var(--mono);white-space:nowrap;color:var(--t1)}.cbtn:hover{border-color:var(--acc)}.cbtn.tv{color:var(--acc)}
 .empty{padding:22px;text-align:center;color:var(--t2)}.pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:12px}
@@ -652,7 +709,7 @@ th.num,td.num{text-align:center}.hl{background:rgba(0,229,255,.05)}td.cur{min-wi
 .x{position:absolute;top:10px;right:12px;background:none;border:0;font-size:18px;color:var(--t2)}
 .m-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding-right:26px}.m-name{font-size:19px;font-weight:800}.m-price{text-align:right;font-weight:700;font-size:16px}.m-price div+div{font-size:12px}
 .m-overall{display:grid;grid-template-columns:auto auto 1fr;gap:16px;align-items:center;margin:14px 0 10px;padding:12px 14px;border-radius:10px;background:var(--s1);border:1px solid var(--b1)}
-.mo-cell{display:flex;flex-direction:column;gap:5px;align-items:flex-start}.mo-sum{font-size:12.5px;color:var(--t1);line-height:1.5}
+.mo-cell{display:flex;flex-direction:column;gap:5px;align-items:flex-start}.mo-sum{grid-column:1/-1;font-size:12.5px;color:var(--t1);line-height:1.5;border-top:1px solid var(--b1);padding-top:10px;display:flex;flex-direction:column;gap:5px}.mo-sum>.lbl{display:flex;align-items:center;gap:5px;margin-bottom:2px}.cv-row{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px;align-items:baseline}.cv-k{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--t3);font-weight:700}.cv-st{font-weight:700}.cv-st.up{color:var(--long)}.cv-st.down{color:var(--short)}.cv-st.side{color:var(--mixed)}.cv-say{margin-top:4px;padding:8px 11px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);border-left:3px solid var(--b2)}.cv-say.good{border-left-color:var(--long)}.cv-say.warn{border-left-color:var(--mixed)}.cv-say.bad{border-left-color:var(--short)}.cv-say.watch{border-left-color:var(--acc)}.cv-verdict{justify-self:end;align-self:center;font-size:12.5px;font-weight:700;padding:6px 12px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);color:var(--t1);white-space:nowrap}.cv-verdict.good{color:var(--long);border-color:rgba(0,200,150,.45);background:var(--longd)}.cv-verdict.warn{color:var(--mixed);border-color:rgba(255,170,0,.45);background:var(--mixedd)}.cv-verdict.bad{color:var(--short);border-color:rgba(255,68,84,.45);background:var(--shortd)}.cv-verdict.watch{color:var(--acc);border-color:var(--accb);background:var(--adim)}.cv-verdict.mid{color:var(--t2)}
 .dirtag{font:700 11px var(--mono);padding:4px 9px;border-radius:5px;white-space:nowrap}.dirtag.sm{font-size:10px;padding:3px 7px;text-align:center}
 .dirtag.up{background:var(--longd);color:var(--long)}.dirtag.down{background:var(--shortd);color:var(--short)}.dirtag.side{background:rgba(106,134,166,.12);color:var(--t2)}.dirtag.bi{background:var(--retd);color:var(--ret)}
 .grp-w{font-size:10.5px;color:var(--t2)}
@@ -666,14 +723,14 @@ th.num,td.num{text-align:center}.hl{background:rgba(0,229,255,.05)}td.cur{min-wi
 .peer{display:grid;grid-template-columns:34px 92px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 12px;border:0;border-bottom:1px solid var(--b1);background:none;color:var(--t1);text-align:left;cursor:pointer;font:inherit}
 .peer:last-child{border-bottom:0}.peer:hover{background:var(--s2)}.peer.me{background:rgba(0,229,255,.07);cursor:default}.peer.gap{border-top:1px dashed var(--b2)}.pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .m-rows{display:flex;flex-direction:column;border:1px solid var(--b1);border-radius:10px;overflow:hidden;background:var(--s1)}
-.m-row{display:grid;grid-template-columns:110px minmax(0,1fr) 62px 86px;gap:12px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--b1)}.m-row:last-child{border-bottom:0}.m-l{display:flex;flex-direction:column}
+.m-row{display:grid;grid-template-columns:110px minmax(0,1fr) 112px 86px;gap:12px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--b1)}.m-row:last-child{border-bottom:0}.m-l{display:flex;flex-direction:column}
 .m-copy{margin-top:8px}
 .m-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0}
 footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 @media (min-width:1300px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
-@media (max-width:900px){.top .tabs{order:5;width:100%;margin:0 0 8px}.top .tabs button{flex:1;justify-content:center}.auth-page{grid-template-columns:1fr}.hero{padding:30px 22px;border-right:0;border-bottom:1px solid var(--b1)}.hero-h{font-size:28px}.hero-demo{display:none}.panels{grid-template-columns:1fr}.m-overall{grid-template-columns:auto auto}.mo-sum{grid-column:1/-1}}
-@media (max-width:640px){.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:86px minmax(0,1fr) 58px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
+@media (max-width:900px){.top .tabs{order:5;width:100%;margin:0 0 8px}.top .tabs button{flex:1;justify-content:center}.auth-page{grid-template-columns:1fr}.hero{padding:30px 22px;border-right:0;border-bottom:1px solid var(--b1)}.hero-h{font-size:28px}.hero-demo{display:none}.panels{grid-template-columns:1fr}.m-overall{grid-template-columns:auto auto}.cv-verdict{grid-column:1/-1;justify-self:start;white-space:normal}}
+@media (max-width:640px){.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
 `;
 
-const style = document.createElement("style"); style.textContent = CSS; document.head.appendChild(style);
+const style = document.createElement("style"); style.textContent = CSS + GUIDE_CSS; document.head.appendChild(style);
 createRoot(document.getElementById("root")).render(<App/>);

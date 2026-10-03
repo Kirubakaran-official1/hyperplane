@@ -5022,50 +5022,86 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
   );
 }
 
-// Multi-timeframe NR (was its own tab): stocks coiling in a narrow range on several timeframes at once.
+// Multi-timeframe NR (was its own tab). The Multi_Timeframe_NR sheet lists stocks with 2+ NR patterns at once:
+// either on several timeframes (HSCL: Q NR9 + W NR6) or several NR lengths stacked in ONE timeframe
+// (WATERBASE: Q NR4…NR12). Both are shown, with the NR lengths per timeframe parsed from NR_Signals
+// (names like Q_N_9Q_HN / W_NR_4W_BD: timeframe, length, state BO/BD/HN/LW/B2NR).
 // Uses the Control Tower's filtered list, so the side-nav filters (quality, F&O, sector…) apply here too.
+const NR_KIND = { BO:["breakout","var(--long)"], BD:["breakdown","var(--short)"], HN:["near high","var(--acc)"], LW:["near low","var(--mixed)"], B2NR:["back in NR","var(--ret)"] };
+function nrByTf(signals) {
+  const by = {};
+  String(signals||"").split(/[,\s]+/).forEach(n => {
+    const m = /^([DWMQY])_NR?_(\d+)[DWMQY]_([A-Z0-9]+)$/.exec(n.trim());
+    if (m) ((by[m[1]] = by[m[1]] || {})[m[3]] = by[m[1]][m[3]] || []).push(+m[2]);
+  });
+  const ranges = lens => {
+    const v = [...new Set(lens)].sort((x,y)=>x-y), out = [];
+    v.forEach(n => { const last = out[out.length-1]; if (last && n === last[1]+1) last[1] = n; else out.push([n,n]); });
+    return out.map(([x,y]) => x===y ? `NR${x}` : `NR${x}–${y}`).join(", ");
+  };
+  return "DWMQY".split("").filter(t=>by[t]).map(t => ({ tf:t, n:Object.values(by[t]).reduce((a,l)=>a+l.length,0),
+    groups:Object.entries(by[t]).map(([k,lens]) => ({ k, text:ranges(lens), lens:[...lens].sort((x,y)=>x-y) })) }));
+}
 function MTNRCard({ list, open }) {
-  const [minTf, setMinTf] = useState(2);
+  const [mode, setMode] = useState("all");                  // all | same (several NRs in one TF) | 2 | 3 | 4 (TF count)
   const [fno, setFno] = useState(false);
   const [showAll, setShowAll] = useState(false);
-  const rows = useMemo(()=>list.filter(s=>s.mtnr).map(s=>({ s, tfc:+s.mtnr.Timeframe_Count||0, n:+s.mtnr.NR_Signal_Count||0, tfs:s.mtnr.Timeframes||"" }))
-    .sort((a,b)=>b.tfc-a.tfc || b.n-a.n || b.s.score-a.s.score),[list]);
+  const rows = useMemo(()=>list.filter(s=>s.mtnr).map(s=>{
+    const tfs = nrByTf(s.mtnr.NR_Signals);
+    return { s, tfs, tfc:+s.mtnr.Timeframe_Count||tfs.length, n:+s.mtnr.NR_Signal_Count||0, stacked:tfs.some(t=>t.n>=2) };
+  }).sort((a,b)=>b.tfc-a.tfc || b.n-a.n || b.s.score-a.s.score),[list]);
   const base = rows.filter(r=>!fno || r.s.isFNO);
-  const shown = base.filter(r=>r.tfc>=minTf);
+  const pass = (r, m) => m==="all" ? true : m==="same" ? r.stacked : r.tfc>=m;
+  const shown = base.filter(r=>pass(r, mode));
   const vis = showAll ? shown : shown.slice(0,12);
-  const tabBtn = (k,l,c) => <div key={k} onClick={()=>setMinTf(k)} style={{padding:"2px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontWeight:600,border:`1px solid ${minTf===k?c:"var(--b2)"}`,color:minTf===k?c:"var(--t2)",background:minTf===k?"var(--adim)":"var(--s2)"}}>{l}</div>;
+  const tabBtn = (k,l,c,title) => <div key={k} title={title} onClick={()=>setMode(k)} style={{padding:"2px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontWeight:600,border:`1px solid ${mode===k?c:"var(--b2)"}`,color:mode===k?c:"var(--t2)",background:mode===k?"var(--adim)":"var(--s2)"}}>{l} · {base.filter(r=>pass(r,k)).length}</div>;
   return (
     <div id="setup-mtnr" style={{scrollMarginTop:120,display:"flex"}}>
-      <FocusCard icon="📐" title="Multi-TF NR — coiling on several timeframes" style={{flex:1}}
-        sub="Narrow Range patterns on 2+ timeframes at the same time. More timeframes = more stored energy; 4-TF alignment is the strongest."
-        learn={<>When a stock is in a Narrow Range on Daily + Weekly + Monthly (+ Quarterly) together, volatility is compressed on every horizon. These are <strong>alert</strong> candidates: the break of the range usually decides the next big move. Use the NR Breakout · Breakdown list to see which ones have already broken.</>}
+      <FocusCard icon="📐" title="Multi NR — coiling on several timeframes / NR lengths" style={{flex:1}}
+        sub="2+ Narrow Range patterns at once: on several timeframes (e.g. Q NR9 + W NR6), or several NR lengths stacked in one timeframe (e.g. Monthly NR4 + NR5)."
+        learn={<>A stock in a Narrow Range on several timeframes together has volatility compressed on every horizon. Several NR lengths inside one timeframe (NR4, NR5 … NR12 on the same chart) means the range keeps getting tighter candle after candle. Both are <strong>alert</strong> candidates: the break of the range usually decides the next move. Colour = where price is: <span style={{color:"var(--long)"}}>breakout</span>, <span style={{color:"var(--short)"}}>breakdown</span>, <span style={{color:"var(--acc)"}}>near high</span>, <span style={{color:"var(--mixed)"}}>near low</span>, <span style={{color:"var(--ret)"}}>back in NR</span>.</>}
         right={<ListCopy symbols={shown.map(r=>r.s.symbol)}/>}>
         <div style={{display:"flex",gap:4,marginBottom:6,alignItems:"center",flexWrap:"wrap"}}>
-          {tabBtn(2,`2+ TF · ${base.filter(r=>r.tfc>=2).length}`,"var(--acc)")}{tabBtn(3,`3+ TF · ${base.filter(r=>r.tfc>=3).length}`,"var(--mixed)")}{tabBtn(4,`4+ TF · ${base.filter(r=>r.tfc>=4).length}`,"var(--long)")}
+          {tabBtn("all","All","var(--acc)","Every stock with 2+ NR patterns")}
+          {tabBtn("same","Stacked in one TF","var(--ret)","Several NR lengths inside the same timeframe, e.g. Monthly NR4 + NR5")}
+          {tabBtn(2,"2+ TF","var(--acc)","NR on two or more timeframes")}{tabBtn(3,"3+ TF","var(--mixed)")}{tabBtn(4,"4+ TF","var(--long)")}
           <span style={{width:1,height:16,background:"var(--b2)",margin:"0 2px"}}/>
           <Pill active={fno} color="var(--long)" onClick={()=>setFno(v=>!v)}>{fno?"✓ ":""}F&amp;O only</Pill>
         </div>
         <div style={{maxHeight:330,overflowY:"auto"}} className="tower-scroll">
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-            <thead><tr>{["","Symbol","TFs","NR","Timeframes","Bias"].map(h=><th key={h} style={{position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"5px 6px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",zIndex:1}}>{h}</th>)}</tr></thead>
+            <thead><tr>{["","Symbol","TFs","NRs","NR by timeframe","Bias"].map(h=><th key={h} style={{position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"5px 6px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",zIndex:1}}>{h}</th>)}</tr></thead>
             <tbody>
               {vis.map((r,i)=>{
-                const c = r.tfc>=4?"var(--long)":r.tfc>=3?"var(--mixed)":"var(--acc)";
+                const c = r.tfc>=4?"var(--long)":r.tfc>=3?"var(--mixed)":r.tfc>=2?"var(--acc)":"var(--ret)";
                 return (
-                  <tr key={r.s.symbol} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
-                    <td style={{padding:"5px 4px",fontFamily:"var(--mono)",color:"var(--t3)"}}>{i+1}</td>
+                  <tr key={r.s.symbol} className="sec-row" style={{borderBottom:"1px solid var(--b1)",verticalAlign:"top"}}>
+                    <td style={{padding:"6px 4px",fontFamily:"var(--mono)",color:"var(--t3)"}}>{i+1}</td>
                     <td style={{padding:"5px 6px",whiteSpace:"nowrap"}}>
                       <FocusSym sym={r.s.symbol} onOpen={open}/>
                       <div style={{fontSize:8.5,color:sectorColor(r.s.sector),maxWidth:110,overflow:"hidden",textOverflow:"ellipsis"}}>{r.s.sector}</div>
                     </td>
-                    <td style={{padding:"5px 6px"}}><span style={{padding:"1px 7px",borderRadius:4,background:"var(--s2)",color:c,fontSize:10.5,fontFamily:"var(--mono)",fontWeight:700,border:`1px solid ${c}`}}>{r.tfc} TF</span></td>
-                    <td style={{padding:"5px 6px",fontFamily:"var(--mono)",fontWeight:700,color:c}}>{r.n}</td>
-                    <td style={{padding:"5px 6px",fontSize:10,color:"var(--t2)",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.s.mtnr.NR_Signals||r.tfs}>{r.tfs}</td>
+                    <td style={{padding:"6px 6px"}}><span style={{padding:"1px 7px",borderRadius:4,background:"var(--s2)",color:c,fontSize:10.5,fontFamily:"var(--mono)",fontWeight:700,border:`1px solid ${c}`,whiteSpace:"nowrap"}}>{r.tfc} TF</span></td>
+                    <td style={{padding:"6px 6px",fontFamily:"var(--mono)",fontWeight:700,color:c}}>{r.n}</td>
+                    <td style={{padding:"5px 6px"}} title={r.s.mtnr.NR_Signals}>
+                      {r.tfs.map(t=>(
+                        <div key={t.tf} style={{display:"flex",gap:5,alignItems:"baseline",flexWrap:"wrap",marginBottom:2}}>
+                          <span style={{fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:"var(--t1)",minWidth:62}}>{TF_NAME[t.tf]}{t.n>1 && <span style={{color:"var(--ret)"}}> ×{t.n}</span>}</span>
+                          {t.groups.map(g=>(
+                            <span key={g.k} title={`${TF_NAME[t.tf]} ${g.lens.map(l=>`NR${l}`).join(", ")} — ${(NR_KIND[g.k]||[g.k])[0]}`}
+                              style={{fontSize:10,fontFamily:"var(--mono)",color:(NR_KIND[g.k]||[0,"var(--t2)"])[1],whiteSpace:"nowrap"}}>
+                              {g.text} <span style={{fontSize:9,opacity:.8}}>{(NR_KIND[g.k]||[g.k])[0]}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                      {!r.tfs.length && <span style={{fontSize:10,color:"var(--t2)"}}>{r.s.mtnr.Timeframes}</span>}
+                    </td>
                     <td style={{padding:"5px 6px"}}>{biasBadge(r.s.dir,true)}</td>
                   </tr>
                 );
               })}
-              {!vis.length && <tr><td colSpan={6} style={{padding:14,color:"var(--t3)",textAlign:"center"}}>No stock is coiling on {minTf}+ timeframes with these filters.</td></tr>}
+              {!vis.length && <tr><td colSpan={6} style={{padding:14,color:"var(--t3)",textAlign:"center"}}>No stock matches this NR filter right now.</td></tr>}
             </tbody>
           </table>
         </div>
