@@ -204,16 +204,22 @@ function Seg({ items, isOn, onPick }) {
 
 function MultiSelect({ label, options, value, onChange, width = 200 }) {
   const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const ref = useRef(null);
+  const [alignRight, setAlignRight] = useState(false);
   useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  // open towards the left when there is not enough room on the right (e.g. the Industry box at the end of the bar)
+  const toggleOpen = () => {
+    if (!open && ref.current) { const r = ref.current.getBoundingClientRect(); setAlignRight(r.left + Math.max(r.width, 300) > document.documentElement.clientWidth - 12); }
+    setOpen(v => !v);
+  };
   const shown = options.filter(o => !q || o.toLowerCase().includes(q.toLowerCase()));
   const toggle = o => onChange(value.includes(o) ? value.filter(x => x !== o) : [...value, o]);
   return (
     <div className="ms" ref={ref} style={{ width }}>
-      <button type="button" className={`ms-btn ${value.length ? "on" : ""}`} onClick={() => setOpen(v => !v)}>
+      <button type="button" className={`ms-btn ${value.length ? "on" : ""}`} onClick={toggleOpen}>
         <span>{value.length === 0 ? `All ${label}` : value.length === 1 ? value[0] : `${value.length} ${label}`}</span><span className="caret">▾</span>
       </button>
       {open && (
-        <div className="ms-pop">
+        <div className={`ms-pop ${alignRight ? "right" : ""}`}>
           {options.length > 8 && <input autoFocus className="ms-q" placeholder={`Search ${label}`} value={q} onChange={e => setQ(e.target.value)}/>}
           {value.length > 0 && <button type="button" className="ms-clear" onClick={() => onChange([])}>Clear {value.length}</button>}
           <div className="ms-list">
@@ -751,7 +757,7 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .seg button:last-child{border-right:0}.seg button.on{background:var(--adim);color:var(--acc)}.seg button.on.up{background:var(--longd);color:var(--long)}.seg button.on.down{background:var(--shortd);color:var(--short)}
 .ms{position:relative}.ms-btn{width:100%;height:27px;display:flex;justify-content:space-between;align-items:center;gap:6px;border:1px solid var(--b2);background:var(--s2);border-radius:6px;padding:0 10px;font-size:11.5px;font-weight:600;color:var(--t2);text-align:left}
 .ms-btn span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ms-btn.on{border-color:var(--acc);color:var(--acc);background:var(--adim)}.caret{font-size:9px;opacity:.7}
-.ms-pop{position:absolute;top:calc(100% + 6px);left:0;z-index:30;width:max(100%,270px);background:var(--s1);border:1px solid var(--b2);border-radius:10px;box-shadow:0 20px 44px -18px rgba(0,0,0,.8);padding:8px}
+.ms-pop.right{left:auto;right:0}.ms-pop{position:absolute;top:calc(100% + 6px);left:0;z-index:30;width:max(100%,270px);max-width:calc(100vw - 24px);background:var(--s1);border:1px solid var(--b2);border-radius:10px;box-shadow:0 20px 44px -18px rgba(0,0,0,.8);padding:8px}
 .ms-q{padding:7px 9px;font-size:12px;margin-bottom:6px}.ms-clear{background:none;border:0;color:var(--acc);font-size:11.5px;padding:2px 4px;float:right}
 .ms-list{max-height:280px;overflow:auto;clear:both}.ms-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;font-size:12.5px;cursor:pointer;text-transform:none;letter-spacing:0;font-weight:500;color:var(--t1)}
 .ms-item:hover{background:var(--s2)}.ms-item input{width:15px;height:15px;accent-color:#00e5ff}.ms-empty{padding:8px;color:var(--t3);font-size:12px}
