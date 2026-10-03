@@ -176,8 +176,11 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   masterMap, sectorAnalysis, industryAnalysis, nrSectorIndustry, zoneLevels, returnPotential, priceHealth, failedNR, has}`.
   Several files/collections = `versions[] = {fileName, db, dateValue, dateLabel}`; `mergeDBs()` combines a scope.
 - `Dashboard({rawVersions, theme, setTheme, headerCenter, headerRight, extraTabs, emptyState})` — the app shell.
-  Tabs: Control Tower, Sector & Industry, Slicer, Opportunities, Horizon, Conviction, Multi-TF NR, Virgin BO/BD,
-  Signals, Master List, (+ Trend & Versions when >1 version), + extraTabs from server.jsx (Compare, Admin).
+  Tabs: Control Tower, Sector & Industry, Slicer, Opportunities, Horizon, Signals, Master List, (+ Trend & Versions
+  when >1 version), + extraTabs from server.jsx (Compare, 🎧 Helpdesk, ⚙ Admin). `tabReq={id,n}` switches tab from
+  outside (the helpdesk bell). Conviction, Multi-TF NR and Virgin BO/BD tabs were REMOVED on the owner's request
+  (2026-10-03): Virgin is a Control Tower setup list; Multi-TF NR is `MTNRCard`, a half-width card in the Setup
+  Scanner's setup-card grid (2 per row, uses the Control Tower's filtered list + 2+/3+/4+ TF and F&O chips, nav chip).
 - **Global stock-quality filter** (Healthy/Weak/Poor tick-boxes, unrated counts as Weak) is applied to every tab via
   `healthIndex` → `excludedSymbols` → `filterDB`. Default **Healthy only** (`HEALTH_DEFAULT`), remembered in
   localStorage key `hp_health_allow_v2`.
@@ -209,7 +212,7 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   Total_Signal_Count is a bit higher because the scanner double-counts signals on both the long and mixed lists.
 - Sector & Industry tab: **F&O only** switch (filters to F&O stocks, then recomputes everything with
   `tfSectorIndustry(db, "ALL")` — verified identical to the sheet when unfiltered — and `nrRowsFromFlat`); clicking an
-  industry (bubble or table row) filters the NR table and the stock list. Horizon and Conviction tabs use the shared
+  industry (bubble or table row) filters the NR table and the stock list. The Horizon tab uses the shared
   `StockFilterBar` (F&O · Nifty 500 · sector · industry, `passSF`).
 - **Technicals (Control Tower only, Admin `tech_enabled`)**: `techReadings` classifies each indicator per TF with the
   Admin levels (RSI ≥ bull / ≤ bear, MACD > / <, CCI ≥ / ≤, BB = price outside the bands, Supertrend = price above /
@@ -227,7 +230,9 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   builder. Rules = `{tf, f, op, rhs:"num"|"field", v | rtf+rf}` over close / prev / RSI / ADX / CCI / MACD /
   Supertrend / BB / zone top, top-near, bottom-near, bottom. 10 ready-made algos (`prebuiltAlgos`: per TF bullish =
   close > zone top + RSI/CCI/MACD bull + close > ST + close > BB upper + ADX rule; bearish mirror) built from the Admin
-  levels; operators > ≥ < ≤ = ≠; "Match: all / at least N". Algorithms are **admin-managed and shared**: setting
+  levels; operators > ≥ < ≤ = ≠; AND / OR with brackets: an algorithm has `join` (AND default) and `rules` whose
+  items are conditions or `{group:true, join, rules}` (nesting ≤ 3 levels; `itemText` / `exprText`, `evalItem`;
+  ready-made and older algorithms have no join = all AND); "Match: all|any / at least N" counts top-level items. Algorithms are **admin-managed and shared**: setting
   `algos` (None = the ready-made set), edited in Admin → Algorithms with `AlgoEditor`, validated by `_algos` in
   main.py, delivered to everyone via `/api/view-config`. The Control Tower section is read-only.
 - **Compare tab** (`CompareTab`, server.jsx): mode dropdown Intraday / Day over day / Weekly / Monthly / Custom
@@ -266,10 +271,100 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
 | GET /api/compare?a=&b= | user | per stock: price a→b, move %, bias, signals, new/dropped signals, health |
 | GET/PUT /api/admin/settings, POST /api/admin/import, DELETE /api/admin/snapshots/{id}, GET /api/admin/system | admin | schedule, retention, Telegram toggle, import old xlsx, status |
 
+### Customer edition — "Hyperplane by QuantFriday" at `/app` (owner's request 2026-10-03)
+- **Separate service** `portal` (`backend/app/portal.py`, port 8100, same image) behind Caddy `/app/api/*`. It has NO
+  config.ini / data mount and logs in to Postgres as role `hp_portal` (created by `db._setup_portal_role` from
+  `PORTAL_DB_PASSWORD`): SELECT on `published` + `customers`, INSERT only the sign-up columns (status stays
+  'pending'), UPDATE only the login counters. Verified: it cannot read snapshots/settings, approve itself or delete.
+  Own secret `PORTAL_SECRET_KEY`, cookie `qf_session` (path /app, strict, httponly), 7-day sessions tied to
+  `customers.session_ver` (block / password reset = signed out everywhere).
+- **Brute force:** customer login 10/15 min per IP + 5 wrong passwords → 15 min account lock (in the DB) + 0.6 s delay,
+  constant-time compare, same message for unknown email; sign-up 5/hour per IP and the same answer if the email exists.
+  Admin/user login: 8/5 min per IP + 5 fails → 15 min per-user lock, constant-time compare, SameSite=Strict cookie.
+- **Dashboard lock-down:** Caddy serves `/login.html|.css|.js` (static, no React) and `/app*` publicly; everything else
+  (index.html and the dashboard JS that contains the method) only after `forward_auth` → `GET /api/auth/check` (204),
+  else 302 to /login.html. Logout goes to /login.html.
+- **Customer bundle** = separate Vite build (`vite.app.config.js`, root `frontend/app`, base `/app/`, out `dist/app`);
+  `npm run build` builds both. It must NEVER import `dashboard.jsx` (checked: no formula names in the bundle).
+- **Published view** (`backend/app/publish.py`, table `published`, last 30 kept): per stock `r` = 5 letters D W M Q Y,
+  each G/M/W/"-": score = TF signal net (classify() = Python port of classifySignal, Focus weights, capped ±2) + zone
+  position (above +1, top band +0.5, inside 0, bottom band −0.5, below −1) + technicals × tech_weight when on;
+  G ≥ 0.5, W ≤ −0.5. Overall Strong/Leaning strong/Mixed/Leaning weak/Weak from the counts. Indices/ETFs excluded
+  (same rule + admin lists). Top 10 = no "-", not POOR health, ranked by Σ TF_WEIGHT × (G +1 / W −1). Only
+  `{s,n,sec,ind,cap,p,c,r,o}` + `top` + `as_of` leave the server. `publish_mode` setting: manual (default) | auto
+  (worker publishes after each collection; failures never fail the job). Admin: ⚙ Admin → 👥 Customers
+  (`CustomersTab`): approve / block / expiry / reset / delete / add, publish mode, preview, publish now.
+- Payload v3 also carries per stock `f` (F&O), `sc` = SIGNED strength per TF = round(100·tanh(score/2)) in −100..100
+  (plus = uptrend strength, minus = downtrend strength, |v| < 24 = sideways; same cut as G/W), `os` (TF-weighted signed
+  combined value) and `sectors` / `industries` {A, D..Y}: rows {k, sec, st, nb, n, sig, adv, dec, avg}
+  from `sector_stats` (port of tfSectorIndustry + attachStrength; "All" = the sheets unless technicals are on;
+  Indices and Unknown sectors excluded).
+- Dashboard multi-select bubbles (2026-10-03): `RotationQuadrantChart` takes `selectedKeys` (array → multi-select,
+  `onSelect(key)` and the parent toggles) or legacy `selectedKey`; customer look — selected = white ring + dashed halo,
+  others dimmed to .28, "N selected · click again to clear". Control Tower: `pickSecs` / `pickInds` ("Sector|Industry"
+  keys) — several sectors filter the industry panel; industry bubbles/rows are selectable with one copy for all their
+  stocks. Sector & Industry tab: `selSecs` / `selInds` from bubbles, sector cards, industry rows; detail panel only when
+  exactly one sector is picked. Both: changing sectors drops industries outside them (all when none left).
+- Customer header (2026-10-03): tabs Control Tower | Helpdesk sit in the top bar next to the brand (56 px bar);
+  the filter bar is one line from 1300 px up (`.fbar` nowrap, Sector/Industry `.fg.grow` shrink to fit Reset), wraps
+  below. The Background filter is labelled "Stock reliability" (card: "<x> reliability").
+- Customer "Background" filter (2026-10-03): payload `h` per stock from Price_Health — S = HEALTHY, M = WEAK or
+  unrated (same as the Control Tower quality filter), W = POOR; `null` when the sheet is missing (filter hidden).
+  Filter bar Seg Strong / Moderate / Weak (multi), Reset clears it, stock card shows "<x> background". Verified counts
+  equal the dashboard (Strong 1,405 = Control Tower "Healthy only"). Sector/industry bubbles are not re-filtered by it.
+- Customer stock card (2026-10-03): the three Uptrend/Downtrend/Sideways-on boxes are gone (the per-TF rows show it).
+  Added, all from the published payload only: "Sector & industry strength" table (st % and rank #/of for Combined +
+  D..Y, adv/dec); "Top 5 strongest in <industry>" peers (+ this stock if lower), click opens that peer; its ticker
+  copy is only those 5. ("Where it stands" rank/percentile/strip chart was tried and removed at the owner's request.)
+- Customer page 4th round: normal-font "Hyperplane" brand; one compact filter bar (`.fbar`, Control-Tower style:
+  tiny labels + joined `Seg` button groups — Timeframe Combined·D·W·M·Q·Y, Trend All/Up/Down/Bidirectional, Market cap,
+  Segment F&O, Sector / Industry multi-selects, Reset); ⓘ `Info` popovers on filters, KPIs and panels; "Master data"
+  table with Trend column (`categoryOf`: one TF = its direction; several / Combined = Bidirectional when they
+  disagree, else direction of the average) then Strength % and per-TF %; selected bubble = white ring, others dimmed;
+  removing a sector also clears industries (all when no sector is left); stock card "Uptrend on / Downtrend on /
+  Sideways on" on grey with centred "None". KPIs and the Trend filter use the same `categoryOf` (mutually exclusive).
+- Customer page 3rd round (2026-10-03): Hyperplane dark look (same palette / IBM Plex Mono); trend shown as ▲ 78 / ▼ 64 /
+  ◆ sideways (strength 0–100 inside its direction); Timeframe = Combined + multi-select D..Y chips (several = all must
+  agree for Up/Down, focus value = average); Trend chips All / Uptrend / Downtrend / ⇅ Bidirectional (up on some TFs,
+  down on others — KPI count too); Size chips Large/Mid/Small/Others + F&O; "Ticker copy" header on the table column and
+  the table-level copy; stock card groups Bullish on / Bearish on / Sideways on with strength words.
+- Customer page (owner's 2nd round, 2026-10-03): two-panel sign-in / sign-up (hero + aligned grid form, big terms
+  box); filters on top = Timeframe (All·D·W·M·Q·Y) + Trend (All / Uptrend / Downtrend) + multi-select sector,
+  industry, size (Large/Mid/Small/Others) + F&O; KPI strip; Control-Tower-style Sector strength and Industry
+  momentum panels (bubble ↔ list, x = net bias, y = strength, click = filter); stock checker with search, sort,
+  0–100 scores per TF, copy (plain `A,B,C` / TradingView `NSE:A,`) for the whole table and each row; stock card
+  with score bars. Top 10 removed for now (still in the payload). "Uptrend" = rating G on the chosen TF (or
+  combined `os` ≥ 24 for Combined; ≤ −24 = downtrend). Disclaimer everywhere (owner told to confirm SEBI rules with compliance).
+
+### Helpdesk (2026-10-03) — `backend/app/helpdesk.py` (shared logic) + `frontend/shared/helpdesk.jsx` (shared UI)
+- Customers (/app → 🎧 Helpdesk tab) and dashboard users (🎧 Helpdesk tab) raise queries written like an email: To
+  "QuantFriday Helpdesk", Subject, Severity High/Medium/Low, a contenteditable body where images can be pasted /
+  dropped / inserted (re-drawn on a canvas → PNG/JPEG ≤ 1.1 MB, max 3; any other file is refused), Send. Admins see
+  every query (customers' and users'), reply, close, reopen, delete; owners can close but not reopen. Chat-style
+  thread; admin login IDs are never shown to customers/users ("QuantFriday Helpdesk").
+- Inbox: `hd_tickets.owner_seen_at` / `staff_seen_at`; `GET …/helpdesk/unread` → 🔔 bell (header, both apps) with a
+  dropdown, tab badge and "(n)" in the page title; polled every 30 s while visible; thread every 15 s, list 20 s.
+- Routes: customers `/app/api/helpdesk/*` (portal), users/admins `/api/helpdesk/*` (main): tickets (GET list ?status,
+  POST create), tickets/{id} (GET marks read), …/messages, …/close, …/reopen + DELETE (admin), unread, images/{id}.
+- Storage: `hd_tickets`, `hd_messages` (body = JSONB blocks `{t:text,v}` / `{t:img,id}` / system `{t:event,v}` —
+  never HTML, rendered as text), `hd_images` (bytea, mime from magic bytes PNG/JPEG/WebP, served with nosniff +
+  `CSP: sandbox`). `hp_portal` gets column-level grants + ROW LEVEL SECURITY (`portal_own` policies on all three
+  tables, keyed on `current_setting('hp.cid')` which portal.py sets per transaction) — verified a customer login
+  sees 0 rows of another customer even in raw SQL and cannot write a staff reply.
+- Guard-rails (Burp Intruder / floods), tested: Caddy body cap 8 MB on helpdesk routes, 64 KB on other /app/api
+  routes, server timeouts (read_header 10 s, read_body 120 s, write 180 s, idle 2 m); app Content-Length check (413);
+  in-memory per-IP 120 req/min on every helpdesk route before the session/DB (150-request burst → 64 refused),
+  per-account 10 writes/min, all accounts 300 writes/min, 300 MB images/day per process; DB quotas per account
+  5 new/hour, 20/day, 10 open, 20 msgs/10 min, 300 msgs/query, 30 images/day; 8 000 chars per message.
+- `db.init_db` takes `pg_advisory_xact_lock` (api and worker start together and raced on CREATE TABLE).
+- Admin tab = `AdminArea` with sub-tabs ⚙ System & settings | 👥 Customers (pending-approval badge); the top-level
+  Customers tab is gone. Customer page: tabs 🏛 Control Tower (everything as before) | 🎧 Helpdesk; brand font Oxanium.
+
 ### Database (created by `db.init_db`, no migrations tool — add new tables/columns with IF NOT EXISTS)
 `snapshots` (taken_at, trade_date, slot, source scheduled|manual|import, label, stocks, signals, sheets[], data_gz,
 size_bytes, excel_path) · `snapshot_stocks` (per stock summary, PK snapshot_id+symbol) · `jobs` (queued/running/done/
-failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSONB key/values incl. `worker_heartbeat`).
+failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSONB key/values incl. `worker_heartbeat`) ·
+`customers` · `published` · `hd_tickets` / `hd_messages` / `hd_images` (helpdesk).
 
 ### Settings (Admin tab; defaults in `db.DEFAULT_SETTINGS`)
 schedule_times ["09:45","14:30"] · weekdays_only true · skip_dates [] (NSE holidays) · catch_up_minutes 180 ·

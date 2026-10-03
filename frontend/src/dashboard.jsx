@@ -844,19 +844,17 @@ const TABS = [
   { id:"flat",     label:"🎛 Slicer" },
   { id:"opp",      label:"🎯 Opportunities" },
   { id:"horizon",  label:"⏱ Horizon" },
-  { id:"strong",   label:"💪 Conviction" },
-  { id:"mtnr",     label:"📐 Multi-TF NR" },
-  { id:"virgin",   label:"🔓 Virgin BO/BD" },
   { id:"summary",  label:"📋 Signals" },
   { id:"master",   label:"🗂 Master List" },
 ];
 const TREND_TAB = { id:"trend", label:"📈 Trend & Versions" };
 const NO_INDEX_RULES = { add:[], keep:[] };
 
-export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, headerRight=null, extraTabs=[], emptyState=null, indexRules=NO_INDEX_RULES, tech=null }) {
+export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, headerRight=null, extraTabs=[], emptyState=null, indexRules=NO_INDEX_RULES, tech=null, tabReq=null }) {
   const [activeIdx, setActiveIdx] = useState(Math.max(0, rawVersions.length-1));
   useEffect(() => { setActiveIdx(Math.max(0, rawVersions.length-1)); }, [rawVersions]);
   const [tab, setTab]     = useState("tower");
+  useEffect(() => { if (tabReq) setTab(tabReq.id); }, [tabReq]);
   const [navOpen, setNavOpen] = useState(false);
   const [ctFilters, setCtFilters] = useState(0);
   const [healthAllow, setHealthAllowState] = useState(() => {
@@ -952,9 +950,6 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
           {db && tab==="flat"    && <FlatSlicer     db={db} />}
           {db && tab==="opp"     && <Opportunities  db={db} />}
           {db && tab==="horizon" && <HorizonTab     db={db} horizons={horizons} />}
-          {db && tab==="strong"  && <StrongConviction db={db} />}
-          {db && tab==="mtnr"    && <MTNR           db={db} />}
-          {db && tab==="virgin"  && <Virgin         db={db} />}
           {db && tab==="summary" && <SignalSummary  db={db} />}
           {db && tab==="master"  && <MasterListTab  db={db} />}
           {db && tab==="trend" && hasMultiVersions && <TrendVersionsTab versions={versions} activeIdx={safeActive} onSelectVersion={setActiveIdx} />}
@@ -1449,14 +1444,21 @@ function genInsights(biasCnt, total, db) {
 
 // ─── CONTROL TOWER ────────────────────────────────────────────────────────────
 function ControlTower({ db, techOn=false }) {
-  const [pickSec, setPickSec] = useState(null);
+  // Multi-select sectors → industry panel shows their industries; industries are "Sector|Industry" keys.
+  // Changing sectors drops industries outside them (all of them when no sector is left).
+  const [pickSecs, setPickSecsRaw] = useState([]);
+  const [pickInds, setPickInds] = useState([]);
+  const setPickSecs = next => { setPickSecsRaw(next); setPickInds(p => next.length ? p.filter(k => next.includes(k.split("|")[0])) : []); };
+  const toggleSec = sec => setPickSecs(pickSecs.includes(sec) ? pickSecs.filter(s=>s!==sec) : [...pickSecs, sec]);
+  const toggleInd = key => setPickInds(p => p.includes(key) ? p.filter(k=>k!==key) : [...p, key]);
   const [secTf, setSecTf] = useState("ALL");
   return (
     <div style={{padding:"18px 22px 0"}}>
       <Anchor id="ct-sector"/>
       <EqRow height={440} cols="minmax(0,1fr) minmax(0,1fr)">
-        <SectorLeaderboardPanelV2 db={db} tf={secTf} setTf={setSecTf} selected={pickSec} onSelect={setPickSec} recompute={techOn}/>
-        <IndustryMomentumPanelV2 db={db} tf={secTf} setTf={setSecTf} sector={pickSec} onClearSector={()=>setPickSec(null)} recompute={techOn}/>
+        <SectorLeaderboardPanelV2 db={db} tf={secTf} setTf={setSecTf} selected={pickSecs} onSelect={toggleSec} recompute={techOn}/>
+        <IndustryMomentumPanelV2 db={db} tf={secTf} setTf={setSecTf} sectors={pickSecs} onClearSectors={()=>setPickSecs([])}
+          selected={pickInds} onSelect={toggleInd} onClearSelected={()=>setPickInds([])} recompute={techOn}/>
       </EqRow>
       <Anchor id="ct-alpha"/>
       <div style={{marginBottom:12}}>
@@ -2090,173 +2092,6 @@ function StockFilterBar({ rows, f, setF }) {
 }
 
 // ─── STRONG CONVICTION ────────────────────────────────────────────────────────
-function StrongConviction({ db }) {
-  const [filterType,setFilterType] = useState("ALL");
-  const [sf,setSf] = useState(EMPTY_SF);
-  const [search,setSearch] = useState("");
-  const sorted=useMemo(()=>[...db.strong].sort((a,b)=>+b.Conviction_Score-+a.Conviction_Score),[db.strong]);
-  const base=useMemo(()=>sorted.filter(r=>passSF(r,sf) && (!search || r.Symbol.toLowerCase().includes(search.toLowerCase()))),[sorted,sf,search]);
-  const types=useMemo(()=>{ const t={}; db.strong.forEach(r=>{t[r.Conviction_Type]=0;}); base.forEach(r=>{t[r.Conviction_Type]++;}); return t; },[db.strong,base]);
-  const data=filterType==="ALL"?base:base.filter(r=>r.Conviction_Type===filterType);
-  const maxS=Math.max(...db.strong.map(r=>+r.Conviction_Score),1);
-  const filteredSyms=data.map(r=>r.Symbol);
-
-  return (
-    <div style={{padding:"18px 22px"}}>
-      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:16}}>
-        <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:"1px",fontWeight:600}}>
-          💪 Strong Conviction — {data.length} of {db.strong.length} stocks
-        </div>
-        <StockFilterBar rows={db.strong} f={sf} setF={setSf}/>
-        <input placeholder="Search symbol..." value={search} onChange={e=>setSearch(e.target.value)} style={{background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:6,color:"var(--t1)",fontSize:11.5,padding:"5px 9px",width:150}}/>
-        <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-          <TVCopyBtn symbols={filteredSyms} label={`⎘ Copy ${filteredSyms.length} TV`}/>
-        </div>
-      </div>
-      <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:18}}>
-        {["ALL",...Object.keys(types)].map(t=>(
-          <button key={t} onClick={()=>setFilterType(t)} style={{padding:"5px 11px",borderRadius:6,fontSize:11.5,cursor:"pointer",border:`1px solid ${filterType===t?"var(--acc)":"var(--b2)"}`,background:filterType===t?"var(--adim)":"var(--s2)",color:filterType===t?"var(--acc)":"var(--t2)"}}>
-            {t} <span style={{fontSize:9,background:"var(--s3)",borderRadius:999,padding:"1px 5px",marginLeft:3,color:"var(--t3)"}}>{t==="ALL"?base.length:types[t]}</span>
-          </button>
-        ))}
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
-        {data.map(r=>{
-          const isL=r.Conviction_Type.includes("LONG"), isS=r.Conviction_Type.includes("SHORT");
-          const scoreColor=isL?"var(--long)":isS?"var(--short)":"var(--mixed)";
-          const pct=(+r.Conviction_Score/maxS*100).toFixed(0);
-          return (
-            <div key={r.Symbol} style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:9,padding:"13px 15px",borderLeft:`3px solid ${scoreColor}`}}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}}>
-                <div>
-                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
-                    <SymCell sym={r.Symbol} size={13}/>
-                    <TVCopyBtn symbols={[r.Symbol]} label="TV"/>
-                  </div>
-                  <div style={{fontSize:11,fontWeight:600,color:scoreColor}}>{r.Conviction_Type}</div>
-                  <div style={{marginTop:4}}><SectorChip sector={r.Sector} industry={r.Industry}/></div>
-                </div>
-                <div>
-                  <div style={{fontFamily:"var(--mono)",fontSize:22,fontWeight:700,color:scoreColor,lineHeight:1}}>{r.Conviction_Score}</div>
-                  <div style={{height:3,background:"var(--s3)",borderRadius:2,overflow:"hidden",marginTop:4}}>
-                    <div style={{height:"100%",background:scoreColor,width:pct+"%",borderRadius:2}}/>
-                  </div>
-                </div>
-              </div>
-              <div style={{display:"flex",gap:8,marginBottom:8,fontSize:11,fontFamily:"var(--mono)"}}>
-                {+r.Long_Signals>0&&<span style={{color:"var(--long)"}}>↑{r.Long_Signals} long</span>}
-                {+r.Short_Signals>0&&<span style={{color:"var(--short)"}}>↓{r.Short_Signals} short</span>}
-                {(r.Has_NR_Signal==="True"||r.Has_NR_Signal==="Yes")&&<span style={{color:"var(--acc)"}}>◆NR({r.NR_Signal_Count})</span>}
-              </div>
-              <FlagChips row={r} keys={["Is_FNO","Is_Nifty_500","Is_Nifty_LargeCap_100","Is_Midcap_150"]}/>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ─── MULTI-TF NR ──────────────────────────────────────────────────────────────
-function MTNR({ db }) {
-  const sorted=useMemo(()=>[...db.mtnr].sort((a,b)=>+b.NR_Signal_Count-+a.NR_Signal_Count),[db.mtnr]);
-  const by4=sorted.filter(r=>+r.Timeframe_Count>=4).length;
-  const allSyms=sorted.map(r=>r.Symbol);
-
-  return (
-    <div style={{padding:"18px 22px"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
-        <div style={{fontSize:20,fontWeight:700,color:"var(--t1)"}}>📐 Multi-Timeframe NR Alignment</div>
-        <TVCopyBtn symbols={allSyms} label={`⎘ Copy All ${allSyms.length} TV`}/>
-      </div>
-      <div style={{fontSize:13,color:"var(--t2)",marginBottom:16}}>{db.mtnr.length} stocks with NR patterns across multiple timeframes</div>
-      <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderLeft:"3px solid var(--acc)",borderRadius:10,padding:"14px 18px",marginBottom:16}}>
-        <div style={{fontSize:12.5,fontWeight:600,color:"var(--t1)",marginBottom:6}}>💡 Why Multi-TF NR matters</div>
-        <div style={{fontSize:12.5,color:"var(--t2)",lineHeight:1.7}}>When a stock shows Narrow Range patterns across Daily+Weekly+Monthly+Quarterly simultaneously, it signals extreme coiling. <strong style={{color:"var(--acc)"}}>{by4} stocks have 4-timeframe alignment</strong> — the highest-conviction NR setup.</div>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
-        {[{v:db.mtnr.length,l:"Multi-TF Stocks",c:"var(--t1)"},{v:by4,l:"4-TF Aligned",c:"var(--long)"},{v:sorted.filter(r=>+r.Timeframe_Count===3).length,l:"3-TF Aligned",c:"var(--mixed)"},{v:Math.max(...db.mtnr.map(r=>+r.NR_Signal_Count),0),l:"Max NR Signals",c:"var(--acc)"}].map(({v,l,c})=>(
-          <div key={l} style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:9,padding:"14px 16px"}}>
-            <div style={{fontFamily:"var(--mono)",fontSize:24,fontWeight:700,color:c,lineHeight:1}}>{v}</div>
-            <div style={{fontSize:11,color:"var(--t2)",marginTop:4}}>{l}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
-        <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
-            <thead><tr>{["#","Symbol","TV","Sector","NR Count","Timeframes","TF Count","NR Signals","Flags"].map(h=><th key={h} style={{background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"9px 14px",fontSize:9.5,fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",color:"var(--t3)",textAlign:"left",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-            <tbody>
-              {sorted.slice(0,150).map((r,i)=>{
-                const tfc=+r.Timeframe_Count, c=tfc>=4?"var(--long)":tfc>=3?"var(--mixed)":"var(--t1)";
-                return (
-                  <tr key={r.Symbol} style={{borderBottom:"1px solid var(--b1)"}}>
-                    <td style={{padding:"7px 14px",color:"var(--t3)",fontFamily:"var(--mono)"}}>{i+1}</td>
-                    <td style={{padding:"7px 14px"}}><SymCell sym={r.Symbol}/></td>
-                    <td style={{padding:"7px 14px"}}><TVCopyBtn symbols={[r.Symbol]} label="TV"/></td>
-                    <td style={{padding:"7px 14px"}}><SectorChip sector={r.Sector} industry={r.Industry}/></td>
-                    <td style={{padding:"7px 14px",fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:c}}>{r.NR_Signal_Count}</td>
-                    <td style={{padding:"7px 14px",fontSize:11,color:"var(--t2)"}}>{r.Timeframes}</td>
-                    <td style={{padding:"7px 14px"}}><span style={{padding:"2px 8px",borderRadius:4,background:`${c}18`,color:c,fontSize:11,fontFamily:"var(--mono)",border:`1px solid ${c}40`}}>{tfc} TF</span></td>
-                    <td style={{padding:"7px 14px",fontSize:10,color:"var(--t2)",maxWidth:250,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.NR_Signals}>{r.NR_Signals}</td>
-                    <td style={{padding:"7px 14px"}}>
-                      {r.Is_FNO==="Yes"&&<span style={{background:"var(--longd)",color:"var(--long)",fontSize:9,padding:"1px 5px",borderRadius:3,marginRight:3}}>FNO</span>}
-                      {r.Is_Nifty_500==="Yes"&&<span style={{background:"var(--adim)",color:"var(--acc)",fontSize:9,padding:"1px 5px",borderRadius:3}}>N500</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── VIRGIN BO/BD ─────────────────────────────────────────────────────────────
-function Virgin({ db }) {
-  const bouts  = useMemo(()=>[...db.virgin].filter(r=>r.Virgin_Type.toLowerCase().includes("breakout")).sort((a,b)=>+b.Virgin_Signal_Count-+a.Virgin_Signal_Count),[db.virgin]);
-  const bdowns = useMemo(()=>[...db.virgin].filter(r=>r.Virgin_Type.toLowerCase().includes("breakdown")).sort((a,b)=>+b.Virgin_Signal_Count-+a.Virgin_Signal_Count),[db.virgin]);
-
-  const Table=({title,data,color})=>(
-    <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
-      <div style={{padding:"11px 15px",borderBottom:"1px solid var(--b1)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{fontSize:12.5,fontWeight:600,color}}>{title} ({data.length})</div>
-        <TVCopyBtn symbols={data.map(r=>r.Symbol)} label={`⎘ Copy TV`}/>
-      </div>
-      <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
-        <thead><tr>{["Symbol","TV","Sector","Signals","Timeframes","Has NR"].map(h=><th key={h} style={{background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"7px 14px",fontSize:9.5,fontWeight:600,textTransform:"uppercase",letterSpacing:".6px",color:"var(--t3)",textAlign:"left"}}>{h}</th>)}</tr></thead>
-        <tbody>{data.map(r=>(
-          <tr key={r.Symbol} style={{borderBottom:"1px solid var(--b1)"}}>
-            <td style={{padding:"7px 14px"}}><SymCell sym={r.Symbol}/></td>
-            <td style={{padding:"7px 14px"}}><TVCopyBtn symbols={[r.Symbol]} label="TV"/></td>
-            <td style={{padding:"7px 14px"}}><SectorChip sector={r.Sector} industry={r.Industry}/></td>
-            <td style={{padding:"7px 14px",fontFamily:"var(--mono)",fontWeight:700,color}}>{r.Virgin_Signal_Count}</td>
-            <td style={{padding:"7px 14px",fontSize:11,color:"var(--t2)"}}>{r.Timeframes}</td>
-            <td style={{padding:"7px 14px"}}>{(r.Has_NR_Signal==="True"||r.Has_NR_Signal==="Yes")?<span style={{background:"var(--longd)",color:"var(--long)",fontSize:9.5,padding:"2px 6px",borderRadius:4}}>Yes</span>:<span style={{background:"var(--s3)",color:"var(--t3)",fontSize:9.5,padding:"2px 6px",borderRadius:4}}>No</span>}</td>
-          </tr>
-        ))}</tbody>
-      </table>
-    </div>
-  );
-
-  return (
-    <div style={{padding:"18px 22px"}}>
-      <div style={{fontSize:20,fontWeight:700,color:"var(--t1)",marginBottom:4}}>🔓 Virgin Breakout / Breakdown</div>
-      <div style={{fontSize:13,color:"var(--t2)",marginBottom:16}}>{db.virgin.length} stocks entering uncharted territory</div>
-      <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 18px",marginBottom:16}}>
-        <div style={{fontSize:12.5,fontWeight:600,color:"var(--t1)",marginBottom:6}}>🔬 Virgin Pattern Explained</div>
-        <div style={{fontSize:12.5,color:"var(--t2)",lineHeight:1.7}}><strong style={{color:"var(--long)"}}>Virgin Breakout</strong>: First-ever close above a zone — no prior test, no overhead resistance. <strong style={{color:"var(--short)"}}>Virgin Breakdown</strong>: First-ever close below a support zone. Highest-probability moves.</div>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        <Table title="↑ Virgin Breakouts"  data={bouts}  color="var(--long)"/>
-        <Table title="↓ Virgin Breakdowns" data={bdowns} color="var(--short)"/>
-      </div>
-    </div>
-  );
-}
-
 // ─── SIGNAL SUMMARY ───────────────────────────────────────────────────────────
 function SignalSummary({ db }) {
   const [filterType,setFilterType] = useState("ALL");
@@ -2369,8 +2204,12 @@ function resolveBubbleCollisions(nodes, iterations=60, padding=2) {
 }
 
 // items: [{ key, label, x (net bias), y (strength 0-100), size (weight), color, tooltip }]
-function RotationQuadrantChart({ items, onSelect, selectedKey, height=380, xAxisLabel="Net Bias Score  (bearish ← 0 → bullish)", yAxisLabel="Strength Score", quadrantLabels=true, emptyLabel="No data", quadrantTexts=null }) {
+// selectedKeys (array) = multi-select: onSelect(key) gets the clicked key and the parent toggles it.
+// selectedKey (single, legacy) = onSelect(key | null).
+function RotationQuadrantChart({ items, onSelect, selectedKey, selectedKeys, height=380, xAxisLabel="Net Bias Score  (bearish ← 0 → bullish)", yAxisLabel="Strength Score", quadrantLabels=true, emptyLabel="No data", quadrantTexts=null }) {
   const [hoverKey, setHoverKey] = useState(null);
+  const multi = Array.isArray(selectedKeys);
+  const sel = multi ? selectedKeys : (selectedKey ? [selectedKey] : []);
   const w=680, h=height, pad={l:52,r:24,t:20,b:44};
   if (!items.length) return <div style={{padding:"30px 0",textAlign:"center",color:"var(--t3)",fontSize:12}}>{emptyLabel}</div>;
   const xs = items.map(s=>s.x);
@@ -2417,20 +2256,23 @@ function RotationQuadrantChart({ items, onSelect, selectedKey, height=380, xAxis
         </>;
       })()}
       {ordered.map(n=>{
-        const active = selectedKey===n.key;
+        const active = sel.includes(n.key);
         const hovered = hoverKey===n.key;
+        const dim = sel.length>0 && !active && !hovered;
         const r = hovered ? n.r+3 : n.r;
         return (
           <g key={n.key} className="quad-bubble"
-             onClick={()=>onSelect&&onSelect(active?null:n.key)}
+             onClick={()=>onSelect&&onSelect(multi ? n.key : (active?null:n.key))}
              onMouseEnter={()=>setHoverKey(n.key)} onMouseLeave={()=>setHoverKey(k=>k===n.key?null:k)}
-             style={{cursor:onSelect?"pointer":"default"}}>
-            <circle cx={n.x} cy={n.y} r={r} fill={n.color} fillOpacity={active?0.55:0.26} stroke={n.color} strokeWidth={active?2.5:1.4}/>
-            <text x={n.x} y={n.y+3} textAnchor="middle" fontSize="7.5" fill={n.color} fontFamily="IBM Plex Mono" fontWeight="700" style={{pointerEvents:"none"}}>{n.label.length>11?n.label.slice(0,10)+"…":n.label}</text>
+             style={{cursor:onSelect?"pointer":"default",opacity:dim?0.28:1,transition:"opacity .15s"}}>
+            {active && <circle cx={n.x} cy={n.y} r={r+5} fill="none" stroke={n.color} strokeOpacity=".45" strokeWidth="1" strokeDasharray="3 3"/>}
+            <circle cx={n.x} cy={n.y} r={r} fill={n.color} fillOpacity={active?0.6:0.22} stroke={active?"#fff":n.color} strokeWidth={active?2:1.4}/>
+            <text x={n.x} y={n.y+3} textAnchor="middle" fontSize="7.5" fill={active?"#fff":n.color} fontFamily="IBM Plex Mono" fontWeight="700" style={{pointerEvents:"none"}}>{n.label.length>11?n.label.slice(0,10)+"…":n.label}</text>
             <title>{n.tooltip}</title>
           </g>
         );
       })}
+      {onSelect && sel.length>0 && <text x={w-pad.r} y={h-6} textAnchor="end" fontSize="9" fill="var(--t2)">{sel.length} selected · click again to clear</text>}
     </svg>
   );
 }
@@ -2451,10 +2293,17 @@ function SectorIndustryTab({ db: rawDb }) {
     : baseDb.nrSectorIndustry.filter(r => classifySignal({ Signal_Name:r.NR_Signal, Signal_Category:"NR_PATTERN", Signal_Type:r.Pattern_Type, Timeframe:"" }).tf===tf),
     [baseDb.nrSectorIndustry, tf]);
   const db = { ...baseDb, ...tfd, nrSectorIndustry: nrTf };
-  const [selSector, setSelSectorRaw] = useState(null);
-  const [selIndustry, setSelIndustry] = useState(null);
-  const setSelSector = sec => { setSelSectorRaw(sec); setSelIndustry(null); };
-  const pickIndustry = (sec, ind) => { if (selIndustry===ind && selSector===sec) { setSelIndustry(null); return; } setSelSectorRaw(sec); setSelIndustry(ind); };
+  // Multi-select: sectors by name, industries by "Sector|Industry" key.
+  // Changing sectors drops industries outside them (all of them when no sector is left).
+  const [selSecs, setSelSecsRaw] = useState([]);
+  const [selInds, setSelInds] = useState([]);
+  const setSelSecs = next => { setSelSecsRaw(next); setSelInds(p => next.length ? p.filter(k => next.includes(k.split("|")[0])) : []); };
+  const toggleSector = sec => setSelSecs(selSecs.includes(sec) ? selSecs.filter(s=>s!==sec) : [...selSecs, sec]);
+  const toggleIndustry = key => setSelInds(p => p.includes(key) ? p.filter(k=>k!==key) : [...p, key]);
+  const inSel = r => (!selSecs.length || selSecs.includes(r.Sector)) && (!selInds.length || selInds.includes(r.Sector+"|"+r.Industry));
+  const selSector = selSecs.length===1 ? selSecs[0] : null;
+  const secLabel = selSecs.length===1 ? selSecs[0] : `${selSecs.length} sectors`;
+  const indLabel = selInds.length===1 ? selInds[0].split("|")[1] : `${selInds.length} industries`;
   const [indSearch, setIndSearch] = useState("");
   const [indSort, setIndSort] = useState({ col:"Strength_Score", dir:-1 });
   const [nrPattern, setNrPattern] = useState("ALL");
@@ -2466,7 +2315,7 @@ function SectorIndustryTab({ db: rawDb }) {
 
   const industries = useMemo(()=>{
     let out = db.industryAnalysis;
-    if(selSector) out = out.filter(r=>r.Sector===selSector);
+    if(selSecs.length) out = out.filter(r=>selSecs.includes(r.Sector));
     if(indSearch){ const q=indSearch.toLowerCase(); out = out.filter(r=>r.Industry.toLowerCase().includes(q)); }
     out = [...out].sort((a,b)=>{
       const av=a[indSort.col], bv=b[indSort.col];
@@ -2474,22 +2323,20 @@ function SectorIndustryTab({ db: rawDb }) {
       return String(av).localeCompare(String(bv))*indSort.dir;
     });
     return out;
-  },[db.industryAnalysis,selSector,indSearch,indSort]);
+  },[db.industryAnalysis,selSecs,indSearch,indSort]);
 
   const nrRows = useMemo(()=>{
-    let out = db.nrSectorIndustry;
-    if(selSector) out = out.filter(r=>r.Sector===selSector);
-    if(selIndustry) out = out.filter(r=>r.Industry===selIndustry);
+    let out = db.nrSectorIndustry.filter(inSel);
     if(nrPattern!=="ALL") out = out.filter(r=>r.Pattern_Type===nrPattern);
     return [...out].sort((a,b)=>b.Stock_Count-a.Stock_Count).slice(0,120);
-  },[db.nrSectorIndustry,selSector,selIndustry,nrPattern]);
+  },[db.nrSectorIndustry,selSecs,selInds,nrPattern]);
 
   const nrPatternTotals = useMemo(()=>{
-    const base = db.nrSectorIndustry.filter(r=>(!selSector||r.Sector===selSector) && (!selIndustry||r.Industry===selIndustry));
+    const base = db.nrSectorIndustry.filter(inSel);
     const m={};
     base.forEach(r=>{ m[r.Pattern_Type]=(m[r.Pattern_Type]||0)+r.Stock_Count; });
     return m;
-  },[db.nrSectorIndustry,selSector,selIndustry]);
+  },[db.nrSectorIndustry,selSecs,selInds]);
 
   const flatBySym = useMemo(()=>{
     const m={};
@@ -2498,15 +2345,13 @@ function SectorIndustryTab({ db: rawDb }) {
   },[db.flat]);
 
   const stockRows = useMemo(()=>{
-    let out = db.master;
-    if(selSector) out = out.filter(r=>r.Sector===selSector);
-    if(selIndustry) out = out.filter(r=>r.Industry===selIndustry);
+    let out = db.master.filter(inSel);
     if(stockSearch){ const q=stockSearch.toLowerCase(); out = out.filter(r=>r.Symbol.toLowerCase().includes(q)||r.Stock_Name.toLowerCase().includes(q)); }
     return [...out].sort((a,b)=>{
       const ca=(flatBySym[a.Symbol]||{}).count||0, cb=(flatBySym[b.Symbol]||{}).count||0;
       return cb-ca;
     });
-  },[db.master,selSector,selIndustry,stockSearch,flatBySym]);
+  },[db.master,selSecs,selInds,stockSearch,flatBySym]);
 
   const patternTypes = ["ALL","Breakout","Breakdown","Near High","Near Low","Back to NR"];
   const patternColor = { Breakout:"var(--long)", Breakdown:"var(--short)", "Near High":"var(--acc)", "Near Low":"var(--mixed)", "Back to NR":"var(--ret)" };
@@ -2560,25 +2405,31 @@ function SectorIndustryTab({ db: rawDb }) {
         <RotationQuadrantChart
           items={sectors.map(s=>({ key:s.Sector, label:s.Sector, x:s.Net_Bias_Score, y:s.Strength_Score, size:s.Total_Stocks, color:sectorColor(s.Sector),
             tooltip:`${s.Sector}: strength ${s.Strength_Score.toFixed(1)}, net bias ${s.Net_Bias_Score}, ${s.Total_Stocks} stocks, ${s.Advancing} advancing / ${s.Declining} declining` }))}
-          onSelect={setSelSector} selectedKey={selSector}
+          onSelect={toggleSector} selectedKeys={selSecs}
         />
       </div>
 
       {/* Sector Grid */}
       <div style={{marginBottom:8,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
         <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:"1px",fontWeight:600}}>Sectors — click a card to filter industries, NR patterns &amp; stocks below</div>
-        {selSector && <button onClick={()=>setSelSector(null)} style={{background:"var(--s2)",border:`1px solid ${sectorColor(selSector)}`,color:sectorColor(selSector),padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ Clear: {selSector}</button>}
-        {selIndustry && <button onClick={()=>setSelIndustry(null)} style={{background:"var(--s2)",border:"1px solid var(--acc)",color:"var(--acc)",padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ Industry: {selIndustry}</button>}
+        {selSecs.map(sec=>(
+          <button key={sec} onClick={()=>toggleSector(sec)} style={{background:"var(--s2)",border:`1px solid ${sectorColor(sec)}`,color:sectorColor(sec),padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ {sec}</button>
+        ))}
+        {selInds.map(k=>(
+          <button key={k} onClick={()=>toggleIndustry(k)} style={{background:"var(--s2)",border:"1px solid var(--acc)",color:"var(--acc)",padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ {k.split("|")[1]}</button>
+        ))}
+        {selSecs.length+selInds.length>1 && <button onClick={()=>setSelSecs([])} style={{background:"transparent",border:"1px solid var(--b2)",color:"var(--t2)",padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>Clear all</button>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:8,marginBottom:20}}>
         {sectors.map(s=>{
-          const active = selSector===s.Sector;
+          const active = selSecs.includes(s.Sector);
           const col = sectorColor(s.Sector);
           return (
-            <div key={s.Sector} className="sector-card" onClick={()=>setSelSector(active?null:s.Sector)} style={{
+            <div key={s.Sector} className="sector-card" onClick={()=>toggleSector(s.Sector)} style={{
               background:"var(--s1)", border:`1px solid ${active?col:"var(--b1)"}`, borderLeft:`3px solid ${col}`,
               borderRadius:9, padding:"11px 13px", cursor:"pointer",
               boxShadow: active?`0 0 0 1px ${col}`:"none",
+              opacity: selSecs.length && !active ? 0.55 : 1, transition:"opacity .15s",
             }}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6,gap:6}}>
                 <div style={{fontSize:12,fontWeight:700,color:"var(--t1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.Sector}</div>
@@ -2651,20 +2502,20 @@ function SectorIndustryTab({ db: rawDb }) {
         </div>
       )}
 
-      {/* Industry Rotation Quadrant — bullish vs bearish industries within selected sector */}
-      {selSectorData && (()=>{
-        const indItems = db.industryAnalysis.filter(r=>r.Sector===selSector).map(r=>({
-          key:r.Industry, label:r.Industry, x:r.Net_Bias_Score, y:r.Strength_Score, size:r.Total_Stocks, color:sectorColor(r.Industry),
+      {/* Industry Rotation Quadrant — bullish vs bearish industries within the selected sectors */}
+      {selSecs.length>0 && (()=>{
+        const indItems = db.industryAnalysis.filter(r=>selSecs.includes(r.Sector)).map(r=>({
+          key:r.Sector+"|"+r.Industry, label:r.Industry, x:r.Net_Bias_Score, y:r.Strength_Score, size:r.Total_Stocks, color:sectorColor(r.Industry),
           tooltip:`${r.Industry}: strength ${r.Strength_Score.toFixed(1)}, net bias ${r.Net_Bias_Score}, ${r.Total_Stocks} stocks, ${r.Advancing} advancing / ${r.Declining} declining`,
         }));
         return (
           <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"16px 18px",marginBottom:18}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
-              <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>🧭 Industry Rotation within {selSector}</div>
-              <div style={{fontSize:10,color:"var(--t3)"}}>bubble size = stock count · <strong>click a bubble</strong> to filter the NR table and stock list below</div>
+              <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>🧭 Industry Rotation within {selSecs.join(", ")}</div>
+              <div style={{fontSize:10,color:"var(--t3)"}}>bubble size = stock count · <strong>click bubbles</strong> to filter the NR table and stock list below</div>
             </div>
-            <RotationQuadrantChart items={indItems} height={340} emptyLabel={`No industry-level data for ${selSector}`}
-              onSelect={k=>k ? pickIndustry(selSector,k) : setSelIndustry(null)} selectedKey={selIndustry}/>
+            <RotationQuadrantChart items={indItems} height={340} emptyLabel={`No industry-level data for ${secLabel}`}
+              onSelect={toggleIndustry} selectedKeys={selInds}/>
           </div>
         );
       })()}
@@ -2673,7 +2524,7 @@ function SectorIndustryTab({ db: rawDb }) {
       <div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr",gap:14,marginBottom:18,alignItems:"start"}}>
         <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
           <div style={{padding:"10px 14px",borderBottom:"1px solid var(--b1)",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",flex:1}}>Industries {selSector?`in ${selSector}`:""} ({industries.length}) <span style={{fontSize:10,fontWeight:400,color:"var(--t3)"}}>· click a row to filter the stocks</span></div>
+            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",flex:1}}>Industries {selSecs.length?`in ${secLabel}`:""} ({industries.length}) <span style={{fontSize:10,fontWeight:400,color:"var(--t3)"}}>· click rows to filter the stocks</span></div>
             <input value={indSearch} onChange={e=>setIndSearch(e.target.value)} placeholder="Search industry..." style={{background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:6,color:"var(--t1)",fontSize:11,padding:"4px 9px",width:160}}/>
           </div>
           <div style={{maxHeight:440,overflowY:"auto"}} className="tower-scroll">
@@ -2688,9 +2539,10 @@ function SectorIndustryTab({ db: rawDb }) {
               <tbody>
                 {industries.slice(0,120).map((r,i)=>{
                   const c = sectorColor(r.Sector);
+                  const key = r.Sector+"|"+r.Industry;
                   return (
-                    <tr key={r.Sector+r.Industry+i} className="sec-row" onClick={()=>pickIndustry(r.Sector,r.Industry)} style={{borderBottom:"1px solid var(--b1)",cursor:"pointer",background:selIndustry===r.Industry&&selSector===r.Sector?"var(--adim)":"transparent"}}>
-                      <td style={{padding:"6px 10px",color:"var(--t1)",maxWidth:190,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.Industry}>{r.Industry}{!selSector&&<div style={{fontSize:8.5,color:c}}>{r.Sector}</div>}</td>
+                    <tr key={key+i} className="sec-row" onClick={()=>toggleIndustry(key)} style={{borderBottom:"1px solid var(--b1)",cursor:"pointer",background:selInds.includes(key)?"var(--adim)":"transparent"}}>
+                      <td style={{padding:"6px 10px",color:"var(--t1)",maxWidth:190,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.Industry}>{selInds.includes(key)&&<span style={{color:"var(--acc)",marginRight:4}}>✓</span>}{r.Industry}{!selSector&&<div style={{fontSize:8.5,color:c}}>{r.Sector}</div>}</td>
                       <td style={{padding:"6px 10px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{r.Total_Stocks}</td>
                       <td style={{padding:"6px 10px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{r.Advance_Decline_Ratio}</td>
                       <td style={{padding:"6px 10px",fontFamily:"var(--mono)",color:"var(--long)"}}>{r.Bullish_Score}</td>
@@ -2709,7 +2561,7 @@ function SectorIndustryTab({ db: rawDb }) {
 
         <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
           <div style={{padding:"10px 14px",borderBottom:"1px solid var(--b1)"}}>
-            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",marginBottom:8}}>NR Pattern Distribution {selIndustry?`— ${selIndustry}`:selSector?`— ${selSector}`:""}</div>
+            <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)",marginBottom:8}}>NR Pattern Distribution {selInds.length?`— ${indLabel}`:selSecs.length?`— ${secLabel}`:""}</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}}>
               {patternTypes.map(p=>(
                 <button key={p} onClick={()=>setNrPattern(p)} style={{padding:"3px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer",border:`1px solid ${nrPattern===p?(patternColor[p]||"var(--acc)"):"var(--b2)"}`,background:nrPattern===p?"var(--adim)":"var(--s2)",color:nrPattern===p?(patternColor[p]||"var(--acc)"):"var(--t2)"}}>{p}</button>
@@ -2747,8 +2599,8 @@ function SectorIndustryTab({ db: rawDb }) {
       {/* Stock browser */}
       <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,overflow:"hidden"}}>
         <div style={{padding:"10px 14px",borderBottom:"1px solid var(--b1)",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-          <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>Stocks {selIndustry?`in ${selIndustry}`:selSector?`in ${selSector}`:"— All Sectors"}{fnoOnly?" · F&O":""} ({stockRows.length.toLocaleString()})</div>
-          {selIndustry && <button onClick={()=>setSelIndustry(null)} style={{background:"var(--s2)",border:"1px solid var(--acc)",color:"var(--acc)",padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ {selIndustry}</button>}
+          <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>Stocks {selInds.length?`in ${indLabel}`:selSecs.length?`in ${secLabel}`:"— All Sectors"}{fnoOnly?" · F&O":""} ({stockRows.length.toLocaleString()})</div>
+          {selInds.length>0 && <button onClick={()=>setSelInds([])} style={{background:"var(--s2)",border:"1px solid var(--acc)",color:"var(--acc)",padding:"2px 9px",borderRadius:5,fontSize:10.5,cursor:"pointer"}}>✕ {indLabel}</button>}
           <input value={stockSearch} onChange={e=>setStockSearch(e.target.value)} placeholder="Search symbol or name..." style={{background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:6,color:"var(--t1)",fontSize:11,padding:"4px 9px",width:200}}/>
           <TVCopyBtn symbols={stockRows.slice(0,500).map(r=>r.Symbol)} label={`⎘ Copy ${Math.min(stockRows.length,500)} TV`}/>
         </div>
@@ -5093,6 +4945,10 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
       {/* Navigator */}
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
         {extra && <div className="version-chip" onClick={()=>{const el=document.getElementById("ct-trap"); if(el) el.scrollIntoView({behavior:"smooth",block:"start"});}} title="Failed NR breakout / breakdown, price back at the other mother edge" style={{cursor:"pointer",display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:8,background:"var(--s1)",border:"1px solid var(--accborder)"}}><span>🪤</span><span style={{fontSize:11,fontWeight:600,color:"var(--t1)"}}>NR Trap</span></div>}
+        {(()=>{ const n = list.filter(s=>s.mtnr).length; return (
+          <div className="version-chip" onClick={()=>jump("mtnr")} title="Narrow Range on several timeframes at once" style={{cursor:"pointer",display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:8,background:"var(--s1)",border:"1px solid var(--b1)",opacity:n?1:.5}}>
+            <span>📐</span><span style={{fontSize:11,fontWeight:600,color:"var(--t1)"}}>Multi-TF NR</span><span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--acc)"}}>{n}</span>
+          </div>); })()}
         {SETUP_DEFS.map(d=>{
           const rows = bySetup[d.id], nL = rows.filter(r=>r.e.dir>0).length, nS = rows.length-nL;
           return (
@@ -5159,8 +5015,62 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
       <Anchor id="ct-setupcards"/>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(460px,1fr))",gap:12}}>
         {SETUP_DEFS.map(d=><SetupCard key={d.id} def={d} rows={bySetup[d.id]} open={open}/>)}
+        <MTNRCard list={list} open={open}/>
       </div>
       {extra && <div style={{marginTop:14}}>{extra}</div>}
+    </div>
+  );
+}
+
+// Multi-timeframe NR (was its own tab): stocks coiling in a narrow range on several timeframes at once.
+// Uses the Control Tower's filtered list, so the side-nav filters (quality, F&O, sector…) apply here too.
+function MTNRCard({ list, open }) {
+  const [minTf, setMinTf] = useState(2);
+  const [fno, setFno] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const rows = useMemo(()=>list.filter(s=>s.mtnr).map(s=>({ s, tfc:+s.mtnr.Timeframe_Count||0, n:+s.mtnr.NR_Signal_Count||0, tfs:s.mtnr.Timeframes||"" }))
+    .sort((a,b)=>b.tfc-a.tfc || b.n-a.n || b.s.score-a.s.score),[list]);
+  const base = rows.filter(r=>!fno || r.s.isFNO);
+  const shown = base.filter(r=>r.tfc>=minTf);
+  const vis = showAll ? shown : shown.slice(0,12);
+  const tabBtn = (k,l,c) => <div key={k} onClick={()=>setMinTf(k)} style={{padding:"2px 8px",borderRadius:5,fontSize:10,cursor:"pointer",fontWeight:600,border:`1px solid ${minTf===k?c:"var(--b2)"}`,color:minTf===k?c:"var(--t2)",background:minTf===k?"var(--adim)":"var(--s2)"}}>{l}</div>;
+  return (
+    <div id="setup-mtnr" style={{scrollMarginTop:120,display:"flex"}}>
+      <FocusCard icon="📐" title="Multi-TF NR — coiling on several timeframes" style={{flex:1}}
+        sub="Narrow Range patterns on 2+ timeframes at the same time. More timeframes = more stored energy; 4-TF alignment is the strongest."
+        learn={<>When a stock is in a Narrow Range on Daily + Weekly + Monthly (+ Quarterly) together, volatility is compressed on every horizon. These are <strong>alert</strong> candidates: the break of the range usually decides the next big move. Use the NR Breakout · Breakdown list to see which ones have already broken.</>}
+        right={<ListCopy symbols={shown.map(r=>r.s.symbol)}/>}>
+        <div style={{display:"flex",gap:4,marginBottom:6,alignItems:"center",flexWrap:"wrap"}}>
+          {tabBtn(2,`2+ TF · ${base.filter(r=>r.tfc>=2).length}`,"var(--acc)")}{tabBtn(3,`3+ TF · ${base.filter(r=>r.tfc>=3).length}`,"var(--mixed)")}{tabBtn(4,`4+ TF · ${base.filter(r=>r.tfc>=4).length}`,"var(--long)")}
+          <span style={{width:1,height:16,background:"var(--b2)",margin:"0 2px"}}/>
+          <Pill active={fno} color="var(--long)" onClick={()=>setFno(v=>!v)}>{fno?"✓ ":""}F&amp;O only</Pill>
+        </div>
+        <div style={{maxHeight:330,overflowY:"auto"}} className="tower-scroll">
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead><tr>{["","Symbol","TFs","NR","Timeframes","Bias"].map(h=><th key={h} style={{position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"5px 6px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",zIndex:1}}>{h}</th>)}</tr></thead>
+            <tbody>
+              {vis.map((r,i)=>{
+                const c = r.tfc>=4?"var(--long)":r.tfc>=3?"var(--mixed)":"var(--acc)";
+                return (
+                  <tr key={r.s.symbol} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
+                    <td style={{padding:"5px 4px",fontFamily:"var(--mono)",color:"var(--t3)"}}>{i+1}</td>
+                    <td style={{padding:"5px 6px",whiteSpace:"nowrap"}}>
+                      <FocusSym sym={r.s.symbol} onOpen={open}/>
+                      <div style={{fontSize:8.5,color:sectorColor(r.s.sector),maxWidth:110,overflow:"hidden",textOverflow:"ellipsis"}}>{r.s.sector}</div>
+                    </td>
+                    <td style={{padding:"5px 6px"}}><span style={{padding:"1px 7px",borderRadius:4,background:"var(--s2)",color:c,fontSize:10.5,fontFamily:"var(--mono)",fontWeight:700,border:`1px solid ${c}`}}>{r.tfc} TF</span></td>
+                    <td style={{padding:"5px 6px",fontFamily:"var(--mono)",fontWeight:700,color:c}}>{r.n}</td>
+                    <td style={{padding:"5px 6px",fontSize:10,color:"var(--t2)",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.s.mtnr.NR_Signals||r.tfs}>{r.tfs}</td>
+                    <td style={{padding:"5px 6px"}}>{biasBadge(r.s.dir,true)}</td>
+                  </tr>
+                );
+              })}
+              {!vis.length && <tr><td colSpan={6} style={{padding:14,color:"var(--t3)",textAlign:"center"}}>No stock is coiling on {minTf}+ timeframes with these filters.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        {shown.length>12 && <button onClick={()=>setShowAll(v=>!v)} style={{marginTop:6,fontSize:10.5,color:"var(--acc)",alignSelf:"flex-start"}}>{showAll?"Show top 12":`Show all ${shown.length}`}</button>}
+      </FocusCard>
     </div>
   );
 }
@@ -5327,7 +5237,8 @@ function TfPicker({ value, onChange }) {
 }
 
 // ─── SECTOR / INDUSTRY with list ↔ bubble toggle ──────────────────────────────
-function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, selected=null, onSelect=null, recompute=false }) {
+// selected = array of sector names; onSelect(sector) toggles one (parent owns the list).
+function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, selected=[], onSelect=null, recompute=false }) {
   const [view, setView] = useState("bubble");
   const [tfLocal, setTfLocal] = useState("ALL");
   const tf = tfIn || tfLocal, setTf = setTfIn || setTfLocal;
@@ -5336,23 +5247,23 @@ function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, select
   const sectors = useMemo(()=>[...tfd.sectorAnalysis].sort((a,b)=>b.Strength_Score-a.Strength_Score),[tfd.sectorAnalysis]);
   const top10 = sectors.slice(0,10);
   const maxScore = Math.max(...top10.map(s=>s.Strength_Score),1);
-  const copySec = selected || top10[0]?.Sector;
-  const topSyms = useMemo(()=> copySec ? db.master.filter(m=>m.Sector===copySec).map(m=>m.Symbol) : [], [copySec, db.master]);
-  const pick = sec => onSelect && onSelect(selected===sec ? null : sec);
+  const copySecs = selected.length ? selected : (top10[0] ? [top10[0].Sector] : []);
+  const topSyms = useMemo(()=> db.master.filter(m=>copySecs.includes(m.Sector)).map(m=>m.Symbol), [copySecs.join("|"), db.master]);
+  const pick = sec => onSelect && onSelect(sec);
   return (
     <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",display:"flex",alignItems:"center",flex:1}}>🏭 Sector Strength Leaderboard
-          <InfoTip><strong>List</strong>: strongest sectors by strength score (breadth + signal bias + price momentum). <strong>Bubble</strong>: every sector — x = net bias (bearish ← → bullish), y = strength, <strong>bubble size = signal intensity</strong> (total signals). Big bubbles in the top-right = strong, busy, bullish sectors. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.{onSelect && <> <strong>Click a sector</strong> (bubble or row) to show only its industries on the right; click it again to clear.</>}</InfoTip>
+          <InfoTip><strong>List</strong>: strongest sectors by strength score (breadth + signal bias + price momentum). <strong>Bubble</strong>: every sector — x = net bias (bearish ← → bullish), y = strength, <strong>bubble size = signal intensity</strong> (total signals). Big bubbles in the top-right = strong, busy, bullish sectors. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.{onSelect && <> <strong>Click sectors</strong> (bubbles or rows) to show only their industries on the right — pick as many as you like; click one again to remove it.</>}</InfoTip>
         </div>
         <TfPicker value={tf} onChange={setTf}/>
         <ViewToggle value={view} onChange={setView}/>
-        {view==="list" && top10[0] && <ListCopy symbols={topSyms} compact/>}
+        {(view==="list" || selected.length>0) && top10[0] && <ListCopy symbols={topSyms} compact/>}
       </div>
       {view==="list" ? top10.map((s,i)=>{
-        const c=sectorColor(s.Sector), pct=s.Strength_Score/maxScore*100, on=selected===s.Sector;
+        const c=sectorColor(s.Sector), pct=s.Strength_Score/maxScore*100, on=selected.includes(s.Sector);
         return (
-          <div key={s.Sector} onClick={()=>pick(s.Sector)} className={onSelect?"sec-row":undefined} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,padding:"3px 4px",borderRadius:6,cursor:onSelect?"pointer":"default",background:on?"var(--adim)":"transparent",outline:on?`1px solid ${c}`:"none"}}>
+          <div key={s.Sector} onClick={()=>pick(s.Sector)} className={onSelect?"sec-row":undefined} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,padding:"3px 4px",borderRadius:6,cursor:onSelect?"pointer":"default",background:on?"var(--adim)":"transparent",outline:on?`1px solid ${c}`:"none",opacity:selected.length&&!on?0.55:1}}>
             <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--t3)",width:14,flexShrink:0}}>{i+1}</div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,gap:6}}>
@@ -5371,32 +5282,46 @@ function SectorLeaderboardPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, select
         <RotationQuadrantChart height={360}
           items={sectors.map(s=>({key:s.Sector,label:s.Sector,x:s.Net_Bias_Score,y:s.Strength_Score,size:s.Total_Signal_Count,color:sectorColor(s.Sector),
             tooltip:`${s.Sector}: strength ${s.Strength_Score.toFixed(1)} · net bias ${s.Net_Bias_Score} · ${s.Total_Signal_Count} signals across ${s.Total_Stocks} stocks`}))}
-          onSelect={onSelect ? k=>onSelect(k) : undefined} selectedKey={selected}/>
+          onSelect={onSelect ? k=>onSelect(k) : undefined} selectedKeys={selected}/>
       )}
     </div>
   );
 }
 
-function IndustryMomentumPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, sector=null, onClearSector=null, recompute=false }) {
+// sectors = sector filter (array); selected = picked "Sector|Industry" keys, onSelect(key) toggles one.
+function IndustryMomentumPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, sectors=[], onClearSectors=null, selected=[], onSelect=null, onClearSelected=null, recompute=false }) {
   const [view, setView] = useState("bubble");
   const [mode, setMode] = useState("top");
   const [tfLocal, setTfLocal] = useState("ALL");
   const tf = tfIn || tfLocal, setTf = setTfIn || setTfLocal;
   const tfd = useTfSectors(baseDb, tf, recompute);
-  const inds = useMemo(()=> sector ? tfd.industryAnalysis.filter(r=>r.Sector===sector) : tfd.industryAnalysis, [tfd.industryAnalysis, sector]);
+  const secKey = sectors.join("|");
+  const inds = useMemo(()=> sectors.length ? tfd.industryAnalysis.filter(r=>sectors.includes(r.Sector)) : tfd.industryAnalysis, [tfd.industryAnalysis, secKey]);
   const db = { ...baseDb, ...tfd, industryAnalysis: inds };
   const sorted = useMemo(()=>[...inds].sort((a,b)=>b.Net_Bias_Score-a.Net_Bias_Score),[inds]);
   const data = mode==="top" ? sorted.slice(0,10) : [...sorted].reverse().slice(0,10);
   const maxAbs = Math.max(...data.map(d=>Math.abs(d.Net_Bias_Score)),1);
-  const bubbles = useMemo(()=>[...inds].sort((a,b)=>b.Total_Signal_Count-a.Total_Signal_Count).slice(0,40),[inds]);
+  const keyOf = d => d.Sector+"|"+d.Industry;
+  // 40 busiest industries, plus any picked one that falls outside them so it never disappears.
+  const bubbles = useMemo(()=>{
+    const top = [...inds].sort((a,b)=>b.Total_Signal_Count-a.Total_Signal_Count).slice(0,40);
+    const extra = inds.filter(d=>selected.includes(keyOf(d)) && !top.includes(d));
+    return [...top, ...extra];
+  },[inds, selected.join("|")]);
   const symsOf = ind => db.master.filter(m=>m.Industry===ind.Industry && m.Sector===ind.Sector).map(m=>m.Symbol);
+  const selSyms = useMemo(()=> selected.length ? db.master.filter(m=>selected.includes(m.Sector+"|"+m.Industry)).map(m=>m.Symbol) : [], [selected.join("|"), db.master]);
+  const chip = (label, color, onClick, title) => <button onClick={onClick} title={title} style={{fontSize:10.5,padding:"2px 8px",borderRadius:5,border:`1px solid ${color}`,color,background:"var(--s2)",whiteSpace:"nowrap",cursor:"pointer"}}>{label}</button>;
   return (
     <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"14px 16px"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
         <div style={{fontSize:13,fontWeight:700,color:"var(--t1)",display:"flex",alignItems:"center",flex:1}}>📐 Industry Bias Momentum
-          <InfoTip><strong>List</strong>: industries with the most bullish (or bearish) net signal bias. <strong>Bubble</strong>: the 40 busiest industries — x = net bias, y = strength, <strong>bubble size = signal intensity</strong>, colour = sector. A cluster of same-colour bubbles on one side = a whole sector rotating. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.</InfoTip>
+          <InfoTip><strong>List</strong>: industries with the most bullish (or bearish) net signal bias. <strong>Bubble</strong>: the 40 busiest industries — x = net bias, y = strength, <strong>bubble size = signal intensity</strong>, colour = sector. A cluster of same-colour bubbles on one side = a whole sector rotating. <strong>All</strong> = every timeframe together; <strong>D/W/M/Q/Y</strong> = only that timeframe's signals, with breadth and momentum measured from that timeframe's previous close.{onSelect && <> <strong>Click industries</strong> (bubbles or rows) to pick several, then copy all their stocks with the copy buttons at the top.</>}</InfoTip>
         </div>
-        {sector && <button onClick={onClearSector} title="Show every sector's industries" style={{fontSize:10.5,padding:"2px 8px",borderRadius:5,border:`1px solid ${sectorColor(sector)}`,color:sectorColor(sector),background:"var(--s2)",whiteSpace:"nowrap"}}>✕ {sector}</button>}
+        {sectors.length>0 && chip(`✕ ${sectors.length===1?sectors[0]:sectors.length+" sectors"}`, sectors.length===1?sectorColor(sectors[0]):"var(--t2)", onClearSectors, "Show every sector's industries")}
+        {selected.length>0 && <>
+          {chip(`✕ ${selected.length===1?selected[0].split("|")[1]:selected.length+" industries"}`, "var(--acc)", onClearSelected, "Clear picked industries")}
+          <ListCopy symbols={selSyms} compact/>
+        </>}
         <TfPicker value={tf} onChange={setTf}/>
         {view==="list" && <>
           <Pill active={mode==="top"} color="var(--long)" onClick={()=>setMode("top")}>▲ Bullish</Pill>
@@ -5405,9 +5330,10 @@ function IndustryMomentumPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, sector=
         <ViewToggle value={view} onChange={setView}/>
       </div>
       {view==="list" ? data.map(d=>{
-        const w=Math.abs(d.Net_Bias_Score)/maxAbs*100, pos=d.Net_Bias_Score>=0;
+        const w=Math.abs(d.Net_Bias_Score)/maxAbs*100, pos=d.Net_Bias_Score>=0, on=selected.includes(keyOf(d));
         return (
-          <div key={d.Sector+d.Industry} style={{marginBottom:8}}>
+          <div key={d.Sector+d.Industry} onClick={onSelect?()=>onSelect(keyOf(d)):undefined} className={onSelect?"sec-row":undefined}
+            style={{marginBottom:4,padding:"3px 4px",borderRadius:6,cursor:onSelect?"pointer":"default",background:on?"var(--adim)":"transparent",outline:on?`1px solid ${sectorColor(d.Sector)}`:"none",opacity:selected.length&&!on?0.55:1}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,gap:6,alignItems:"center"}}>
               <span style={{fontSize:10.5,color:"var(--t1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}} title={`${d.Industry} (${d.Sector})`}>{d.Industry} <span style={{fontSize:9,color:sectorColor(d.Sector)}}>· {d.Sector}</span></span>
               <ListCopy symbols={symsOf(d)} compact/>
@@ -5419,7 +5345,8 @@ function IndustryMomentumPanelV2({ db: baseDb, tf: tfIn, setTf: setTfIn, sector=
       }) : (
         <RotationQuadrantChart height={360}
           items={bubbles.map(d=>({key:d.Sector+"|"+d.Industry,label:d.Industry,x:d.Net_Bias_Score,y:d.Strength_Score,size:d.Total_Signal_Count,color:sectorColor(d.Sector),
-            tooltip:`${d.Industry} (${d.Sector}): strength ${d.Strength_Score.toFixed(1)} · net bias ${d.Net_Bias_Score} · ${d.Total_Signal_Count} signals · ${d.Total_Stocks} stocks`}))}/>
+            tooltip:`${d.Industry} (${d.Sector}): strength ${d.Strength_Score.toFixed(1)} · net bias ${d.Net_Bias_Score} · ${d.Total_Signal_Count} signals · ${d.Total_Stocks} stocks`}))}
+          onSelect={onSelect || undefined} selectedKeys={selected}/>
       )}
     </div>
   );
@@ -6445,6 +6372,10 @@ const QF_LABEL = Object.fromEntries(QF);
 const Q_OPS = { ">":(a,b)=>a>b, ">=":(a,b)=>a>=b, "<":(a,b)=>a<b, "<=":(a,b)=>a<=b, "=":(a,b)=>Math.abs(a-b)<1e-9, "!=":(a,b)=>Math.abs(a-b)>=1e-9 };
 const Q_OP_TXT = { ">":">", ">=":"≥", "<":"<", "<=":"≤", "=":"=", "!=":"≠" };
 const ruleText = r => `${r.tf} ${QF_LABEL[r.f]} ${Q_OP_TXT[r.op]} ${r.rhs==="num" ? r.v : `${r.rtf||r.tf} ${QF_LABEL[r.rf]}`}`;
+// An algorithm = { join:"AND"|"OR" (default AND), rules:[item] }; an item is a condition or a bracket
+// { group:true, join, rules:[item] } (brackets nest up to 3 levels). Old / ready-made algorithms have no brackets = all AND.
+const itemText = q => q.group ? `(${(q.rules||[]).map(itemText).join(` ${q.join||"AND"} `)})` : ruleText(q);
+const exprText = a => (a.rules||[]).map(itemText).join(`  ${a.join||"AND"}  `);
 
 function prebuiltAlgos(cfg) {
   const out = [];
@@ -6460,32 +6391,73 @@ function prebuiltAlgos(cfg) {
 }
 
 // Rule editor — used by Admin → Algorithms (admins only)
-function AlgoEditor({ algo, onChange }) {
-  const sel = { background:"var(--s2)", border:"1px solid var(--b2)", color:"var(--t1)", borderRadius:5, fontSize:11, padding:"3px 5px" };
-  const upd = (i, patch) => onChange({ ...algo, rules: algo.rules.map((x,j)=>j===i?{...x,...patch}:x) });
+const AE_SEL = { background:"var(--s2)", border:"1px solid var(--b2)", color:"var(--t1)", borderRadius:5, fontSize:11, padding:"3px 5px" };
+const AE_BTN = { fontSize:11, padding:"3px 9px", borderRadius:6, border:"1px solid var(--b2)", background:"var(--s2)" };
+
+function ConditionRow({ q, onChange, onRemove }) {
+  const upd = patch => onChange({ ...q, ...patch });
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",fontSize:11.5}}>
+      <select value={q.tf} onChange={e=>upd({tf:e.target.value})} style={AE_SEL}>{FOCUS_TFS.map(t=><option key={t} value={t}>{TF_NAME[t]}</option>)}</select>
+      <select value={q.f} onChange={e=>upd({f:e.target.value})} style={AE_SEL}>{QF.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
+      <select value={q.op} onChange={e=>upd({op:e.target.value})} style={AE_SEL}>{Object.keys(Q_OPS).map(o=><option key={o} value={o}>{Q_OP_TXT[o]}</option>)}</select>
+      <select value={q.rhs} onChange={e=>upd({rhs:e.target.value,rf:q.rf||"tz",rtf:q.rtf||q.tf})} style={AE_SEL}><option value="num">number</option><option value="field">value</option></select>
+      {q.rhs==="num"
+        ? <input type="number" step="any" value={q.v ?? ""} onChange={e=>upd({v:e.target.value})} style={{...AE_SEL,width:80}}/>
+        : <>
+            <select value={q.rtf||q.tf} onChange={e=>upd({rtf:e.target.value})} style={AE_SEL}>{FOCUS_TFS.map(t=><option key={t} value={t}>{TF_NAME[t]}</option>)}</select>
+            <select value={q.rf} onChange={e=>upd({rf:e.target.value})} style={AE_SEL}>{QF.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
+          </>}
+      <button onClick={onRemove} title="Remove this condition" style={{...AE_BTN,padding:"1px 7px",color:"var(--t2)"}}>✕</button>
+    </div>
+  );
+}
+
+function AlgoItems({ items, join, onItems, onJoin, depth }) {
+  const upd = (i, v) => onItems(items.map((x,j)=>j===i?v:x));
+  const del = i => onItems(items.filter((_,j)=>j!==i));
+  const jc = join==="OR" ? "var(--mixed)" : "var(--acc)";
   return (
     <div>
-      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:8}}>
-        <input value={algo.name} onChange={e=>onChange({...algo,name:e.target.value})} placeholder="Algorithm name" style={{...sel,fontSize:13,fontWeight:700,padding:"4px 8px",width:260}}/>
-        <select value={algo.dir>=0?1:-1} onChange={e=>onChange({...algo,dir:+e.target.value})} style={sel} title="Colour / side in the list"><option value={1}>▲ Bullish</option><option value={-1}>▼ Bearish</option></select>
+      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,fontSize:11,color:"var(--t2)"}}>
+        {depth===0 ? "A stock must meet" : "Inside this bracket, meet"}
+        <select value={join} onChange={e=>onJoin(e.target.value)} style={{...AE_SEL,color:jc,fontWeight:700}}>
+          <option value="AND">ALL of these (AND)</option><option value="OR">ANY of these (OR)</option>
+        </select>
       </div>
-      {algo.rules.map((q,i)=>(
-        <div key={i} style={{display:"flex",alignItems:"center",gap:5,marginBottom:5,flexWrap:"wrap",fontSize:11.5}}>
-          <span style={{width:18,color:"var(--t3)",fontFamily:"var(--mono)"}}>{i+1}.</span>
-          <select value={q.tf} onChange={e=>upd(i,{tf:e.target.value})} style={sel}>{FOCUS_TFS.map(t=><option key={t} value={t}>{TF_NAME[t]}</option>)}</select>
-          <select value={q.f} onChange={e=>upd(i,{f:e.target.value})} style={sel}>{QF.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
-          <select value={q.op} onChange={e=>upd(i,{op:e.target.value})} style={sel}>{Object.keys(Q_OPS).map(o=><option key={o} value={o}>{Q_OP_TXT[o]}</option>)}</select>
-          <select value={q.rhs} onChange={e=>upd(i,{rhs:e.target.value,rf:q.rf||"tz",rtf:q.rtf||q.tf})} style={sel}><option value="num">number</option><option value="field">value</option></select>
-          {q.rhs==="num"
-            ? <input type="number" step="any" value={q.v ?? ""} onChange={e=>upd(i,{v:e.target.value})} style={{...sel,width:80}}/>
-            : <>
-                <select value={q.rtf||q.tf} onChange={e=>upd(i,{rtf:e.target.value})} style={sel}>{FOCUS_TFS.map(t=><option key={t} value={t}>{TF_NAME[t]}</option>)}</select>
-                <select value={q.rf} onChange={e=>upd(i,{rf:e.target.value})} style={sel}>{QF.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
-              </>}
-          <button onClick={()=>onChange({...algo,rules:algo.rules.filter((_,j)=>j!==i)})} title="Remove" style={{fontSize:11,padding:"1px 7px",borderRadius:5,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)"}}>✕</button>
+      {items.map((q,i)=>(
+        <div key={i}>
+          {i>0 && <div style={{fontSize:9.5,fontWeight:800,color:jc,margin:"3px 0 3px 4px",letterSpacing:".5px"}}>{join}</div>}
+          {q.group ? (
+            <div style={{borderLeft:`2px solid ${(q.join||"AND")==="OR"?"var(--mixed)":"var(--acc)"}`,background:"var(--s2)",borderRadius:"0 8px 8px 0",padding:"7px 9px",margin:"2px 0"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                <span style={{fontFamily:"var(--mono)",fontWeight:800,color:"var(--t2)"}}>( … )</span>
+                <span style={{fontSize:10,color:"var(--t3)"}}>bracket</span>
+                <button onClick={()=>del(i)} title="Remove the whole bracket" style={{...AE_BTN,padding:"1px 7px",color:"var(--short)",marginLeft:"auto"}}>✕ bracket</button>
+              </div>
+              <AlgoItems items={q.rules||[]} join={q.join||"AND"} depth={depth+1}
+                onItems={rs=>upd(i,{...q,rules:rs})} onJoin={j=>upd(i,{...q,join:j})}/>
+            </div>
+          ) : <ConditionRow q={q} onChange={v=>upd(i,v)} onRemove={()=>del(i)}/>}
         </div>
       ))}
-      <button onClick={()=>onChange({...algo,rules:[...algo.rules,{tf:"D",f:"close",op:">",rhs:"field",rf:"st",rtf:"D"}]})} style={{fontSize:11,padding:"3px 9px",borderRadius:6,border:"1px solid var(--b2)",color:"var(--acc)",background:"var(--s2)",marginTop:2}}>＋ Add condition</button>
+      <div style={{display:"flex",gap:6,marginTop:6}}>
+        <button onClick={()=>onItems([...items,{tf:"D",f:"close",op:">",rhs:"field",rf:"st",rtf:"D"}])} style={{...AE_BTN,color:"var(--acc)"}}>＋ Condition</button>
+        {depth<2 && <button onClick={()=>onItems([...items,{group:true,join:"OR",rules:[{tf:"D",f:"rsi",op:">=",rhs:"num",v:70},{tf:"D",f:"cci",op:">=",rhs:"num",v:150}]}])} style={{...AE_BTN,color:"var(--mixed)"}} title="A group of conditions with its own AND / OR, e.g. (RSI ≥ 70 OR CCI ≥ 150)">＋ Bracket ( )</button>}
+      </div>
+    </div>
+  );
+}
+
+function AlgoEditor({ algo, onChange }) {
+  return (
+    <div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
+        <input value={algo.name} onChange={e=>onChange({...algo,name:e.target.value})} placeholder="Algorithm name" style={{...AE_SEL,fontSize:13,fontWeight:700,padding:"4px 8px",width:260}}/>
+        <select value={algo.dir>=0?1:-1} onChange={e=>onChange({...algo,dir:+e.target.value})} style={AE_SEL} title="Colour / side in the list"><option value={1}>▲ Bullish</option><option value={-1}>▼ Bearish</option></select>
+      </div>
+      <AlgoItems items={algo.rules||[]} join={algo.join||"AND"} depth={0}
+        onItems={rs=>onChange({...algo,rules:rs})} onJoin={j=>onChange({...algo,join:j})}/>
     </div>
   );
 }
@@ -6524,11 +6496,14 @@ function TechQuantSection({ db, tech }) {
     const a = val(r, q.tf, q.f), b = q.rhs === "num" ? (q.v === "" || q.v == null ? null : +q.v) : val(r, q.rtf || q.tf, q.rf);
     return a != null && b != null && !isNaN(b) && Q_OPS[q.op](a, b);
   };
-  const need = minMatch || algo.rules.length;
+  const evalItem = (r, q) => !q.group ? evalRule(r, q)
+    : (q.rules||[]).length > 0 && ((q.join||"AND")==="OR" ? q.rules.some(x=>evalItem(r,x)) : q.rules.every(x=>evalItem(r,x)));
+  const items = algo.rules || [], join = algo.join || "AND";
+  const passes = n => minMatch ? n >= minMatch : join==="OR" ? n >= 1 : n === items.length;
   const results = useMemo(() => rows.filter(r => !fnoOnly || r.fno).map(r => {
-    const hits = algo.rules.map(q => evalRule(r, q));
+    const hits = items.map(q => evalItem(r, q));
     return { r, hits, n:hits.filter(Boolean).length };
-  }).filter(x => algo.rules.length && x.n >= need).sort((a,b) => b.n-a.n || (b.r.price||0)-(a.r.price||0)), [rows, algo, need, fnoOnly]);
+  }).filter(x => items.length && passes(x.n)).sort((a,b) => b.n-a.n || (b.r.price||0)-(a.r.price||0)), [rows, algo, minMatch, fnoOnly]);
   const vis = showAll ? results : results.slice(0, 50);
   const sel = { background:"var(--s2)", border:"1px solid var(--b2)", color:"var(--t1)", borderRadius:5, fontSize:11, padding:"3px 5px" };
   const TH = {position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"6px 8px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",whiteSpace:"nowrap",zIndex:1};
@@ -6571,13 +6546,16 @@ function TechQuantSection({ db, tech }) {
               <div style={{fontSize:13.5,fontWeight:700,color:algo.dir>=0?"var(--long)":"var(--short)"}}>{algo.name}</div>
               <span style={{marginLeft:"auto",fontSize:11,color:"var(--t3)"}}>Match</span>
               <select value={minMatch} onChange={e=>{setMinMatch(+e.target.value);setShowAll(false);}} style={sel} title="How many of the conditions a stock must meet">
-                <option value={0}>all {algo.rules.length} conditions</option>
-                {algo.rules.map((_,i)=>algo.rules.length-1-i).filter(n=>n>=1).map(n=><option key={n} value={n}>at least {n}</option>)}
+                <option value={0}>{join==="OR" ? `any of ${items.length} (OR)` : `all ${items.length} conditions`}</option>
+                {items.map((_,i)=>items.length-1-i).filter(n=>n>=1).map(n=><option key={n} value={n}>at least {n}</option>)}
               </select>
               <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)}>{fnoOnly?"✓ ":""}F&amp;O only</Pill>
             </div>
             <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:4}}>
-              {algo.rules.map((q,i)=><span key={i} style={{fontSize:10.5,fontFamily:"var(--mono)",padding:"2px 7px",borderRadius:4,border:"1px solid var(--b2)",color:"var(--t1)",background:"var(--s2)"}}>{i+1}. {ruleText(q)}</span>)}
+              {items.map((q,i)=><React.Fragment key={i}>
+                {i>0 && <span style={{fontSize:9.5,fontWeight:800,color:join==="OR"?"var(--mixed)":"var(--acc)",alignSelf:"center"}}>{join}</span>}
+                <span style={{fontSize:10.5,fontFamily:"var(--mono)",padding:"2px 7px",borderRadius:4,border:`1px solid ${q.group?"var(--mixed)":"var(--b2)"}`,color:"var(--t1)",background:"var(--s2)"}}>{i+1}. {itemText(q)}</span>
+              </React.Fragment>)}
             </div>
 
             <div style={{display:"flex",alignItems:"center",gap:8,margin:"12px 0 6px"}}>
@@ -6587,17 +6565,17 @@ function TechQuantSection({ db, tech }) {
             </div>
             <div style={{maxHeight:380,overflow:"auto"}} className="tower-scroll">
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                <thead><tr><th style={TH}>Symbol</th><th style={TH}>Price</th><th style={TH}>Met</th>{algo.rules.map((q,i)=><th key={i} style={TH} title={ruleText(q)}>{q.tf} {QF_LABEL[q.f]}</th>)}</tr></thead>
+                <thead><tr><th style={TH}>Symbol</th><th style={TH}>Price</th><th style={TH}>Met</th>{items.map((q,i)=><th key={i} style={TH} title={itemText(q)}>{q.group ? `( ${i+1} )` : `${q.tf} ${QF_LABEL[q.f]}`}</th>)}</tr></thead>
                 <tbody>
                   {vis.map(({r,hits,n})=>(
                     <tr key={r.sym} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
                       <td style={{padding:"5px 8px",whiteSpace:"nowrap"}}><SymCell sym={r.sym}/><div style={{fontSize:8.5,color:sectorColor(r.sector)}}>{r.sector}{r.fno?" · FNO":""}</div></td>
                       <td style={{padding:"5px 8px",fontFamily:"var(--mono)"}}>{r.price}</td>
-                      <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:n===algo.rules.length?"var(--long)":"var(--mixed)"}}>{n}/{algo.rules.length}</td>
-                      {algo.rules.map((q,i)=>{ const v = val(r,q.tf,q.f); return <td key={i} style={{padding:"5px 8px",fontFamily:"var(--mono)",whiteSpace:"nowrap",color:hits[i]?"var(--long)":"var(--t3)"}}>{hits[i]?"✓":"✗"} {v==null?"—":v}</td>; })}
+                      <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:n===items.length?"var(--long)":"var(--mixed)"}}>{n}/{items.length}</td>
+                      {items.map((q,i)=>{ const v = q.group ? null : val(r,q.tf,q.f); return <td key={i} title={itemText(q)} style={{padding:"5px 8px",fontFamily:"var(--mono)",whiteSpace:"nowrap",color:hits[i]?"var(--long)":"var(--t3)"}}>{hits[i]?"✓":"✗"} {q.group ? "" : v==null?"—":v}</td>; })}
                     </tr>
                   ))}
-                  {!vis.length && <tr><td colSpan={3+algo.rules.length} style={{padding:16,textAlign:"center",color:"var(--t3)"}}>No stock meets {minMatch?`${minMatch}+ of these conditions`:"all these conditions"} — try "Match: at least …".</td></tr>}
+                  {!vis.length && <tr><td colSpan={3+items.length} style={{padding:16,textAlign:"center",color:"var(--t3)"}}>No stock meets {minMatch?`${minMatch}+ of these conditions`:join==="OR"?"any of these conditions":"all these conditions"} — try "Match: at least …".</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -6611,4 +6589,4 @@ function TechQuantSection({ db, tech }) {
 
 export { mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell, ListCopy,
          HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, InfoTip, EqRow, CopyBtn, biasBadge, formatDateLabel,
-         classifySignal, TF_WEIGHT, TF_NAME, AlgoEditor, prebuiltAlgos, ruleText };
+         classifySignal, TF_WEIGHT, TF_NAME, AlgoEditor, prebuiltAlgos, ruleText, exprText };

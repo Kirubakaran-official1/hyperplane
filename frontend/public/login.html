@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in</title>
+<link rel="stylesheet" href="/login.css">
+</head>
+<body>
+<form id="f" autocomplete="on">
+  <div class="brand">HYPERPLANE</div>
+  <label for="u">User ID</label>
+  <input id="u" name="username" autocomplete="username" required autofocus>
+  <label for="p">Password</label>
+  <input id="p" name="password" type="password" autocomplete="current-password" required>
+  <div id="err" role="alert"></div>
+  <button id="b" type="submit">Sign in</button>
+</form>
+<script src="/login.js"></script>
+</body>
+</html>

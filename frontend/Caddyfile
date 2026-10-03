@@ -1,14 +1,68 @@
 # DOMAIN comes from .env — e.g. hyperplane-kiruba.duckdns.org
 # Caddy gets and renews the HTTPS certificate by itself.
 # For a quick test without a domain set DOMAIN=:80 (plain http).
+
+# Slow / stuck connections (slowloris-style floods, half-sent uploads) are cut off instead of piling up.
+{
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 120s
+			write 180s
+			idle 2m
+		}
+	}
+}
+
 {$DOMAIN} {
 	encode zstd gzip
 
+	# APIs — each one checks its own login
+	# Body caps stop oversized floods at the edge: helpdesk messages (text + up to 3 images) ≤ 8 MB,
+	# everything else on the customer API (sign-in, sign-up) ≤ 64 KB. Excel imports (/api/admin/import) stay uncapped.
 	handle /api/* {
+		request_body /api/helpdesk/* {
+			max_size 8MB
+		}
 		reverse_proxy api:8000
 	}
+	handle /app/api/helpdesk/* {
+		request_body {
+			max_size 8MB
+		}
+		reverse_proxy portal:8100
+	}
+	handle /app/api/* {
+		request_body {
+			max_size 64KB
+		}
+		reverse_proxy portal:8100
+	}
 
+	# Customer edition: its own small bundle (contains none of the dashboard code)
+	handle /app* {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		root * /srv
+		try_files {path} /app/index.html
+		file_server
+	}
+
+	# Admin / user sign-in page — the only dashboard file served without a login
+	handle /login* {
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		root * /srv
+		file_server
+	}
+
+	# Everything else (the dashboard and its code) is served only to logged-in admins / users
 	handle {
+		forward_auth api:8000 {
+			uri /api/auth/check
+			@nologin status 401 403
+			handle_response @nologin {
+				redir * /login.html 302
+			}
+		}
 		root * /srv
 		try_files {path} /index.html
 		file_server
@@ -18,6 +72,8 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
 	}
 }

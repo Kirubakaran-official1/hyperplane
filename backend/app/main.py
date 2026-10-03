@@ -9,9 +9,14 @@ Hyperplane API.
   /api/jobs                 collection history + live log
   /api/compare?a=&b=        stock-by-stock change between two collections (morning vs afternoon)
   /api/view-config          dashboard options set in Admin: index/ETF lists, technical indicator levels
-  /api/admin/*              settings, import old Excel files, delete collections, system status
+  /api/admin/*              settings, import old Excel files, delete collections, system status,
+                            customers (the /app accounts) and publishing the customer view
+  /api/auth/check           used by Caddy: the dashboard files are only served to logged-in users
+  /api/helpdesk/*           queries and conversations (users: their own; admins: everyone's, incl. customers)
 """
+import hmac
 import os
+import re
 import shutil
 import time as _time
 from collections import defaultdict, deque
@@ -24,8 +29,11 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
 from . import config
+from . import helpdesk as hd
 from .db import DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_meta, get_settings, init_db, pool, put_settings
 from .schedule import TZ, next_runs, now, parse_hhmm
+from .publish import publish
+from .security import hash_password
 from .store import save_snapshot, taken_at_from_filename, workbook_to_sheets
 
 app = FastAPI(title="Hyperplane", docs_url=None, redoc_url=None)
@@ -65,6 +73,8 @@ def admin_user(user=Depends(current_user)):
 
 
 _attempts = defaultdict(deque)
+_user_fails = {}                      # user id -> (failures, locked_until)
+USER_MAX_FAILS, USER_LOCK_SECONDS = 5, 15 * 60
 
 
 class LoginIn(BaseModel):
@@ -80,15 +90,24 @@ def login(body: LoginIn, request: Request, response: Response):
         q.popleft()
     if len(q) >= 8:
         raise HTTPException(429, "Too many attempts — wait 5 minutes")
-    u = config.users().get(body.username.strip())
-    if not u or u["password"] != body.password:
+    name = body.username.strip()
+    fails, locked = _user_fails.get(name, (0, 0))
+    if locked > _time.time():
+        raise HTTPException(429, "Too many attempts — wait 15 minutes")
+    u = config.users().get(name)
+    ok = bool(u) and hmac.compare_digest(u["password"].encode(), body.password.encode())
+    if not ok:
         q.append(_time.time())
+        fails += 1
+        _user_fails[name] = (0, _time.time() + USER_LOCK_SECONDS) if fails >= USER_MAX_FAILS else (fails, 0)
+        _time.sleep(0.6)                           # slows down password guessing
         raise HTTPException(401, "Wrong user ID or password")
     q.clear()
-    token = _serializer().dumps(body.username.strip())
+    _user_fails.pop(name, None)
+    token = _serializer().dumps(name)
     secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
     response.set_cookie(COOKIE, token, max_age=config.session_hours() * 3600, httponly=True,
-                        samesite="lax", secure=secure, path="/")
+                        samesite="strict", secure=secure, path="/")
     return {"name": body.username.strip(), "admin": u["admin"]}
 
 
@@ -101,6 +120,11 @@ def logout(response: Response):
 @app.get("/api/me")
 def me(user=Depends(current_user)):
     return user
+
+
+@app.get("/api/auth/check")
+def auth_check(user=Depends(current_user)):
+    return Response(status_code=204)
 
 
 @app.get("/api/health")
@@ -290,11 +314,20 @@ def _algos(raw):
     """Technical Quant algorithms from the Admin editor -> a clean list (None = use the ready-made set)."""
     if raw is None:
         return None
-    out = []
-    for n, a in enumerate(raw[:100], 1):
-        name = str(a.get("name") or f"Algorithm {n}").strip()[:80]
-        rules = []
-        for r in (a.get("rules") or [])[:30]:
+    def join_of(x):
+        return "OR" if x.get("join") == "OR" else "AND"
+
+    def items(raw_items, name, depth):
+        out = []
+        for r in (raw_items or [])[:30]:
+            if r.get("group"):                               # bracket: its own AND / OR, nests up to 3 levels
+                if depth >= 2:
+                    raise HTTPException(422, f"'{name}': brackets can only go 3 levels deep")
+                inner = items(r.get("rules"), name, depth + 1)
+                if not inner:
+                    raise HTTPException(422, f"'{name}': a bracket is empty")
+                out.append({"group": True, "join": join_of(r), "rules": inner})
+                continue
             tf, f, op, rhs = r.get("tf"), r.get("f"), r.get("op"), r.get("rhs", "num")
             if tf not in ALGO_TFS or f not in ALGO_FIELDS or op not in ALGO_OPS or rhs not in ("num", "field"):
                 raise HTTPException(422, f"'{name}': a condition is incomplete")
@@ -309,10 +342,176 @@ def _algos(raw):
                 if rtf not in ALGO_TFS or rf not in ALGO_FIELDS:
                     raise HTTPException(422, f"'{name}': pick the value to compare with")
                 rule.update(rtf=rtf, rf=rf)
-            rules.append(rule)
-        out.append({"id": str(a.get("id") or f"a{n}")[:40], "name": name,
-                    "dir": 1 if (a.get("dir") or 1) >= 0 else -1, "rules": rules})
+            out.append(rule)
+        return out
+
+    out = []
+    for n, a in enumerate(raw[:100], 1):
+        name = str(a.get("name") or f"Algorithm {n}").strip()[:80]
+        out.append({"id": str(a.get("id") or f"a{n}")[:40], "name": name, "join": join_of(a),
+                    "dir": 1 if (a.get("dir") or 1) >= 0 else -1, "rules": items(a.get("rules"), name, 0)})
     return out
+
+
+# ─────────────────────────────── customers (/app accounts) ───────────────────────────────
+CUSTOMER_COLS = ("id, email, name, phone, country, state, city, status, expires_on, notes, created_at, approved_at, "
+                 "last_login, login_count, failed_logins, locked_until, signup_ip")
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[a-z]{2,}$", re.I)
+
+
+def _cust(r):
+    r = dict(r)
+    for k in ("created_at", "approved_at", "last_login", "locked_until"):
+        r[k] = r[k].astimezone(TZ).isoformat() if r.get(k) else None
+    r["expires_on"] = r["expires_on"].isoformat() if r.get("expires_on") else None
+    return r
+
+
+class CustomerIn(BaseModel):
+    name: str
+    email: str
+    phone: str = ""
+    country: str = ""
+    state: str = ""
+    city: str = ""
+    password: str
+    status: str = "approved"
+    expires_on: date | None = None
+    notes: str = ""
+
+
+class CustomerPatch(BaseModel):
+    status: str | None = None
+    expires_on: date | None = None
+    clear_expiry: bool = False
+    notes: str | None = None
+    unlock: bool = False
+
+
+class PasswordIn(BaseModel):
+    password: str
+
+
+def _check_pw(pw):
+    if not 8 <= len(pw) <= 128:
+        raise HTTPException(422, "Password must be 8–128 characters")
+
+
+@app.get("/api/admin/customers")
+def list_customers(user=Depends(admin_user)):
+    with pool.connection() as c:
+        return [_cust(r) for r in c.execute(f"SELECT {CUSTOMER_COLS} FROM customers ORDER BY created_at DESC").fetchall()]
+
+
+@app.post("/api/admin/customers")
+def create_customer(body: CustomerIn, user=Depends(admin_user)):
+    email = body.email.strip().lower()
+    if not EMAIL_RE.match(email) or len(body.name.strip()) < 2:
+        raise HTTPException(422, "Enter a name and a valid email")
+    if body.status not in ("pending", "approved", "blocked"):
+        raise HTTPException(422, "Unknown status")
+    _check_pw(body.password)
+    with pool.connection() as c:
+        if c.execute("SELECT 1 FROM customers WHERE email = %s", (email,)).fetchone():
+            raise HTTPException(409, "A customer with this email already exists")
+        r = c.execute("INSERT INTO customers (email, name, phone, country, state, city, pw_hash, status, expires_on, notes, approved_at) "
+                      "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, CASE WHEN %s = 'approved' THEN now() END) RETURNING " + CUSTOMER_COLS,
+                      (email, body.name.strip()[:80], body.phone.strip()[:20], body.country.strip()[:60], body.state.strip()[:60],
+                       body.city.strip()[:60], hash_password(body.password), body.status, body.expires_on, body.notes[:500],
+                       body.status)).fetchone()
+    return _cust(r)
+
+
+@app.patch("/api/admin/customers/{cid}")
+def update_customer(cid: int, body: CustomerPatch, user=Depends(admin_user)):
+    sets, args = [], []
+    if body.status is not None:
+        if body.status not in ("pending", "approved", "blocked"):
+            raise HTTPException(422, "Unknown status")
+        sets.append("status = %s"); args.append(body.status)
+        if body.status == "approved":
+            sets.append("approved_at = COALESCE(approved_at, now())")
+        else:
+            sets.append("session_ver = session_ver + 1")          # logged out right away
+    if body.expires_on is not None or body.clear_expiry:
+        sets.append("expires_on = %s"); args.append(None if body.clear_expiry else body.expires_on)
+    if body.notes is not None:
+        sets.append("notes = %s"); args.append(body.notes[:500])
+    if body.unlock:
+        sets.append("failed_logins = 0, locked_until = NULL")
+    if not sets:
+        raise HTTPException(422, "Nothing to change")
+    with pool.connection() as c:
+        r = c.execute(f"UPDATE customers SET {', '.join(sets)} WHERE id = %s RETURNING {CUSTOMER_COLS}", (*args, cid)).fetchone()
+    if not r:
+        raise HTTPException(404, "Customer not found")
+    return _cust(r)
+
+
+@app.post("/api/admin/customers/{cid}/password")
+def reset_customer_password(cid: int, body: PasswordIn, user=Depends(admin_user)):
+    _check_pw(body.password)
+    with pool.connection() as c:
+        r = c.execute("UPDATE customers SET pw_hash = %s, session_ver = session_ver + 1, failed_logins = 0, locked_until = NULL "
+                      "WHERE id = %s RETURNING id", (hash_password(body.password), cid)).fetchone()
+    if not r:
+        raise HTTPException(404, "Customer not found")
+    return {"ok": True}
+
+
+@app.delete("/api/admin/customers/{cid}")
+def delete_customer(cid: int, user=Depends(admin_user)):
+    with pool.connection() as c:
+        r = c.execute("DELETE FROM customers WHERE id = %s RETURNING id", (cid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "Customer not found")
+    return {"ok": True}
+
+
+# ─────────────────────────────── publishing the customer view ───────────────────────────────
+def _pub_meta(r):
+    return {"id": r["id"], "published_at": r["published_at"].astimezone(TZ).isoformat(),
+            "as_of": r["data_as_of"].astimezone(TZ).isoformat() if r["data_as_of"] else None,
+            "mode": r["mode"], "by": r["published_by"], "stocks": r["stocks"], "snapshot_id": r["snapshot_id"]}
+
+
+@app.get("/api/admin/publish")
+def publish_status(user=Depends(admin_user)):
+    with pool.connection() as c:
+        rows = c.execute("SELECT id, published_at, data_as_of, mode, published_by, stocks, snapshot_id "
+                         "FROM published ORDER BY id DESC LIMIT 10").fetchall()
+    return {"mode": get_settings()["publish_mode"], "history": [_pub_meta(r) for r in rows]}
+
+
+class PublishModeIn(BaseModel):
+    mode: str
+
+
+@app.put("/api/admin/publish/mode")
+def set_publish_mode(body: PublishModeIn, user=Depends(admin_user)):
+    if body.mode not in ("manual", "auto"):
+        raise HTTPException(422, "mode must be 'manual' or 'auto'")
+    put_settings({"publish_mode": body.mode})
+    return {"mode": body.mode}
+
+
+@app.post("/api/admin/publish")
+def publish_now(snapshot_id: int | None = None, user=Depends(admin_user)):
+    try:
+        return publish(snapshot_id, mode="manual", by=user["name"])
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/admin/publish/preview")
+def publish_preview(snapshot_id: int | None = None, user=Depends(admin_user)):
+    try:
+        p = publish(snapshot_id, dry_run=True)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    by = {s["s"]: s for s in p["stocks"]}
+    breadth = {tf: {k: sum(1 for s in p["stocks"] if s["r"][i] == k) for k in "GMW-"} for i, tf in enumerate("DWMQY")}
+    return {"as_of": p["as_of"], "stocks": len(p["stocks"]), "breadth": breadth, "top": [by[s] for s in p["top"]]}
 
 
 @app.get("/api/view-config")
@@ -410,6 +609,94 @@ def system(user=Depends(admin_user)):
         "users": [{"name": n, "admin": u["admin"]} for n, u in config.users().items()],
         "telegram_configured": config.telegram() is not None,
     }
+
+
+# ─────────────────────────────── helpdesk ───────────────────────────────
+# Users raise queries and see only their own; admins see every query (customers' and users') and answer them.
+def _client_ip(request: Request):
+    return request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
+
+
+def hd_actor(request: Request):
+    hd.guard_ip(_client_ip(request))              # before the session check and before any database work
+    u = current_user(request)
+    return {"kind": "admin" if u["admin"] else "user", "id": u["name"], "name": u["name"], "staff": u["admin"]}
+
+
+class TicketIn(BaseModel):
+    subject: str
+    severity: str
+    body: list
+
+
+class MessageIn(BaseModel):
+    body: list
+
+
+@app.get("/api/helpdesk/tickets")
+def hd_list(status: str = "open", a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.list_tickets(c, a, status)
+
+
+@app.post("/api/helpdesk/tickets")
+def hd_create(body: TicketIn, a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.create_ticket(c, a, body.subject, body.severity, body.body)
+
+
+@app.get("/api/helpdesk/tickets/{tid}")
+def hd_get(tid: int, a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.get_ticket(c, a, tid)
+
+
+@app.post("/api/helpdesk/tickets/{tid}/messages")
+def hd_reply(tid: int, body: MessageIn, a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.add_message(c, a, tid, body.body)
+
+
+@app.post("/api/helpdesk/tickets/{tid}/close")
+def hd_close(tid: int, a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.set_status(c, a, tid, "closed")
+
+
+@app.post("/api/helpdesk/tickets/{tid}/reopen")
+def hd_reopen(tid: int, a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.set_status(c, a, tid, "open")
+
+
+@app.delete("/api/helpdesk/tickets/{tid}")
+def hd_delete(tid: int, a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.delete_ticket(c, a, tid)
+
+
+@app.get("/api/helpdesk/unread")
+def hd_unread(a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.unread(c, a)
+
+
+@app.get("/api/helpdesk/images/{iid}")
+def hd_image(iid: int, a=Depends(hd_actor)):
+    with pool.connection() as c:
+        return hd.image(c, a, iid)
+
+
+@app.middleware("http")
+async def _helpdesk_body_cap(request: Request, call_next):
+    if request.url.path.startswith("/api/helpdesk"):          # Caddy caps it too; images make messages up to ~5 MB
+        try:
+            too_big = int(request.headers.get("content-length") or 0) > 8_500_000
+        except ValueError:
+            too_big = True
+        if too_big:
+            return JSONResponse({"detail": "This request is too large"}, status_code=413)
+    return await call_next(request)
 
 
 @app.exception_handler(RuntimeError)

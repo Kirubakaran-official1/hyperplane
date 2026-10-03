@@ -1,6 +1,7 @@
 # Hyperplane — one command runs everything:   docker compose up -d --build
 #   web     Caddy: the dashboard + HTTPS + /api proxy          (ports 80, 443)
 #   api     FastAPI backend                                     (internal)
+#   portal  customer edition API for /app                       (internal)
 #   worker  scheduled + "Sync now" ChartInk collections         (internal)
 #   db      PostgreSQL 16 (Alpine, tuned small)                 (internal)
 #   backup  nightly database dump into ./backups                (internal)
@@ -36,11 +37,30 @@ services:
       - ./data/caddy:/data
     depends_on:
       - api
+      - portal
     mem_limit: 128m
 
   api:
     <<: *app
     mem_limit: 512m
+
+  # Customer edition (/app): its own process, restricted database login, own secret.
+  # No config.ini, no data folder, no admin secrets.
+  portal:
+    build: ./backend
+    image: hyperplane-backend
+    restart: unless-stopped
+    command: ["uvicorn", "app.portal:app", "--host", "0.0.0.0", "--port", "8100", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    environment:
+      PORTAL_DATABASE_URL: postgresql://hp_portal:${PORTAL_DB_PASSWORD}@db:5432/hyperplane
+      PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY}
+      TZ: Asia/Kolkata
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    mem_limit: 256m
 
   worker:
     <<: *app

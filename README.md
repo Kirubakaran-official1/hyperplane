@@ -169,6 +169,34 @@ a dashboard change rebuilds the `web` part only, a scanner change rebuilds `api`
 | Update the server by hand | `cd ~/hyperplane && bash deploy/deploy.sh` |
 | Restore a backup | `bash deploy/restore.sh backups/hyperplane_YYYYMMDD_HHMM.dump` |
 
+## Customer edition — Hyperplane by QuantFriday (`/app`)
+
+Customers open **https://your-address/app**. You and your users keep using **https://your-address/** (a sign-in page
+is shown first — nothing of the dashboard is sent to anyone who isn't signed in).
+
+**One-time setup on the server** (before the first deploy that includes this):
+```
+cd ~/hyperplane
+echo "PORTAL_DB_PASSWORD=$(openssl rand -hex 24)" >> .env
+echo "PORTAL_SECRET_KEY=$(openssl rand -hex 32)" >> .env
+bash deploy/deploy.sh
+```
+
+**Everyday use — ⚙ Admin → 👥 Customers (admins only):**
+- New sign-ups appear as *pending*: press **Approve**. You can also add a customer yourself, set an *Access until*
+  date, **Block**, **Reset password** or **Delete**. Blocking or resetting signs the customer out at once.
+- **Publishing:** *Automatic* sends every new collection to customers; *Manual* waits for you to press
+  **Publish latest collection now** (use **Preview** first to see the top 10 and the Good / Moderate / Weak counts).
+- Customers only see labels (Good / Moderate / Weak per timeframe, sector & industry bubbles, top 10). The customer
+  service runs in its own container with a database login that can't read collections, signals or settings.
+
+## Helpdesk
+
+Customers (🎧 Helpdesk tab on `/app`) and dashboard users (🎧 Helpdesk tab) raise queries like writing an email:
+subject, severity (High / Medium / Low) and a description where screenshots can be pasted or dropped (images only —
+no files). Admins see every query in the 🎧 Helpdesk tab, reply, close, reopen or delete. New replies show on the
+🔔 bell at the top for everyone. Floods are refused (per-IP and per-account limits, size caps) — see CLAUDE.md §7.
+
 ## Data and backups
 
 - Database: `data/postgres/`   · Excel files and collector work folders: `data/files/`   · HTTPS certificates: `data/caddy/`

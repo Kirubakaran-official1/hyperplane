@@ -1,10 +1,11 @@
-// Server shell around the Hyperplane dashboard: login, data picker, Admin (incl. Sync now), Compare.
+// Server shell around the Hyperplane dashboard: login, data picker, Admin (settings, Sync now, customers), Compare, Helpdesk.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Dashboard, mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell,
   ListCopy, HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, EqRow, formatDateLabel,
-  InfoTip, classifySignal, TF_WEIGHT, AlgoEditor, prebuiltAlgos, ruleText,
+  InfoTip, classifySignal, TF_WEIGHT, AlgoEditor, prebuiltAlgos, exprText,
 } from "./dashboard.jsx";
+import { Helpdesk, InboxBell, useHelpdeskUnread } from "../shared/helpdesk.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 let onUnauthorized = () => {};
@@ -396,7 +397,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
               <div style={{ minWidth: 0 }}>
                 {cur ? <AlgoEditor algo={cur} onChange={a => setAlgos(l => l.map((x, k) => k === i ? a : x))} />
                      : <div style={{ fontSize: 11.5, color: "var(--t3)" }}>Create an algorithm with ＋ New.</div>}
-                {cur && <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 8, lineHeight: 1.6 }}>Reads as: {cur.rules.map(ruleText).join("  AND  ") || "—"}</div>}
+                {cur && <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 8, lineHeight: 1.6 }}>Reads as: {exprText(cur) || "—"}</div>}
               </div>
             </div>
             <div style={{ marginTop: 10 }}><button onClick={save} disabled={saving} style={btn(true)}>{saving ? "Saving…" : "Save settings"}</button></div>
@@ -682,6 +683,171 @@ function CompareTab({ snaps, health, db }) {
   );
 }
 
+// ─── CUSTOMERS (the /app customer edition) ───────────────────────────────────
+const CUST_STATUS_C = { pending: "var(--mixed)", approved: "var(--long)", blocked: "var(--short)" };
+const RCOL = { G: "var(--long)", M: "var(--mixed)", W: "var(--short)", "-": "var(--t3)" };
+const EMPTY_CUST = { name: "", email: "", phone: "", country: "India", state: "", city: "", password: "", status: "approved", expires_on: "" };
+
+function CustomersTab({ snaps, notify }) {
+  const [list, setList] = useState(null);
+  const [pub, setPub] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [statusF, setStatusF] = useState("all"); const [q, setQ] = useState("");
+  const [adding, setAdding] = useState(false); const [nc, setNc] = useState(EMPTY_CUST);
+  const [pwFor, setPwFor] = useState(null); const [pw, setPw] = useState("");
+  const [confirmDel, setConfirmDel] = useState(null);
+  const load = useCallback(async () => {
+    const [l, p] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish")]);
+    setList(l); setPub(p);
+  }, []);
+  useEffect(() => { load().catch(e => notify(e.message, "err")); }, [load]);
+  const act = async (fn, okMsg) => { try { await fn(); if (okMsg) notify(okMsg); await load(); } catch (e) { notify(e.message, "err"); } };
+  const patch = (id, body, msg) => act(() => api(`/api/admin/customers/${id}`, { method: "PATCH", json: body }), msg);
+  const setMode = mode => act(() => api("/api/admin/publish/mode", { method: "PUT", json: { mode } }), mode === "auto" ? "Customers now get every new collection automatically" : "Publishing is now manual");
+  const publishNow = async () => { setBusy(true); await act(() => api("/api/admin/publish", { method: "POST" }), "Published to customers"); setBusy(false); };
+  const loadPreview = async () => { setBusy(true); try { setPreview(await api("/api/admin/publish/preview")); } catch (e) { notify(e.message, "err"); } setBusy(false); };
+
+  if (!list || !pub) return <div style={{ padding: 30, color: "var(--t3)" }}>Loading customers…</div>;
+  const counts = { all: list.length, pending: 0, approved: 0, blocked: 0 }; list.forEach(c => { counts[c.status]++; });
+  const today = new Date().toISOString().slice(0, 10);
+  const shown = list.filter(c => (statusF === "all" || c.status === statusF) && (!q || `${c.name} ${c.email} ${c.phone} ${c.state} ${c.country} ${c.city}`.toLowerCase().includes(q.toLowerCase())));
+  const last = pub.history[0];
+  const TH = { position: "sticky", top: 0, background: "var(--s2)", borderBottom: "1px solid var(--b1)", padding: "6px 8px", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "var(--t3)", textAlign: "left", whiteSpace: "nowrap", zIndex: 1 };
+  const TD = { padding: "6px 8px", whiteSpace: "nowrap", fontSize: 11.5 };
+  const small = { ...btn(), padding: "2px 7px", fontSize: 10.5 };
+  const newer = last && snaps[0] && new Date(snaps[0].taken_at) > new Date(last.as_of);
+  return (
+    <div style={{ padding: "18px 22px" }}>
+      <SectionTitle icon="👥" title="Customers — Hyperplane by QuantFriday" sub="The customer edition lives at /app on this same address. Customers only ever see the published view: Good / Moderate / Weak per timeframe, sector and industry bubbles and the top 10 — never signals, scores or how they are worked out." />
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 8, marginBottom: 12 }}>
+        {[["Customers", counts.all, "var(--t1)"], ["Waiting for approval", counts.pending, "var(--mixed)"], ["Active", counts.approved, "var(--long)"], ["Blocked", counts.blocked, "var(--short)"],
+          ["Last published", last ? fmtDT(last.published_at) : "never", "var(--acc)"]].map(([l, v, c]) => (
+          <div key={l} style={{ background: "var(--s1)", border: "1px solid var(--b1)", borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".6px", fontWeight: 700 }}>{l}</div>
+            <div style={{ fontFamily: "var(--mono)", fontSize: typeof v === "number" ? 18 : 12.5, fontWeight: 700, color: c, marginTop: 3 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <FocusCard icon="📣" title="Publishing to customers" style={{ marginBottom: 12 }}
+        sub="Customers see the last published collection. Automatic = every new collection goes out by itself. Manual = only when you press Publish.">
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <span style={{ fontSize: 11.5, color: "var(--t2)" }}>Mode</span>
+          <Pill active={pub.mode === "auto"} color="var(--long)" onClick={() => pub.mode !== "auto" && setMode("auto")}>Automatic</Pill>
+          <Pill active={pub.mode === "manual"} onClick={() => pub.mode !== "manual" && setMode("manual")}>Manual (admin pushes)</Pill>
+          <span style={{ width: 1, height: 20, background: "var(--b2)" }} />
+          <button onClick={loadPreview} disabled={busy} style={btn()}>Preview latest collection</button>
+          <button onClick={publishNow} disabled={busy || !snaps.length} style={btn(true)}>{busy ? "Working…" : "Publish latest collection now"}</button>
+          {newer && <span style={{ fontSize: 11, color: "var(--mixed)" }}>A newer collection ({fmtDT(snaps[0].taken_at)}) has not been published yet.</span>}
+        </div>
+        {preview && (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11.5, color: "var(--t2)", marginBottom: 6 }}>Preview of {fmtDT(preview.as_of)} · {preview.stocks.toLocaleString()} stocks (indices / ETFs left out)</div>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11, fontFamily: "var(--mono)", marginBottom: 8 }}>
+              {Object.entries(preview.breadth).map(([tf, b]) => <span key={tf}><b>{tf}</b> <span style={{ color: "var(--long)" }}>Good {b.G}</span> · <span style={{ color: "var(--mixed)" }}>Mod {b.M}</span> · <span style={{ color: "var(--short)" }}>Weak {b.W}</span>{b["-"] ? <span style={{ color: "var(--t3)" }}> · no data {b["-"]}</span> : null}</span>)}
+            </div>
+            <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".6px", fontWeight: 700, marginBottom: 4 }}>Top 10 customers will see</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {preview.top.map((s, i) => (
+                <span key={s.s} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid var(--b2)", background: "var(--s2)", fontFamily: "var(--mono)" }}>
+                  {i + 1}. {s.s} {[...s.r].map((c, k) => <span key={k} style={{ color: RCOL[c], fontWeight: 700 }}>{"DWMQY"[k]}</span>)}
+                </span>
+              ))}
+              {!preview.top.length && <span style={{ fontSize: 11, color: "var(--t3)" }}>No stock qualifies for the top 10 in this collection.</span>}
+            </div>
+          </div>
+        )}
+        <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".6px", fontWeight: 700, margin: "6px 0 4px" }}>Recent publishes</div>
+        {pub.history.length ? pub.history.slice(0, 5).map(h => (
+          <div key={h.id} style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--t2)", marginBottom: 2 }}>
+            {fmtDT(h.published_at)} · data {fmtDT(h.as_of)} · {h.stocks} stocks · {h.mode === "auto" ? "automatic" : `by ${h.by}`}
+          </div>
+        )) : <div style={{ fontSize: 11, color: "var(--t3)" }}>Nothing published yet — customers see "no data yet" until you publish.</div>}
+      </FocusCard>
+
+      <FocusCard icon="🧾" title={`Customer accounts (${shown.length})`}
+        sub="Customers sign up at /app and wait here for approval. Blocking or resetting a password signs them out everywhere at once. After 5 wrong passwords an account is locked for 15 minutes."
+        right={<button onClick={() => setAdding(v => !v)} style={btn(true)}>{adding ? "Cancel" : "＋ Add customer"}</button>}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          {["all", "pending", "approved", "blocked"].map(k => <Pill key={k} active={statusF === k} color={CUST_STATUS_C[k] || "var(--acc)"} onClick={() => setStatusF(k)}>{k === "all" ? "All" : k[0].toUpperCase() + k.slice(1)} · {counts[k]}</Pill>)}
+          <input placeholder="Search name, email, phone, place" value={q} onChange={e => setQ(e.target.value)} style={{ ...input, width: 230 }} />
+        </div>
+        {adding && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", padding: 10, border: "1px dashed var(--b2)", borderRadius: 8, marginBottom: 10 }}>
+            {[["name", "Name", 150], ["email", "Email", 190], ["phone", "Phone", 120], ["country", "Country", 110], ["state", "State", 120], ["city", "City", 110], ["password", "Password (8+)", 130]].map(([k, l, w]) => (
+              <input key={k} placeholder={l} type={k === "password" ? "password" : "text"} value={nc[k]} onChange={e => setNc(c => ({ ...c, [k]: e.target.value }))} style={{ ...input, width: w }} />
+            ))}
+            <select value={nc.status} onChange={e => setNc(c => ({ ...c, status: e.target.value }))} style={input}><option value="approved">active</option><option value="pending">pending</option></select>
+            <label style={{ fontSize: 11, color: "var(--t2)" }}>Access until <input type="date" value={nc.expires_on} onChange={e => setNc(c => ({ ...c, expires_on: e.target.value }))} style={input} /></label>
+            <button onClick={() => act(async () => { await api("/api/admin/customers", { method: "POST", json: { ...nc, expires_on: nc.expires_on || null } }); setNc(EMPTY_CUST); setAdding(false); }, "Customer added")} style={btn(true)}>Save</button>
+          </div>
+        )}
+        <div style={{ overflow: "auto", maxHeight: 520 }} className="tower-scroll">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Name", "Contact", "Location", "Status", "Access until", "Joined", "Last login", "Logins", ""].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
+            <tbody>
+              {shown.map(c => {
+                const expired = c.expires_on && c.expires_on < today;
+                const locked = c.locked_until && new Date(c.locked_until) > new Date();
+                return (
+                  <tr key={c.id} style={{ borderBottom: "1px solid var(--b1)" }}>
+                    <td style={TD}><b>{c.name}</b>{c.signup_ip && <div style={{ fontSize: 9.5, color: "var(--t3)" }}>signed up from {c.signup_ip}</div>}</td>
+                    <td style={TD}>{c.email}<div style={{ fontSize: 10.5, color: "var(--t3)" }}>{c.phone}</div></td>
+                    <td style={TD}>{[c.city, c.state].filter(Boolean).join(", ")}<div style={{ fontSize: 10.5, color: "var(--t3)" }}>{c.country}</div></td>
+                    <td style={{ ...TD, color: CUST_STATUS_C[c.status], fontWeight: 700 }}>{c.status === "approved" ? (expired ? "expired" : "active") : c.status}{locked && <div style={{ fontSize: 9.5, color: "var(--short)" }}>locked (wrong passwords)</div>}</td>
+                    <td style={TD}>
+                      <input type="date" value={c.expires_on || ""} onChange={e => patch(c.id, e.target.value ? { expires_on: e.target.value } : { clear_expiry: true }, "Access date saved")} style={{ ...input, padding: "2px 5px", color: expired ? "var(--short)" : "var(--t1)" }} title="Leave empty for no end date" />
+                    </td>
+                    <td style={TD}>{fmtDay(c.created_at)}</td>
+                    <td style={TD}>{c.last_login ? fmtDT(c.last_login) : "—"}</td>
+                    <td style={{ ...TD, fontFamily: "var(--mono)" }}>{c.login_count}</td>
+                    <td style={{ ...TD, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {c.status !== "approved" && <button onClick={() => patch(c.id, { status: "approved" }, `${c.name} can now sign in`)} style={{ ...small, color: "var(--long)", borderColor: "var(--long)" }}>Approve</button>}
+                      {c.status !== "blocked" && <button onClick={() => patch(c.id, { status: "blocked" }, `${c.name} is blocked`)} style={{ ...small, color: "var(--short)" }}>Block</button>}
+                      {locked && <button onClick={() => patch(c.id, { unlock: true }, "Unlocked")} style={small}>Unlock</button>}
+                      {pwFor === c.id
+                        ? <><input type="password" placeholder="New password" value={pw} onChange={e => setPw(e.target.value)} style={{ ...input, width: 120, padding: "2px 6px" }} />
+                            <button onClick={() => act(async () => { await api(`/api/admin/customers/${c.id}/password`, { method: "POST", json: { password: pw } }); setPwFor(null); setPw(""); }, "Password changed")} style={small}>Set</button></>
+                        : <button onClick={() => { setPwFor(c.id); setPw(""); }} style={small}>Reset password</button>}
+                      {confirmDel === c.id
+                        ? <><button onClick={() => act(async () => { await api(`/api/admin/customers/${c.id}`, { method: "DELETE" }); setConfirmDel(null); }, "Customer deleted")} style={{ ...small, color: "var(--short)", borderColor: "var(--short)" }}>Confirm delete</button><button onClick={() => setConfirmDel(null)} style={small}>Keep</button></>
+                        : <button onClick={() => setConfirmDel(c.id)} style={small}>Delete</button>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!shown.length && <tr><td colSpan={9} style={{ padding: 16, textAlign: "center", color: "var(--t3)" }}>No customers here yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </FocusCard>
+    </div>
+  );
+}
+
+// ─── ADMIN AREA: settings + customers (admins only) ──────────────────────────
+function AdminArea({ snaps, notify, ...adminProps }) {
+  const [sub, setSub] = useState(() => pref("hp_admin_sub", "system"));
+  const [pending, setPending] = useState(0);
+  const pick = k => { setSub(k); setPref("hp_admin_sub", k); };
+  useEffect(() => { api("/api/admin/customers").then(l => setPending(l.filter(c => c.status === "pending").length)).catch(() => {}); }, [sub]);
+  const tab = (k, label, extra) => (
+    <button key={k} onClick={() => pick(k)} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", border: 0, borderBottom: `2px solid ${sub === k ? "var(--acc)" : "transparent"}`,
+      background: "none", color: sub === k ? "var(--acc)" : "var(--t2)", fontSize: 12.5, fontWeight: 700, cursor: "pointer", marginBottom: -1 }}>{label}{extra}</button>
+  );
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 4, padding: "10px 22px 0", borderBottom: "1px solid var(--b1)" }}>
+        {tab("system", "⚙ System & settings")}
+        {tab("customers", "👥 Customers", pending > 0 && <span title="Waiting for approval" style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: "var(--mixed)", color: "#111", fontSize: 10, fontWeight: 800, lineHeight: "18px", textAlign: "center" }}>{pending}</span>)}
+      </div>
+      {sub === "customers" ? <CustomersTab snaps={snaps} notify={notify} /> : <AdminTab snaps={snaps} notify={notify} {...adminProps} />}
+    </div>
+  );
+}
+
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 function idsFor(sel, snaps) {
   if (sel.mode === "single") return sel.id ? [sel.id] : [];
@@ -707,6 +873,9 @@ export default function Root() {
   const cache = useRef(new Map());
   const notify = (text, kind = "ok") => { setToast({ text, kind }); setTimeout(() => setToast(null), 4500); };
   onUnauthorized = () => setUser(null);
+  const unread = useHelpdeskUnread(api, "/api/helpdesk", !!user);
+  const [tabReq, setTabReq] = useState(null); const [hdReq, setHdReq] = useState(null);
+  const openHelpdesk = id => { setTabReq({ id: "helpdesk", n: Date.now() }); setHdReq({ id, n: Date.now() }); };
 
   useEffect(() => { api("/api/me").then(setUser).catch(() => setUser(null)); }, []);
 
@@ -796,7 +965,7 @@ export default function Root() {
       setLocal(list); notify(`Showing ${list.length} local file${list.length > 1 ? "s" : ""} — pick a date to go back to stored data`);
     } catch (e) { notify(e.message, "err"); }
   };
-  const logout = async () => { try { await api("/api/logout", { method: "POST" }); } catch { /* ignore */ } setUser(null); setSnaps([]); setVersions([]); cache.current.clear(); };
+  const logout = async () => { try { await api("/api/logout", { method: "POST" }); } catch { /* ignore */ } window.location.replace("/login.html"); };
 
   if (user === undefined) return <><style>{CSS}</style><div className={`app-shell theme-${theme}`} style={{ minHeight: "100vh" }} /></>;
   if (!user) return <><style>{CSS}</style><div className={`app-shell theme-${theme}`}><LoginScreen onLogin={u => setUser(u)} theme={theme} setTheme={setTheme} /></div></>;
@@ -804,7 +973,8 @@ export default function Root() {
   const shown = local || versions;
   const extraTabs = [
     { id: "compare", label: "⏱ Compare", render: ({ health, db }) => <CompareTab snaps={snaps} health={health} db={db} /> },
-    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminTab snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} onSaved={loadViewCfg} /> }] : []),
+    { id: "helpdesk", label: `🎧 Helpdesk${unread.total ? ` (${unread.total})` : ""}`, render: () => <div style={{ padding: "18px 22px" }}><Helpdesk api={api} base="/api/helpdesk" staff={user.admin} openReq={hdReq} onChanged={unread.refresh} /></div> },
+    ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminArea snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} onSaved={loadViewCfg} /> }] : []),
   ];
   const empty = (
     <div style={{ padding: "60px 22px", textAlign: "center", color: "var(--t2)" }}>
@@ -818,11 +988,11 @@ export default function Root() {
   );
   return (
     <div className={`app-shell theme-${theme}`}>
-      <Dashboard rawVersions={shown} theme={theme} setTheme={setTheme} extraTabs={extraTabs} emptyState={empty} indexRules={indexRules} tech={tech}
+      <Dashboard rawVersions={shown} theme={theme} setTheme={setTheme} extraTabs={extraTabs} emptyState={empty} indexRules={indexRules} tech={tech} tabReq={tabReq}
         headerCenter={local
           ? <div style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ fontSize: 11, color: "var(--mixed)" }}>📂 Local file{local.length > 1 ? "s" : ""}: {local.map(v => v.fileName).join(", ").slice(0, 60)}</span><button onClick={() => setLocal(null)} style={btn(true)}>Back to stored data</button></div>
           : <DataPicker snaps={snaps} sel={sel} setSel={setSel} loading={loading} />}
-        headerRight={<UserMenu user={user} onLogout={logout} onLocalFiles={onLocalFiles} />} />
+        headerRight={<div style={{ display: "flex", gap: 8, alignItems: "center" }}><InboxBell unread={unread} onOpen={openHelpdesk} /><UserMenu user={user} onLogout={logout} onLocalFiles={onLocalFiles} /></div>} />
       {toast && (
         <div role="status" style={{ position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 500, background: "var(--s1)", border: `1px solid ${toast.kind === "err" ? "var(--short)" : "var(--acc)"}`, color: toast.kind === "err" ? "var(--short)" : "var(--t1)", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, boxShadow: "0 8px 24px rgba(0,0,0,.35)", maxWidth: "90vw" }}>{toast.text}</div>
       )}

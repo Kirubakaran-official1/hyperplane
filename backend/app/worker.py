@@ -19,6 +19,7 @@ from datetime import timedelta
 
 from . import config
 from .db import get_settings, init_db, pool, set_meta
+from .publish import publish
 from .schedule import due_slots, now
 from .store import save_snapshot, workbook_to_sheets
 
@@ -149,6 +150,12 @@ def run_job(job, bg):
         if job["kind"] == "manual" and settings.get("manual_keep") == "latest":
             _drop_older_manual(started.date(), keep_id=sid)
         print(f"✓ Stored as collection #{sid} ({len(sheets)} sheets)")
+        if get_settings().get("publish_mode") == "auto":
+            try:
+                pub = publish(sid, mode="auto", by="auto")
+                print(f"📣 Published to customers ({pub['stocks']} stocks)")
+            except Exception as e:                               # noqa: BLE001 — never fail the collection for this
+                print(f"⚠ Could not publish to customers: {e}")
         _append_log(job_id, tee.take())
         with pool.connection() as c:
             c.execute("UPDATE jobs SET status='done', finished_at=now(), snapshot_id=%s WHERE id=%s", (sid, job_id))
