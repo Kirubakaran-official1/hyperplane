@@ -125,12 +125,24 @@ NR_NEAR_RATIO = 1.9 / 2         # near-high: close >= high * 0.95   |   near-low
 #   Peak_High              = highest yearly High in that history
 #   Drawdown_From_Peak_Pct = how far the current price is below that peak
 #   Return_5Y_Pct          = current price vs the yearly close 5 years ago
-#   POOR    : price is more than HEALTH_POOR_DRAWDOWN_PCT % below its peak
-#   WEAK    : more than HEALTH_WEAK_DRAWDOWN_PCT % below its peak, OR lower than HEALTH_WEAK_YEARS years ago
+#   Worst_Crash_Pct        = deepest fall at any time in that history (a year's low vs the highest high before it)
+#   Run_Up_From_3Y_Low_X   = current price ÷ lowest low of the last 3 years (+ this year)
+#   POOR    : price is more than HEALTH_POOR_DRAWDOWN_PCT % below its peak, OR
+#             crashed HEALTH_CRASH_POOR_PCT %+ with the bottom in the last HEALTH_CRASH_RECENT_YEARS years, OR
+#             a round trip: crashed HEALTH_CRASH_WEAK_PCT %+ AND now HEALTH_ROUNDTRIP_X x+ its 3-year low
+#             (e.g. MBECL: ~380 → ~3 → 494, a 98% crash then 170x — the owner's example, 2026-10-04)
+#   WEAK    : more than HEALTH_WEAK_DRAWDOWN_PCT % below its peak, OR lower than HEALTH_WEAK_YEARS years ago, OR
+#             crashed HEALTH_CRASH_WEAK_PCT %+ at any time, OR now HEALTH_RUNUP_WEAK_X x+ its 3-year low
 #   HEALTHY : everything else
+# (an old crash alone only makes WEAK: unadjusted demergers can look like crashes in old yearly data, e.g. ADANIENT 2015)
 HEALTH_POOR_DRAWDOWN_PCT = 70
 HEALTH_WEAK_DRAWDOWN_PCT = 50
 HEALTH_WEAK_YEARS = 5
+HEALTH_CRASH_POOR_PCT = 90
+HEALTH_CRASH_RECENT_YEARS = 5
+HEALTH_CRASH_WEAK_PCT = 80
+HEALTH_ROUNDTRIP_X = 10
+HEALTH_RUNUP_WEAK_X = 8
 
 # ---------------------------------------------------------------- FAILED NR / TRAP (Failed_NR sheet) --
 #   Same mother candle as NR (NR_MOTHER_BODY_PCT), then:
@@ -3442,6 +3454,7 @@ def build_price_health_rows(frame, zone_rows):
     """PRICE HEALTH — long-term quality of every stock from its yearly candles (rule in SETTINGS)."""
     x = _Ctx(frame)
     H = x.ohlc_matrix('y', 'high')
+    L = x.ohlc_matrix('y', 'low')
     C = x.ohlc_matrix('y', 'close')
     idx = {sym: i for i, sym in enumerate(frame['symbol'].tolist())}
     out = []
@@ -3462,17 +3475,42 @@ def build_price_health_rows(frame, zone_rows):
         r_old = (c / c_old - 1) * 100 if not np.isnan(c_old) and c_old > 0 else None
         c3 = C[i, 3]
         r3 = (c / c3 - 1) * 100 if not np.isnan(c3) and c3 > 0 else None
+        # worst crash in the history: each year's low vs the highest high of the years before it (oldest → now)
+        run_peak, crash, crash_bar, crash_from, crash_to = None, 0.0, None, None, None
+        for j in range(H.shape[1] - 1, -1, -1):
+            hj, lj = H[i, j], L[i, j]
+            if np.isnan(hj) or np.isnan(lj) or lj <= 0:
+                continue
+            if run_peak:
+                d = (lj / run_peak - 1) * 100
+                if d < crash:
+                    crash, crash_bar, crash_from, crash_to = d, j, run_peak, lj
+            run_peak = max(run_peak or 0, hj)
+        lows3 = L[i, :4]
+        low3 = float(np.nanmin(lows3)) if not np.isnan(lows3).all() else np.nan
+        run_up = c / low3 if low3 > 0 else None
+        crash_txt = (f"crashed {-crash:.0f}% ({crash_from:,.2f} → {crash_to:,.2f}, "
+                     f"{'this year' if crash_bar == 0 else f'{crash_bar} year' + ('s' if crash_bar > 1 else '') + ' ago'})") if crash_bar is not None else ""
 
-        reasons = []
+        reasons, poor = [], []
         if dd is not None and dd <= -HEALTH_POOR_DRAWDOWN_PCT:
-            status = 'POOR'
-            reasons.append(f"{-dd:.0f}% below its {peak_bar}-year-ago peak of {peak:,.2f}" if peak_bar
-                           else f"{-dd:.0f}% below this year's peak of {peak:,.2f}")
+            poor.append(f"{-dd:.0f}% below its {peak_bar}-year-ago peak of {peak:,.2f}" if peak_bar
+                        else f"{-dd:.0f}% below this year's peak of {peak:,.2f}")
+        if crash <= -HEALTH_CRASH_POOR_PCT and crash_bar is not None and crash_bar <= HEALTH_CRASH_RECENT_YEARS:
+            poor.append(crash_txt)
+        elif crash <= -HEALTH_CRASH_WEAK_PCT and run_up is not None and run_up >= HEALTH_ROUNDTRIP_X:
+            poor.append(f"{crash_txt}, then {run_up:.0f}x from its 3-year low")
+        if poor:
+            status, reasons = 'POOR', poor
         else:
             if dd is not None and dd <= -HEALTH_WEAK_DRAWDOWN_PCT:
                 reasons.append(f"{-dd:.0f}% below its peak of {peak:,.2f}")
             if r_old is not None and r_old < 0:
                 reasons.append(f"lower than {HEALTH_WEAK_YEARS} years ago ({r_old:.0f}%)")
+            if crash <= -HEALTH_CRASH_WEAK_PCT:
+                reasons.append(crash_txt)
+            if run_up is not None and run_up >= HEALTH_RUNUP_WEAK_X:
+                reasons.append(f"{run_up:.0f}x its 3-year low — a very fast run-up")
             status = 'WEAK' if reasons else 'HEALTHY'
         out.append({
             'Symbol': z['Symbol'], 'Stock_Name': z['Stock_Name'], 'Sector': z['Sector'], 'Industry': z['Industry'],
@@ -3480,6 +3518,8 @@ def build_price_health_rows(frame, zone_rows):
             'Peak_High': _r2(peak), 'Peak_Years_Ago': peak_bar,
             'Drawdown_From_Peak_Pct': _r2(dd),
             f'Return_{HEALTH_WEAK_YEARS}Y_Pct': _r2(r_old), 'Return_3Y_Pct': _r2(r3),
+            'Worst_Crash_Pct': _r2(crash) if crash_bar is not None else None, 'Worst_Crash_Years_Ago': crash_bar,
+            'Run_Up_From_3Y_Low_X': _r2(run_up),
             'Years_Of_History': years,
             'Reason': '; '.join(reasons) if reasons else 'price holds up well against its history',
             'Is_FNO': z['Is_FNO'], 'Is_Nifty_500': z['Is_Nifty_500'],

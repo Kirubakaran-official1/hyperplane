@@ -90,7 +90,9 @@ const SECTIONS = [
     </tbody></table>
     <h3>Stock reliability</h3>
     <p>How healthy and steady the stock's longer-term price history is. <b>Strong</b> = healthy and steady,
-      <b> Moderate</b> = average, <b>Weak</b> = poor or erratic (big gaps, unstable). Prefer <b>Strong</b>.</p>
+      <b> Moderate</b> = average, <b>Weak</b> = poor or erratic (big gaps, unstable). Prefer <b>Strong</b>.
+      A stock that <b>crashed 80–90% or more</b> in the past, or that has <b>shot up many times from its lows</b> in the last
+      few years, is marked Moderate or Weak — even if its price looks fine today. Such stocks can swing wildly.</p>
     <h3>Sector and industry</h3>
     <p>A <b>sector</b> is a big group (for example Bank, IT, Healthcare). An <b>industry</b> is a smaller group inside it
       (for example Pharmaceuticals inside Healthcare). Stocks in the same group usually move together.</p>
