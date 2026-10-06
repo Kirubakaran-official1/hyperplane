@@ -68,6 +68,14 @@
 		file_server
 	}
 
+	# Browser caching: pages (index.html, login.html…) are always re-checked, so a deploy shows up on the next
+	# reload; the built JS/CSS files have a content hash in their name, so they can be cached for good.
+	# (APIs set their own Cache-Control.)
+	@hashed path /assets/* /app/assets/*
+	@pages not path /assets/* /app/assets/* /api/* /app/api/*
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+	header @pages Cache-Control "no-cache"
+
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY

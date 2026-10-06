@@ -313,6 +313,26 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   only (weak stock, strong group) / Avoid / No edge; bidirectional downgrades Best case. `groupState`: strong = st ≥ 55
   or rank in top 25 %, weak = st < 45 and rank in bottom 50 % (absolute-only made 22/25 top stocks "weak" in a weak
   market). Thresholds chosen by Claude — owner may tune.
+- Customer sign-up mode (2026-10-06): Admin → Customers → "New sign-ups" switch: Admin approves each (default) |
+  Approve automatically. Stored in `portal_config` (key auto_approve) which hp_portal CANNOT read; it may only call
+  `portal_auto_approve()` (SECURITY DEFINER, yes/no). A BEFORE INSERT trigger `customers_auto_approve` sets status
+  approved + approved_at for self sign-ups (signup_ip set) when on — hp_portal still has no right to write status.
+  portal `/app/api/register` RETURNING status → when approved it starts the session (signed in at once, `signed_in`);
+  `/app/api/signup-info` tells the form which subtitle to show. Admin-created "pending" customers are never auto-approved.
+  Routes: GET/PUT /api/admin/signup-mode. Verified: hp_portal denied on portal_config, on inserting status, on the trigger fn.
+- Customer quick guide (2026-10-05, `frontend/app/src/quick.jsx`): gold ⓘ button in the top bar (left of the bell) →
+  modal in very simple words: 1 order Sector → Industry → Stock (river / stream / boat), 2 five timeframes for all three,
+  3 decide from stock + industry + sector with the owner's 4 examples (strong stock + weak ind + weak sec = Avoid;
+  strong + moderate ind + strong sec = Okay/careful; moderate stock + strong ind + strong sec = Watch; all strong = Best
+  case), 4 "4 clicks" walkthrough, button to Docs. `combinedView` now matches example 3: uptrend with |os| < 50 in a
+  strong group = "Watch — stock still building". Customer bubble charts say Uptrend / Downtrend (no bullish/bearish).
+- Customer sign-in page (2026-10-05): hero = "Protect your capital with the right quant information" + 4 points (stay away
+  from traps, trade with the tide, five timeframes one answer, less noise) + "not investment advice" line — worded as
+  help, never a promise (SEBI). Sign-up phone field = "WhatsApp number" with an invite to the Hyperplane community note
+  (number never shared); Admin → Customers shows it as "WhatsApp …".
+  WhatsApp field = searchable country-code picker (`DialSelect`, all 247 codes in `frontend/app/src/dial.js`, Popular
+  first, search by name or code, Enter picks; follows Country until picked by hand) + digits-only number, no placeholder;
+  India 10 digits starting 6–9, others 5–13; stored as "+91 9876543210"; portal.py checks the same (`PHONE_RE`, `IN_MOBILE_RE`). Phones: hero shows only brand + headline + intro.
 - Customer navigation + theme (2026-10-03): NO tab buttons in the top bar. Control Tower is the landing page; the logo
   (`.brand-home`) returns to it; `AccountMenu` (name ▾) = Account (modal: email, access until, appearance) · Helpdesk
   (unread count; red dot on the avatar) · Docs · Appearance Dark/Light · Sign out. Helpdesk / Docs pages show a

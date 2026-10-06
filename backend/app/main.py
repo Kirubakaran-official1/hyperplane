@@ -30,7 +30,8 @@ from pydantic import BaseModel
 
 from . import config
 from . import helpdesk as hd
-from .db import DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_meta, get_settings, init_db, pool, put_settings
+from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_meta, get_settings, init_db, pool,
+                 put_settings, set_auto_approve)
 from .schedule import TZ, next_runs, now, parse_hhmm
 from .publish import publish
 from .security import hash_password
@@ -395,6 +396,21 @@ class PasswordIn(BaseModel):
 def _check_pw(pw):
     if not 8 <= len(pw) <= 128:
         raise HTTPException(422, "Password must be 8–128 characters")
+
+
+class SignupModeIn(BaseModel):
+    auto_approve: bool
+
+
+@app.get("/api/admin/signup-mode")
+def signup_mode(user=Depends(admin_user)):
+    return {"auto_approve": get_auto_approve()}
+
+
+@app.put("/api/admin/signup-mode")
+def set_signup_mode(body: SignupModeIn, user=Depends(admin_user)):
+    set_auto_approve(body.auto_approve)
+    return {"auto_approve": get_auto_approve()}
 
 
 @app.get("/api/admin/customers")

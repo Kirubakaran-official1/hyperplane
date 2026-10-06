@@ -697,18 +697,21 @@ function CustomersTab({ snaps, notify }) {
   const [adding, setAdding] = useState(false); const [nc, setNc] = useState(EMPTY_CUST);
   const [pwFor, setPwFor] = useState(null); const [pw, setPw] = useState("");
   const [confirmDel, setConfirmDel] = useState(null);
+  const [signup, setSignup] = useState(null);
   const load = useCallback(async () => {
-    const [l, p] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish")]);
-    setList(l); setPub(p);
+    const [l, p, m] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish"), api("/api/admin/signup-mode")]);
+    setList(l); setPub(p); setSignup(m);
   }, []);
   useEffect(() => { load().catch(e => notify(e.message, "err")); }, [load]);
   const act = async (fn, okMsg) => { try { await fn(); if (okMsg) notify(okMsg); await load(); } catch (e) { notify(e.message, "err"); } };
   const patch = (id, body, msg) => act(() => api(`/api/admin/customers/${id}`, { method: "PATCH", json: body }), msg);
+  const setSignupMode = on => act(() => api("/api/admin/signup-mode", { method: "PUT", json: { auto_approve: on } }),
+    on ? "New sign-ups are now approved automatically and signed in straight away" : "New sign-ups now wait for your approval");
   const setMode = mode => act(() => api("/api/admin/publish/mode", { method: "PUT", json: { mode } }), mode === "auto" ? "Customers now get every new collection automatically" : "Publishing is now manual");
   const publishNow = async () => { setBusy(true); await act(() => api("/api/admin/publish", { method: "POST" }), "Published to customers"); setBusy(false); };
   const loadPreview = async () => { setBusy(true); try { setPreview(await api("/api/admin/publish/preview")); } catch (e) { notify(e.message, "err"); } setBusy(false); };
 
-  if (!list || !pub) return <div style={{ padding: 30, color: "var(--t3)" }}>Loading customers…</div>;
+  if (!list || !pub || !signup) return <div style={{ padding: 30, color: "var(--t3)" }}>Loading customers…</div>;
   const counts = { all: list.length, pending: 0, approved: 0, blocked: 0 }; list.forEach(c => { counts[c.status]++; });
   const today = new Date().toISOString().slice(0, 10);
   const shown = list.filter(c => (statusF === "all" || c.status === statusF) && (!q || `${c.name} ${c.email} ${c.phone} ${c.state} ${c.country} ${c.city}`.toLowerCase().includes(q.toLowerCase())));
@@ -767,6 +770,25 @@ function CustomersTab({ snaps, notify }) {
         )) : <div style={{ fontSize: 11, color: "var(--t3)" }}>Nothing published yet — customers see "no data yet" until you publish.</div>}
       </FocusCard>
 
+      <FocusCard icon="🚪" title="New sign-ups" style={{ marginBottom: 12 }}
+        sub="Choose what happens when someone creates an account at /app. Blocking, access dates and password resets work the same either way.">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div role="radiogroup" aria-label="Sign-up approval" style={{ display: "inline-flex", border: "1px solid var(--b2)", borderRadius: 999, padding: 3, background: "var(--s2)", gap: 3 }}>
+            {[[false, "🔒 Admin approves each sign-up"], [true, "⚡ Approve automatically"]].map(([on, label]) => (
+              <button key={label} role="radio" aria-checked={signup.auto_approve === on} onClick={() => signup.auto_approve !== on && setSignupMode(on)}
+                style={{ padding: "6px 14px", borderRadius: 999, border: 0, cursor: "pointer", fontSize: 12, fontWeight: 700,
+                  background: signup.auto_approve === on ? (on ? "var(--long)" : "var(--acc)") : "transparent",
+                  color: signup.auto_approve === on ? "#04121a" : "var(--t2)" }}>{label}</button>
+            ))}
+          </div>
+          <span style={{ fontSize: 11.5, color: signup.auto_approve ? "var(--long)" : "var(--t2)" }}>
+            {signup.auto_approve
+              ? "On: new customers can use Hyperplane immediately — they are signed in right after creating their account."
+              : `Off: new customers wait as "pending" until you press Approve below${counts.pending ? ` (${counts.pending} waiting now)` : ""}.`}
+          </span>
+        </div>
+      </FocusCard>
+
       <FocusCard icon="🧾" title={`Customer accounts (${shown.length})`}
         sub="Customers sign up at /app and wait here for approval. Blocking or resetting a password signs them out everywhere at once. After 5 wrong passwords an account is locked for 15 minutes."
         right={<button onClick={() => setAdding(v => !v)} style={btn(true)}>{adding ? "Cancel" : "＋ Add customer"}</button>}>
@@ -776,7 +798,7 @@ function CustomersTab({ snaps, notify }) {
         </div>
         {adding && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", padding: 10, border: "1px dashed var(--b2)", borderRadius: 8, marginBottom: 10 }}>
-            {[["name", "Name", 150], ["email", "Email", 190], ["phone", "Phone", 120], ["country", "Country", 110], ["state", "State", 120], ["city", "City", 110], ["password", "Password (8+)", 130]].map(([k, l, w]) => (
+            {[["name", "Name", 150], ["email", "Email", 190], ["phone", "WhatsApp no.", 120], ["country", "Country", 110], ["state", "State", 120], ["city", "City", 110], ["password", "Password (8+)", 130]].map(([k, l, w]) => (
               <input key={k} placeholder={l} type={k === "password" ? "password" : "text"} value={nc[k]} onChange={e => setNc(c => ({ ...c, [k]: e.target.value }))} style={{ ...input, width: w }} />
             ))}
             <select value={nc.status} onChange={e => setNc(c => ({ ...c, status: e.target.value }))} style={input}><option value="approved">active</option><option value="pending">pending</option></select>
@@ -794,7 +816,7 @@ function CustomersTab({ snaps, notify }) {
                 return (
                   <tr key={c.id} style={{ borderBottom: "1px solid var(--b1)" }}>
                     <td style={TD}><b>{c.name}</b>{c.signup_ip && <div style={{ fontSize: 9.5, color: "var(--t3)" }}>signed up from {c.signup_ip}</div>}</td>
-                    <td style={TD}>{c.email}<div style={{ fontSize: 10.5, color: "var(--t3)" }}>{c.phone}</div></td>
+                    <td style={TD}>{c.email}{c.phone && <div style={{ fontSize: 10.5, color: "var(--t3)" }} title="WhatsApp number (community invite)">WhatsApp {c.phone}</div>}</td>
                     <td style={TD}>{[c.city, c.state].filter(Boolean).join(", ")}<div style={{ fontSize: 10.5, color: "var(--t3)" }}>{c.country}</div></td>
                     <td style={{ ...TD, color: CUST_STATUS_C[c.status], fontWeight: 700 }}>{c.status === "approved" ? (expired ? "expired" : "active") : c.status}{locked && <div style={{ fontSize: 9.5, color: "var(--short)" }}>locked (wrong passwords)</div>}</td>
                     <td style={TD}>

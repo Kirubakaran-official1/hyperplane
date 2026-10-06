@@ -88,7 +88,8 @@ def _signer():
 
 
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[a-z]{2,}$", re.I)
-PHONE_RE = re.compile(r"^[+0-9 ()-]{6,20}$")
+PHONE_RE = re.compile(r"^\+\d{1,4} \d{5,13}$")             # "+<country code> <number>" from the sign-up form
+IN_MOBILE_RE = re.compile(r"^\+91 [6-9]\d{9}$")             # India: 10 digits starting 6-9
 
 
 class RegisterIn(BaseModel):
@@ -107,8 +108,14 @@ class LoginIn(BaseModel):
     password: str
 
 
+def _start_session(request: Request, response: Response, r):
+    token = _signer().dumps({"id": r["id"], "v": r["session_ver"]})
+    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite="strict", secure=secure, path="/app")
+
+
 @app.post("/app/api/register")
-def register(body: RegisterIn, request: Request):
+def register(body: RegisterIn, request: Request, response: Response):
     _rate("register", _ip(request), 5, 3600)
     email = body.email.strip().lower()
     name, country, state = body.name.strip(), body.country.strip(), body.state.strip()
@@ -116,8 +123,9 @@ def register(body: RegisterIn, request: Request):
         raise HTTPException(422, "Please enter your full name")
     if not EMAIL_RE.match(email):
         raise HTTPException(422, "Please enter a valid email address")
-    if not PHONE_RE.match(body.phone.strip()):
-        raise HTTPException(422, "Please enter a valid phone number")
+    phone = body.phone.strip()
+    if not PHONE_RE.match(phone) or (phone.startswith("+91 ") and not IN_MOBILE_RE.match(phone)):
+        raise HTTPException(422, "Please enter a valid WhatsApp number — choose the country code and type the number (10 digits for India)")
     if not country or not state:
         raise HTTPException(422, "Please choose your country and state")
     if not 8 <= len(body.password) <= 128:
@@ -125,12 +133,26 @@ def register(body: RegisterIn, request: Request):
     if not body.accept:
         raise HTTPException(422, "Please accept the terms to continue")
     with pool.connection() as c:
-        c.execute("INSERT INTO customers (email, name, phone, country, state, city, pw_hash, signup_ip) "
-                  "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING",
-                  (email, name, body.phone.strip(), country[:60], state[:60], body.city.strip()[:60],
-                   hash_password(body.password), _ip(request)))
+        # the database approves it right away when Admin has switched on automatic approval (trigger, see db.py)
+        r = c.execute("INSERT INTO customers (email, name, phone, country, state, city, pw_hash, signup_ip) "
+                      "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING "
+                      "RETURNING id, name, status, session_ver",
+                      (email, name, phone, country[:60], state[:60], body.city.strip()[:60],
+                       hash_password(body.password), _ip(request))).fetchone()
+        if r and r["status"] == "approved":
+            c.execute("UPDATE customers SET last_login = now(), login_count = login_count + 1 WHERE id = %s", (r["id"],))
+    if r and r["status"] == "approved":
+        _start_session(request, response, r)
+        return {"ok": True, "signed_in": True, "name": r["name"], "message": "Welcome to Hyperplane! Your account is ready."}
     # same answer whether or not the email already existed
     return {"ok": True, "message": "Thank you! Your account will be active once QuantFriday approves it."}
+
+
+@app.get("/app/api/signup-info")
+def signup_info(request: Request):
+    _rate("signup-info", _ip(request), 60, 60)
+    with pool.connection() as c:
+        return {"auto_approve": bool(c.execute("SELECT portal_auto_approve() AS v").fetchone()["v"])}
 
 
 def _blocked_reason(r):
@@ -169,9 +191,7 @@ def login(body: LoginIn, request: Request, response: Response):
     with pool.connection() as c:
         c.execute("UPDATE customers SET failed_logins = 0, locked_until = NULL, last_login = now(), "
                   "login_count = login_count + 1 WHERE id = %s", (r["id"],))
-    token = _signer().dumps({"id": r["id"], "v": r["session_ver"]})
-    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
-    response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, httponly=True, samesite="strict", secure=secure, path="/app")
+    _start_session(request, response, r)
     return {"name": r["name"]}
 
 

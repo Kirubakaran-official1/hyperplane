@@ -13,16 +13,16 @@ const Tip = ({ kind = "tip", title, children }) => (
 
 function Quadrants() {
   const q = [
-    ["Strong + Bearish", "Strong selling in this group. Not a place to buy.", "q-sb"],
-    ["Strong + Bullish", "The leaders. Most buying, strong trend. Start your search here.", "q-good"],
-    ["Weak + Bearish", "The laggards. Weak and falling. Avoid for buying.", "q-bad"],
-    ["Weak + Bullish", "Getting better, but still weak. Watch — it may become a leader later.", "q-wb"],
+    ["Strong + Downtrend", "Strong selling in this group. Not a place to buy.", "q-sb"],
+    ["Strong + Uptrend", "The leaders. Most buying, strong trend. Start your search here.", "q-good"],
+    ["Weak + Downtrend", "The laggards. Weak and falling. Avoid for buying.", "q-bad"],
+    ["Weak + Uptrend", "Getting better, but still weak. Watch — it may become a leader later.", "q-wb"],
   ];
   return (
     <div className="g-quad">
       <div className="g-quad-y">↑ stronger</div>
       <div className="g-quad-grid">{q.map(([t, d, c]) => <div key={t} className={`g-q ${c}`}><b>{t}</b><span>{d}</span></div>)}</div>
-      <div className="g-quad-x">← more bearish · more bullish →</div>
+      <div className="g-quad-x">← more downtrend · more uptrend →</div>
     </div>
   );
 }
@@ -50,7 +50,7 @@ const SECTIONS = [
       <li><b>Check the market mood.</b> Look at the tiles: are there many more <Tag k="up">▲ Uptrend</Tag> stocks than
         <Tag k="down">▼ Downtrend</Tag>? A strong market makes everything easier.</li>
       <li><b>Find the strong sectors.</b> In <i>Sector Strength Leaderboard</i>, look at the bubbles in the <b>top-right</b>
-        (Strong + Bullish). Click one or more to select them.</li>
+        (Strong + Uptrend). Click one or more to select them.</li>
       <li><b>Find the strong industries inside them.</b> The <i>Industry Bias Momentum</i> chart now shows only those sectors'
         industries. Again prefer the top-right ones and click them.</li>
       <li><b>Pick the stocks.</b> In <i>Master data</i>, keep <b>Trend = Up</b>, <b>Stock reliability = Strong</b>, and sort by
@@ -100,7 +100,7 @@ const SECTIONS = [
     <ul>
       <li><b>Market cap</b> — company size: Large, Mid, Small, Others.</li>
       <li><b>F&amp;O</b> — the stock also trades in Futures &amp; Options.</li>
-      <li><b>Net bias</b> (chart left ↔ right) — whether a group has more bullish or more bearish activity.</li>
+      <li><b>Chart left ↔ right</b> — whether more of a group is in an uptrend (right) or a downtrend (left).</li>
     </ul>
   </> },
 
@@ -132,7 +132,7 @@ const SECTIONS = [
     <p>Two charts sit side by side: <b>Sector Strength Leaderboard</b> (left) and <b>Industry Bias Momentum</b> (right).
       Each bubble is a group of stocks.</p>
     <ul>
-      <li><b>Left ↔ right</b> = net bias: further right = more bullish, further left = more bearish.</li>
+      <li><b>Left ↔ right</b> = trend: further right = more of the group in an uptrend, further left = more in a downtrend.</li>
       <li><b>Down ↕ up</b> = strength (0–100): higher = stronger.</li>
       <li><b>Bubble size</b> = activity: bigger = more happening in that group.</li>
     </ul>
@@ -173,7 +173,7 @@ const SECTIONS = [
         (one-directional up / down, or bidirectional) and a one-line summary in plain words.</li>
       <li><b>Combined view</b> — the stock, its <b>sector</b> and its <b>industry</b> read together, with a verdict:
         <b> ✓ Best case</b> (all three strong), <b>⚠ Careful</b> (strong stock, weak group), <b>◐ Okay</b> (group only average),
-        <b> 👁 Watch only</b> (weak stock, strong group) or <b>✕ Avoid for buying</b>. A group counts as strong when it ranks in the
+        <b> 👁 Watch</b> (strong group, but the stock is weak or only moderate) or <b>✕ Avoid for buying</b>. A group counts as strong when it ranks in the
         top quarter (or is above 55%), and weak when it is in the bottom half and under 45%.</li>
       <li><b>Timeframe rows</b> — Daily to Yearly, each with a bar, “xx% strength” and Uptrend / Downtrend / Sideways.</li>
       <li><b>Sector &amp; industry strength</b> — how strong the stock's sector and industry are (0–100%) on every timeframe, and their
@@ -227,7 +227,7 @@ const SECTIONS = [
     <h3>Spotting what to avoid</h3>
     <ul>
       <li>Trend: <b>▼ Down</b> shows the weakest stocks — check before buying anything on that list.</li>
-      <li>Bubbles in the bottom-left (Weak + Bearish) are groups to stay away from for buying.</li>
+      <li>Bubbles in the bottom-left (Weak + Downtrend) are groups to stay away from for buying.</li>
     </ul>
   </> },
 

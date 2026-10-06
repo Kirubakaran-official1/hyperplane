@@ -183,7 +183,9 @@ bash deploy/deploy.sh
 ```
 
 **Everyday use — ⚙ Admin → 👥 Customers (admins only):**
-- New sign-ups appear as *pending*: press **Approve**. You can also add a customer yourself, set an *Access until*
+- **New sign-ups** switch: *Admin approves each sign-up* (they wait as *pending* until you press **Approve**) or
+  *Approve automatically* (they can use Hyperplane right after creating their account).
+- Pending sign-ups: press **Approve**. You can also add a customer yourself, set an *Access until*
   date, **Block**, **Reset password** or **Delete**. Blocking or resetting signs the customer out at once.
 - **Publishing:** *Automatic* sends every new collection to customers; *Manual* waits for you to press
   **Publish latest collection now** (use **Preview** first to see the top 10 and the Good / Moderate / Weak counts).

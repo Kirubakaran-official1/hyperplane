@@ -4,12 +4,48 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
 import Guide, { GUIDE_CSS } from "./guide.jsx";
+import { QuickGuideButton, QUICK_CSS } from "./quick.jsx";
+import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
 
 // ─── vocabulary ──────────────────────────────────────────────────────────────
 const TFS = [["D","Daily","short term"],["W","Weekly","weeks"],["M","Monthly","months"],["Q","Quarterly","quarters"],["Y","Yearly","long term"]];
 const TF_NAME = { A:"Combined", ...Object.fromEntries(TFS.map(([k,l]) => [k,l])) };
 const SIZES = ["Large","Mid","Small","Others"];
 const TREND_CUT = 24;                       // |strength| below this = sideways (the server's Good / Weak cut)
+// WhatsApp country code: every country (dial.js); it follows the Country choice until the user picks a code
+const DIAL_BY = Object.fromEntries(DIAL_CODES);
+// India: 10 digits starting 6-9; elsewhere 5-13 digits (E.164 allows 15 digits including the country code)
+const phoneError = (code, num) => code === "91" ? (/^[6-9]\d{9}$/.test(num) ? "" : "Enter your 10-digit WhatsApp number (it starts with 6, 7, 8 or 9)")
+  : (/^\d{5,13}$/.test(num) ? "" : "Enter your WhatsApp number without the country code (digits only)");
+const foldText = t => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+function DialSelect({ value, onChange }) {
+  const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const ref = useRef(null);
+  useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const qq = foldText(q.trim()).replace(/^\+/, "");
+  const found = qq ? DIAL_CODES.filter(([n, c]) => foldText(n).includes(qq) || c.startsWith(qq))
+    .sort((x, y) => (foldText(y[0]).startsWith(qq) - foldText(x[0]).startsWith(qq)) || (y[1] === qq) - (x[1] === qq)) : [];
+  const popular = POPULAR_DIAL.map(n => [n, DIAL_BY[n]]);
+  const pick = n => { onChange(n); setOpen(false); setQ(""); };
+  const row = pre => ([n, c]) => (
+    <button key={pre + n} type="button" role="option" aria-selected={n === value} className={`dial-it ${n === value ? "on" : ""}`} onClick={() => pick(n)}>
+      <span>{n}</span><b>+{c}</b></button>);
+  return (
+    <div className="ms dial" ref={ref}>
+      <button type="button" className="ms-btn on" onClick={() => setOpen(v => !v)} aria-haspopup="listbox" aria-expanded={open} title={value}>
+        <span>+{DIAL_BY[value]} <small>{value}</small></span><span className="caret">▾</span></button>
+      {open && (
+        <div className="ms-pop dial-pop">
+          <input autoFocus className="ms-q" placeholder="Search country or code" value={q} onChange={e => setQ(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); const first = (qq ? found : popular)[0]; if (first) pick(first[0]); } else if (e.key === "Escape") setOpen(false); }}/>
+          <div className="ms-list" role="listbox">
+            {qq ? (found.length ? found.map(row("f")) : <div className="ms-empty">No country found</div>)
+              : <><div className="dial-h">Popular</div>{popular.map(row("p"))}<div className="dial-h">All countries · {DIAL_CODES.length}</div>{DIAL_CODES.map(row("a"))}</>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 const COUNTRIES = ["India","United Arab Emirates","United States","United Kingdom","Singapore","Saudi Arabia","Qatar","Kuwait","Oman","Bahrain","Canada","Australia","Malaysia","Germany","Other"];
 const IN_STATES = ["Andaman and Nicobar Islands","Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chandigarh","Chhattisgarh","Dadra and Nagar Haveli and Daman and Diu","Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jammu and Kashmir","Jharkhand","Karnataka","Kerala","Ladakh","Lakshadweep","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Puducherry","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal"];
 const DISCLAIMER = "Hyperplane shows trend information for education only. It is not investment advice or a recommendation to buy or sell any security. Please do your own research or consult a SEBI-registered adviser before investing.";
@@ -76,12 +112,13 @@ function summaryOf(s) {
 // strong = strength ≥ 55% or in the top quarter of all sectors / industries; weak = under 45% and in the bottom half.
 const groupState = g => !g ? null : (g.st >= 55 || g.rank / g.of <= 0.25) ? "up" : (g.st < 45 && g.rank / g.of > 0.5) ? "down" : "side";
 const GROUP_WORD = { up:"strong", side:"average", down:"weak" };
-function combinedView(od, bi, sec, ind) {
+function combinedView(od, bi, sec, ind, os = null) {
   const gs = [sec && ["sector", groupState(sec)], ind && ["industry", groupState(ind)]].filter(Boolean);
   const weak = gs.filter(([, st]) => st === "down").map(([n]) => n), strong = gs.length > 0 && gs.every(([, st]) => st === "up");
   const which = weak.join(" and ");
   let v;
-  if (od === 1) v = strong ? ["good", "✓ Best case — with the tide", "Strong stock in a strong industry and a strong sector. Everything points the same way."]
+  if (od === 1 && strong && os != null && Math.abs(os) < 50) v = ["watch", "👁 Watch — stock still building", "Its sector and industry are strong, but the stock's own trend is only moderate. Keep it on your watch list and act when it turns strong."];
+  else if (od === 1) v = strong ? ["good", "✓ Best case — with the tide", "Strong stock in a strong industry and a strong sector. Everything points the same way."]
     : weak.length ? ["warn", "⚠ Careful — against its group", `The stock is strong, but its ${which} ${weak.length > 1 ? "are" : "is"} weak. It is moving against its own group — avoid or wait (golden rule 2).`]
     : ["mid", "◐ Okay — group is only average", "The stock is strong, but its group is only average. Candidates in stronger sectors / industries are better."];
   else if (od === -1) v = strong ? ["watch", "👁 Watch only — a laggard", "A weak stock inside a strong group. It may catch up later — or keep lagging. Not a buy yet."]
@@ -235,32 +272,41 @@ function MultiSelect({ label, options, value, onChange, width = 200 }) {
 // ─── sign in / register ──────────────────────────────────────────────────────
 function Hero() {
   const feats = [
-    ["Uptrend or downtrend — with a strength", "Every NSE stock on Daily, Weekly, Monthly, Quarterly and Yearly: ▲ or ▼, scored 0–100."],
-    ["Sector & industry strength", "See which sectors and industries lead or lag, on each timeframe or combined."],
-    ["Spot bidirectional stocks", "Know when the short term and the long term disagree — before you act."],
-    ["Updated every session", "Fresh after every market session, with copy-to-TradingView in one click."],
+    ["Stay away from the traps", "Weak stocks, weak sectors, past crashes and wild run-ups are flagged — before your money goes in."],
+    ["Trade with the tide", "See at a glance whether the stock, its industry and its sector all point the same way."],
+    ["Five timeframes, one answer", "Daily to Yearly trend strength in one view — and a warning when short term and long term disagree."],
+    ["Less noise, better decisions", "No jargon and no hundred charts: one clear screen, refreshed every session, copy to TradingView in one click."],
   ];
+  const demo = [["Daily", "up", 82], ["Weekly", "up", 71], ["Monthly", "side", 12], ["Quarterly", "down", 44], ["Yearly", "down", 58]];
   return (
     <div className="hero">
       <div className="hero-grid"/>
       <Brand/>
-      <h2 className="hero-h">Know the trend<br/><span>before you trade.</span></h2>
-      <p className="hero-p">Hyperplane reads every NSE stock across five timeframes and turns it into one clear picture — direction, strength and sector, in plain words.</p>
+      <div className="hero-k">Quant trend intelligence for Indian stocks</div>
+      <h2 className="hero-h">Protect your capital<br/><span>with the right quant information.</span></h2>
+      <p className="hero-p">Most losses start the same way — buying a weak stock, in a falling sector, against the bigger trend.
+        Hyperplane checks every NSE stock, its industry and its sector across five timeframes, and tells you in plain words
+        where the strength is and what to stay away from. You don't need more information — you need the right information.</p>
       <ul className="feats">{feats.map(([h, t]) => <li key={h}><span className="tick">✓</span><div><b>{h}</b><span>{t}</span></div></li>)}</ul>
       <div className="hero-demo">
-        {[["Daily","up",82],["Weekly","up",71],["Monthly","side",12],["Quarterly","down",44],["Yearly","down",58]].map(([l, k, v]) => (
-          <div key={l} className="hd-row"><span>{l}</span><span className={`tc ${k}`}>{k === "up" ? "▲" : k === "down" ? "▼" : "◆"} {v}</span><div className="sbar"><div className={`sbar-f ${k}`} style={{ width:`${v}%` }}/></div></div>
+        {demo.map(([l, k, v]) => (
+          <div key={l} className="hd-row"><span>{l}</span>
+            <span className={`meter ${k}`}><span className="bars" aria-hidden="true">{[1, 2, 3, 4, 5].map(i => <i key={i} className={i <= Math.max(1, Math.ceil(v / 20)) ? "on" : ""}/>)}</span>{v}%</span>
+            <div className="sbar"><div className={`sbar-f ${k}`} style={{ width:`${v}%` }}/></div></div>
         ))}
-        <div className="hd-note">Example · bidirectional: short term up, long term down</div>
+        <div className="hd-note">Example · short term up, long term down → <b>wait</b>. Hyperplane flags it before you buy.</div>
       </div>
+      <p className="hero-fine">For education and information only — not investment advice. No tool removes market risk; Hyperplane helps you see it.</p>
     </div>
   );
 }
 
 function AuthScreen({ onIn, notice }) {
   const [mode, setMode] = useState("login");
-  const [f, setF] = useState({ name:"", email:"", phone:"", country:"India", state:"", city:"", password:"", confirm:"", accept:false });
+  const [f, setF] = useState({ name:"", email:"", phone:"", ccName:"India", ccSet:false, country:"India", state:"", city:"", password:"", confirm:"", accept:false });
   const [msg, setMsg] = useState(notice || ""); const [ok, setOk] = useState(""); const [busy, setBusy] = useState(false);
+  const [auto, setAuto] = useState(false);
+  useEffect(() => { if (mode === "register") api("/app/api/signup-info").then(r => setAuto(!!r.auto_approve)).catch(() => {}); }, [mode]);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
   const submit = async e => {
     e.preventDefault(); setMsg(""); setBusy(true);
@@ -269,7 +315,9 @@ function AuthScreen({ onIn, notice }) {
       else {
         if (f.password !== f.confirm) throw new Error("The two passwords do not match");
         if (!f.accept) throw new Error("Please tick the box to agree to the terms");
-        const r = await api("/app/api/register", { method:"POST", json:{ name:f.name, email:f.email, phone:f.phone, country:f.country, state:f.state, city:f.city, password:f.password, accept:f.accept } });
+        const pe = phoneError(DIAL_BY[f.ccName], f.phone); if (pe) throw new Error(pe);
+        const r = await api("/app/api/register", { method:"POST", json:{ name:f.name, email:f.email, phone:`+${DIAL_BY[f.ccName]} ${f.phone}`, country:f.country, state:f.state, city:f.city, password:f.password, accept:f.accept } });
+        if (r.signed_in) { onIn(); return; }
         setOk(r.message); setMode("login");
       }
     } catch (x) { setMsg(x.message); } finally { setBusy(false); }
@@ -281,18 +329,28 @@ function AuthScreen({ onIn, notice }) {
       <div className="auth-side">
         <form className="auth" onSubmit={submit}>
           <h1>{mode === "login" ? "Welcome back" : "Create your free account"}</h1>
-          <p className="muted">{mode === "login" ? "Sign in to see today's trends." : "It takes a minute. Your account becomes active once QuantFriday approves it."}</p>
+          <p className="muted">{mode === "login" ? "Sign in to see where the strength is today — and what to avoid." : auto ? "It takes a minute — you can start using Hyperplane right after." : "It takes a minute. Your account becomes active once QuantFriday approves it."}</p>
           {ok && <div className="ok">{ok}</div>}
           {mode === "register" && <>
             {Field("Full name", <input value={f.name} onChange={set("name")} required maxLength={80} autoComplete="name"/>)}
+            <label className="field">
+              <span className="wa-l"><svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path fill="#25d366" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.6 14.1c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.2 1-2.5c.3-.3.6-.3.8-.3h.6c.2 0 .4 0 .7.5l1 2.3c.1.2.1.4 0 .6l-.4.6-.5.5c-.2.2-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.7-.1l1-1.2c.2-.3.4-.2.7-.1l2.2 1c.3.2.5.2.6.4.1.1.1.8-.2 1.5z"/></svg>WhatsApp number</span>
+              <div className="wa-in">
+                <DialSelect value={f.ccName} onChange={n => setF(p => ({ ...p, ccName:n, ccSet:true, phone:p.phone.slice(0, DIAL_BY[n] === "91" ? 10 : 13) }))}/>
+                <input value={f.phone} onChange={e => { const v = e.target.value.replace(/\D/g, ""); setF(p => ({ ...p, phone:v.slice(0, DIAL_BY[p.ccName] === "91" ? 10 : 13) })); }}
+                  required inputMode="numeric" autoComplete="tel-national" maxLength={DIAL_BY[f.ccName] === "91" ? 10 : 13} aria-label="WhatsApp number"/>
+              </div>
+              {f.phone && phoneError(DIAL_BY[f.ccName], f.phone) && <span className="wa-err">{DIAL_BY[f.ccName] === "91" ? `${f.phone.length}/10 digits` : "Digits only, without the country code (5–13)"}{DIAL_BY[f.ccName] === "91" && f.phone.length === 10 ? " · must start with 6, 7, 8 or 9" : ""}</span>}
+              <span className="wa-note">Use your <b>WhatsApp</b> number — we'll invite you to the <b>Hyperplane community</b>: a healthy, disciplined
+                circle that learns to trade with the trend and protect capital. Your number is never shared or sold.</span>
+            </label>
             <div className="grid2">
-              {Field("Phone", <input value={f.phone} onChange={set("phone")} required maxLength={20} autoComplete="tel" inputMode="tel" placeholder="+91 98765 43210"/>)}
-              {Field("City", <input value={f.city} onChange={set("city")} maxLength={60} autoComplete="address-level2"/>)}
-              {Field("Country", <select value={f.country} onChange={e => setF(p => ({ ...p, country:e.target.value, state:"" }))}>{COUNTRIES.map(c => <option key={c}>{c}</option>)}</select>)}
+              {Field("Country", <select value={f.country} onChange={e => { const c = e.target.value; setF(p => ({ ...p, country:c, state:"", ...(!p.ccSet && DIAL_BY[c] ? { ccName:c } : {}) })); }}>{COUNTRIES.map(c => <option key={c}>{c}</option>)}</select>)}
               {Field("State", f.country === "India"
                 ? <select value={f.state} onChange={set("state")} required><option value="">Choose your state</option>{IN_STATES.map(s => <option key={s}>{s}</option>)}</select>
                 : <input value={f.state} onChange={set("state")} required maxLength={60}/>)}
             </div>
+            {Field("City", <input value={f.city} onChange={set("city")} maxLength={60} autoComplete="address-level2"/>)}
           </>}
           {Field("Email", <input type="email" value={f.email} onChange={set("email")} required maxLength={255} autoComplete="email" placeholder="you@example.com"/>)}
           {mode === "register"
@@ -343,12 +401,12 @@ function QuadrantChart({ items, selected, onSelect, height = 360 }) {
   const X = v => pad.l + (v - xMin) / ((xMax - xMin) || 1) * (w - pad.l - pad.r), Y = v => h - pad.b - v / 100 * (h - pad.t - pad.b);
   const maxS = Math.max(1, ...items.map(i => i.size)), R = v => 7 + Math.sqrt(Math.max(v, 0) / maxS) * 22;
   const nodes = resolveCollisions(items.map(i => ({ ...i, r:R(i.size), x:X(i.x), y:Y(i.y) }))).sort((a, b) => a.key === hover ? 1 : b.key === hover ? -1 : b.r - a.r);
-  const q = [["STRONG + BULLISH","#00c896"],["STRONG + BEARISH","#ffaa00"],["WEAK + BULLISH","#a259ff"],["WEAK + BEARISH","#ff4454"]];
+  const q = [["STRONG + UPTREND","#00c896"],["STRONG + DOWNTREND","#ffaa00"],["WEAK + UPTREND","#a259ff"],["WEAK + DOWNTREND","#ff4454"]];
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="qchart">
       {[0,20,40,60,80,100].map(v => <g key={v}><line x1={pad.l} x2={w - pad.r} y1={Y(v)} y2={Y(v)} className="gridl"/><text x={pad.l - 8} y={Y(v) + 3} textAnchor="end" className="tick-t">{v}</text></g>)}
       <line x1={X(0)} x2={X(0)} y1={pad.t} y2={h - pad.b} className="zero"/>
-      <text x={w / 2} y={h - 8} textAnchor="middle" className="ax-t">NET BIAS  (bearish ← 0 → bullish)</text>
+      <text x={w / 2} y={h - 8} textAnchor="middle" className="ax-t">TREND  (downtrend ← 0 → uptrend)</text>
       {selected.length > 0 && <text x={w - pad.r} y={h - 8} textAnchor="end" className="ax-t sel-t">{selected.length} selected · click again to clear</text>}
       <text x={13} y={h / 2} textAnchor="middle" className="ax-t" transform={`rotate(-90 13 ${h / 2})`}>STRENGTH SCORE</text>
       <text x={w - pad.r} y={pad.t + 12} textAnchor="end" className="q-t" fill={q[0][1]}>{q[0][0]}</text>
@@ -377,7 +435,7 @@ function SectorPanel({ rows, tfLabel, selected, onPick }) {
   const top = rows.slice(0, 10), max = Math.max(1, ...top.map(r => r.st));
   return (
     <div className="card panel">
-      <div className="panel-h"><div><div className="panel-t">🏭 Sector Strength Leaderboard <Info text="Each bubble is a sector. Right = more bullish signals than bearish (net bias), up = stronger (0–100), bigger = more activity. Click a sector to filter the industries and the master data; click it again to clear."/></div><div className="sub">{tfLabel} · bubble size = activity · click to filter</div></div><ViewToggle v={view} set={setView}/></div>
+      <div className="panel-h"><div><div className="panel-t">🏭 Sector Strength Leaderboard <Info text="Each bubble is a sector. Right = more of it is in an uptrend, left = more of it is in a downtrend, up = stronger (0–100), bigger = more activity. Click a sector to filter the industries and the master data; click it again to clear."/></div><div className="sub">{tfLabel} · bubble size = activity · click to filter</div></div><ViewToggle v={view} set={setView}/></div>
       {view === "bubble"
         ? <QuadrantChart selected={selected} onSelect={onPick} items={rows.map(r => ({ key:r.k, label:r.k, x:r.nb, y:r.st, size:r.sig || r.n, color:colorOf(r.k),
             tip:`${r.k}: strength ${r.st} (${strengthLabel(r.st)}) · net bias ${r.nb > 0 ? "+" : ""}${r.nb} · ${r.n} stocks · ${r.adv} up / ${r.dec} down · avg ${r.avg >= 0 ? "+" : ""}${r.avg}%` }))}/>
@@ -401,7 +459,7 @@ function IndustryPanel({ rows, tfLabel, sectors, selected, onPick }) {
   return (
     <div className="card panel">
       <div className="panel-h"><div><div className="panel-t">📐 Industry Bias Momentum <Info right text="Each bubble is an industry, coloured by its sector. Same axes as the sector chart. Picking a sector shows only its industries. Click an industry to filter the master data."/></div><div className="sub">{tfLabel}{sectors.length ? ` · in ${sectors.length === 1 ? sectors[0] : `${sectors.length} sectors`}` : " · busiest 40"} · click to filter</div></div>
-        <div className="row-gap">{view === "list" && <div className="seg"><button className={side === "up" ? "on up" : ""} onClick={() => setSide("up")}>▲ Bullish</button><button className={side === "down" ? "on down" : ""} onClick={() => setSide("down")}>▼ Bearish</button></div>}<ViewToggle v={view} set={setView}/></div></div>
+        <div className="row-gap">{view === "list" && <div className="seg"><button className={side === "up" ? "on up" : ""} onClick={() => setSide("up")}>▲ Uptrend</button><button className={side === "down" ? "on down" : ""} onClick={() => setSide("down")}>▼ Downtrend</button></div>}<ViewToggle v={view} set={setView}/></div></div>
       {view === "bubble"
         ? <QuadrantChart selected={selected} onSelect={onPick} items={bubbles.map(r => ({ key:r.k, label:r.k, x:r.nb, y:r.st, size:r.sig || r.n, color:colorOf(r.sec),
             tip:`${r.k} (${r.sec}): strength ${r.st} · net bias ${r.nb > 0 ? "+" : ""}${r.nb} · ${r.n} stocks · ${r.adv} up / ${r.dec} down` }))}/>
@@ -431,7 +489,7 @@ function StockCard({ s, data, onOpen, onClose }) {
     return i < 0 ? null : { ...list[i], rank:i + 1, of:list.length }; };
   const top = indPeers.slice(0, 5), showSelf = indRank > 5;
   const secA = data ? ctx("A", false) : null, indA = data ? ctx("A", true) : null;
-  const view = combinedView(od, bi, secA, indA);
+  const view = combinedView(od, bi, secA, indA, s.os);
   const grp = (kind, name, g) => (
     <div className="cv-row"><span className="cv-k">{kind}</span>
       <span className="cv-v"><b>{name}</b>{g
@@ -558,6 +616,7 @@ function Home({ me, onOut }) {
       <header className="top">
         <button type="button" className="brand-home" onClick={() => setView("tower")} title="Control Tower"><Brand/></button>
         <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>
+        <QuickGuideButton onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}/>
         <InboxBell unread={unread} onOpen={openHelpdesk}/>
         <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}
           onSignOut={async () => { await api("/app/api/logout", { method:"POST" }).catch(() => {}); onOut(); }}/>
@@ -679,6 +738,8 @@ const CSS = `
   --long:#059669;--longd:rgba(5,150,105,.1);--short:#dc2626;--shortd:rgba(220,38,38,.08);--mixed:#d97706;--mixedd:rgba(217,119,6,.1);
   --ret:#7c3aed;--retd:rgba(124,58,237,.08);--t1:#0f1b2d;--t2:#4b5f7a;--t3:#8394aa;color-scheme:light;
   --on-acc:#ffffff;--glass:rgba(255,255,255,.94);--hover:rgba(15,27,45,.04);--pop:#ffffff;--sel-t:#0f1b2d}
+:root[data-theme="light"] button.primary{background:linear-gradient(135deg,#0891b2,#3b82f6);color:#fff}
+:root[data-theme="light"] .hero-h span{background:linear-gradient(90deg,#0891b2,#6366f1);-webkit-background-clip:text;background-clip:text}
 :root[data-theme="light"] .b-t{filter:brightness(.6) saturate(1.5);stroke:none}
 :root[data-theme="light"] .modal{box-shadow:0 30px 70px -20px rgba(15,27,45,.35)}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--t1);font:13.5px/1.5 var(--sans)}
@@ -699,12 +760,26 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
   background:radial-gradient(90% 70% at 10% 0%,rgba(0,229,255,.16),transparent 60%),radial-gradient(70% 60% at 100% 100%,rgba(99,102,241,.18),transparent 60%),var(--bg)}
 .hero-grid{position:absolute;inset:0;background-image:linear-gradient(var(--b1) 1px,transparent 1px),linear-gradient(90deg,var(--b1) 1px,transparent 1px);background-size:44px 44px;opacity:.25;mask-image:radial-gradient(80% 70% at 30% 40%,#000,transparent)}
 .hero>*{position:relative}.hero-h{font-size:40px;line-height:1.1;margin:14px 0 0;font-weight:800;letter-spacing:-.5px}.hero-h span{background:linear-gradient(90deg,#00e5ff,#818cf8);-webkit-background-clip:text;background-clip:text;color:transparent}
-.hero-p{font-size:15px;color:var(--t2);max-width:480px;margin:0;line-height:1.6}
+.hero-p{font-size:15px;color:var(--t2);max-width:500px;margin:0;line-height:1.6}
+.hero-k{margin-top:14px;font:700 11px var(--mono);letter-spacing:1.6px;text-transform:uppercase;color:var(--acc)}.hero-k+.hero-h{margin-top:6px}
+.hero-fine{font-size:10.5px;color:var(--t3);max-width:480px;margin:2px 0 0;line-height:1.5}
+.hd-row .meter{font-size:11.5px}.hd-note b{color:var(--mixed)}
+.wa-l{display:inline-flex;align-items:center;gap:6px}
+.wa-in{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px}
+.dial .ms-btn{height:100%;min-height:38px;font-size:13px;color:var(--t1);text-transform:none;letter-spacing:0}.dial .ms-btn small{font-size:11px;font-weight:500;color:var(--t2);margin-left:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dial .ms-btn>span:first-child{display:flex;align-items:baseline;min-width:0;overflow:hidden}
+.dial-pop{width:300px;text-transform:none;letter-spacing:0;font-weight:400}.dial-pop .ms-list{max-height:260px}
+.dial-h{padding:7px 8px 3px;font-size:9.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--t3)}
+.dial-it{display:flex;justify-content:space-between;gap:10px;width:100%;padding:7px 8px;border:0;border-radius:6px;background:none;color:var(--t1);font-size:13px;text-align:left}
+.dial-it:hover,.dial-it.on{background:var(--adim)}.dial-it b{font:600 12.5px var(--mono);color:var(--acc)}.wa-in input{font:600 15px var(--mono);letter-spacing:1px}
+.wa-err{font-size:11px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--mixed)}
+.wa-note{font-size:11px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--t2);line-height:1.45;padding:7px 9px;border-radius:7px;background:rgba(37,211,102,.07);border:1px solid rgba(37,211,102,.25)}
+.wa-note b{color:#25d366;font-weight:700}
 .feats{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-direction:column;gap:13px;max-width:480px}.feats li{display:flex;gap:12px}
 .feats b{display:block;font-size:13.5px;color:var(--t1)}.feats span{font-size:12.5px;color:var(--t2)}
 .tick{flex-shrink:0;width:22px;height:22px;border-radius:6px;background:var(--adim);border:1px solid var(--accb);color:var(--acc);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800}
 .hero-demo{margin-top:8px;max-width:420px;background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:7px}
-.hd-row{display:grid;grid-template-columns:80px 64px 1fr;gap:10px;align-items:center;font-size:12px;color:var(--t2)}.hd-note{font-size:10.5px;color:var(--t3);margin-top:2px}
+.hd-row{display:grid;grid-template-columns:80px 92px 1fr;gap:10px;align-items:center;font-size:12px;color:var(--t2)}.hd-note{font-size:10.5px;color:var(--t3);margin-top:2px}
 .auth-side{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px 20px}
 .auth{width:100%;max-width:460px;padding:30px 28px;display:flex;flex-direction:column;gap:14px;background:var(--s1);border:1px solid var(--b1);border-radius:12px;box-shadow:0 30px 70px -30px rgba(0,0,0,.7)}
 .auth h1{font-size:22px;margin:0;font-weight:800}.auth>p{margin:-6px 0 4px;font-size:13px}
@@ -820,9 +895,9 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 @media (min-width:1300px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
 @media (max-width:900px){.top .tabs{order:5;width:100%;margin:0 0 8px}.top .tabs button{flex:1;justify-content:center}.auth-page{grid-template-columns:1fr}.hero{padding:30px 22px;border-right:0;border-bottom:1px solid var(--b1)}.hero-h{font-size:28px}.hero-demo{display:none}.panels{grid-template-columns:1fr}.m-overall{grid-template-columns:auto auto}.cv-verdict{grid-column:1/-1;justify-self:start;white-space:normal}}
-@media (max-width:640px){.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
+@media (max-width:640px){.auth-page .feats,.auth-page .hero-fine{display:none}.hero-p{font-size:13.5px}.hero{gap:10px}.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
 `;
 
 document.documentElement.dataset.theme = getTheme();
-const style = document.createElement("style"); style.textContent = CSS + GUIDE_CSS; document.head.appendChild(style);
+const style = document.createElement("style"); style.textContent = CSS + GUIDE_CSS + QUICK_CSS; document.head.appendChild(style);
 createRoot(document.getElementById("root")).render(<App/>);

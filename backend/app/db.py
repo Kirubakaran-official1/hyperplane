@@ -138,6 +138,30 @@ CREATE TABLE IF NOT EXISTS hd_images (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS hd_images_ticket ON hd_images (ticket_id);
+
+-- Customer sign-up mode (Admin → Customers). The customer service cannot read this table: it may only call
+-- portal_auto_approve() (yes / no). New SELF sign-ups (signup_ip set) are approved by the trigger below when it is on,
+-- so the customer service itself never gets the right to approve anyone.
+CREATE TABLE IF NOT EXISTS portal_config (
+    key    TEXT PRIMARY KEY,
+    value  JSONB NOT NULL
+);
+CREATE OR REPLACE FUNCTION portal_auto_approve() RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'auto_approve'), false) $$;
+CREATE OR REPLACE FUNCTION customers_auto_approve() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF NEW.status = 'pending' AND NEW.signup_ip IS NOT NULL AND portal_auto_approve() THEN
+        NEW.status := 'approved';
+        NEW.approved_at := now();
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS customers_auto_approve ON customers;
+CREATE TRIGGER customers_auto_approve BEFORE INSERT ON customers FOR EACH ROW EXECUTE FUNCTION customers_auto_approve();
+REVOKE ALL ON FUNCTION portal_auto_approve() FROM PUBLIC;
+REVOKE ALL ON FUNCTION customers_auto_approve() FROM PUBLIC;
 CREATE INDEX IF NOT EXISTS hd_images_uploader ON hd_images (uploader, created_at);
 """
 
@@ -194,6 +218,7 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("GRANT INSERT (email, name, phone, country, state, city, pw_hash, signup_ip) ON customers TO {}").format(role))
     c.execute(sql.SQL("GRANT UPDATE (failed_logins, locked_until, last_login, login_count) ON customers TO {}").format(role))
     c.execute(sql.SQL("GRANT USAGE ON SEQUENCE customers_id_seq TO {}").format(role))
+    c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION portal_auto_approve() TO {}").format(role))   # yes / no only
     # Helpdesk: only the columns a customer needs, and row-level security on top — the service sets
     # hp.cid (the signed-in customer) per transaction, and the database itself hides every other row.
     for stmt in (
@@ -231,6 +256,17 @@ def put_settings(values: dict):
         for k, v in values.items():
             c.execute("INSERT INTO settings(key, value) VALUES (%s, %s::jsonb) "
                       "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (k, json.dumps(v)))
+
+
+def get_auto_approve():
+    with pool.connection() as c:
+        return bool(c.execute("SELECT portal_auto_approve() AS v").fetchone()["v"])
+
+
+def set_auto_approve(on: bool):
+    with pool.connection() as c:
+        c.execute("INSERT INTO portal_config(key, value) VALUES ('auto_approve', %s::jsonb) "
+                  "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (json.dumps(bool(on)),))
 
 
 def get_meta(key, default=None):
