@@ -111,11 +111,13 @@ const SECTIONS = [
   { id: "filters", t: "The filter bar", body: <>
     <p>The filter bar at the top of the Control Tower narrows down what you see. Filters work together (all of them must match).</p>
     <table className="g-table"><tbody>
-      <tr><td><b>Timeframe · style</b><span className="g-sub">Balanced · Swing · Investing</span></td>
+      <tr><td><b>Trading mode</b><span className="g-sub">Balanced · Swing · Investing</span></td>
         <td>Start here. Pick your <b>trading style</b> — it blends <b>all five timeframes</b> into one number, giving more weight to the
-          ones that matter for how long you hold (see the table below). The whole page — list, tiles, charts and stock card — follows it.</td></tr>
+          ones that matter for how long you hold (see the table below). The whole page — list, tiles, charts and stock card — follows it.
+          Picking a mode <b>clears the Timeframe</b> filter.</td></tr>
       <tr><td><b>Timeframe · one</b><span className="g-sub">D · W · M · Q · Y</span></td>
-        <td>Pick a single timeframe to see <b>only that one</b> — for example <b>W</b> shows the weekly trend alone. The style switches off.</td></tr>
+        <td>Pick a single timeframe to see <b>only that one</b> — for example <b>W</b> shows the weekly trend alone. The Trading mode
+          switches off; clear the timeframes to go back to it.</td></tr>
       <tr><td><b>Timeframe · several</b><span className="g-sub">e.g. D + W</span></td>
         <td>Pick more than one. A stock counts as an uptrend <b>only if it is up on all of them</b> — a stricter check.</td></tr>
       <tr><td><b>Trend</b></td><td>All, ▲ Up, ▼ Down, ◆ Sideways or ⇅ Bidirectional on the chosen timeframe(s). Up / Down also sorts the list for you.</td></tr>
@@ -229,7 +231,7 @@ const SECTIONS = [
   { id: "example", t: "Examples — finding ideas in 2 minutes", must: true, body: <>
     <h3>A swing trader (holds for weeks)</h3>
     <ol className="g-steps">
-      <li>Timeframe: pick <b>Swing</b>. Trend: <b>▲ Up</b>. Stock reliability: <b>Strong</b>.</li>
+      <li>Trading mode: pick <b>Swing</b>. Trend: <b>▲ Up</b>. Stock reliability: <b>Strong</b>.</li>
       <li>In the sector chart, click the 2–3 bubbles highest and furthest right.</li>
       <li>In the industry chart, click the strongest industries of those sectors.</li>
       <li>The list now shows strong stocks, in strong industries, in strong sectors, weighted for swing trading (Monthly and Quarterly count most).</li>
@@ -237,8 +239,8 @@ const SECTIONS = [
     </ol>
     <h3>An investor (holds for months or years)</h3>
     <ol className="g-steps">
-      <li>Timeframe: <b>Investing</b>. Trend: <b>▲ Up</b>. Market cap: <b>Large</b> and <b>Mid</b>. Reliability: <b>Strong</b>.</li>
-      <li>Use the <b>Investing</b> style in the Timeframe filter — it gives Quarterly and Yearly the most weight.</li>
+      <li>Trading mode: <b>Investing</b>. Trend: <b>▲ Up</b>. Market cap: <b>Large</b> and <b>Mid</b>. Reliability: <b>Strong</b>.</li>
+      <li>Use the <b>Investing</b> mode in the Trading mode filter — it gives Quarterly and Yearly the most weight.</li>
       <li>Shortlist stocks that are not <b>⇅ Bidirectional</b>, then study the businesses.</li>
     </ol>
     <h3>Spotting what to avoid</h3>

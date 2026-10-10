@@ -192,8 +192,8 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   Funds (433 total on 27 Sep, no false positives — FIRSTCRY "Brainbees" is not caught), plus Admin `index_add`, minus
   `index_keep` (settings, served to all users by `GET /api/view-config`). Also drops the "Indices" sector rows.
 - **Control Tower** (`ControlTowerCombined`) order: data scope → Sector + Industry bubble panels → Alpha composite
-  ranking (`ControlTower`) → Focus Command (Priority radar, HTF×LTF confluence (full width), Alignment matrix,
-  Sector×TF heat, Industry hotspots · Near breakout) → Setup Scanner (Zone Breakout Analyser, Stacked setups, setup
+  ranking (`ControlTower`) → Focus Command (Priority radar, HTF×LTF confluence (full width), Sector×TF heat · Near
+  breakout in one row — Timeframe Alignment Matrix and Industry Hotspots REMOVED 2026-10-10) → Setup Scanner (Zone Breakout Analyser, Stacked setups, setup
   lists (Stacked Setups has Bullish / Bearish / F&O filters), NR Trap, Zone Retest (`ZoneRetestSection`), Trend Pullback (`TrendPullbackSection`, from the
   `last_N…_trend_with_close_nearto_…_zone` signals)) → Opportunities → Return Expectations → Watchlist Builder. Removed on the owner's request
   (2026-09-29): the Market Intelligence header + KPI strip, Top movers, F&O strategy mapper, Timeframe signal flow,
@@ -245,7 +245,14 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   (same weights as the Focus score, via `classifySignal` + the Signal_Summary sheet for signal types); split
   Zones / NR; up/down lists, Stronger ▲/▼ tiles and sorts, and a Strength Δ column.
 - **Stock report everywhere**: `StockOpenCtx` + `StockReportHost` (wraps every tab in `Dashboard`). Any `SymCell`
-  inside opens `StockDeepDive`, or `NoSignalReport` (zone position per TF) when the stock has no signals. The
+  inside opens `StockDeepDive`, or `NoSignalReport` (zone position per TF) when the stock has no signals.
+  Since 2026-10-11 both are a FULL-SCREEN popup (`ReportShell`, CSS `.rpt*`): header + 3 columns (story · checklist ·
+  sector & industry | TF ladder · zones by TF (`RZoneBlock`: 5 boxes, above = green, below = red, inside/bands = grey,
+  levels in tooltip) · NR by TF (`RNRBlock`: broke out / ready / broke down / ready / coiling per TF from
+  `nrStatesFor` + `s.mtnr`) · setups | technicals (top) · trade plan (Return_Potential / Failed_NR / Zone_Retest rows)
+  · price health · industry peers (click = open that stock)). Score anatomy removed (owner). 2 columns ≤ 1180 px,
+  1 scrolling column ≤ 760 px; Esc / ✕ / outside click closes. Props `db` + `list` (focus model list, for peers).
+  FocusCommandTab uses the shared opener from context, so only ONE report is ever open. The
   Control Tower provides its own `setOpenSym` so the report uses its filtered, multi-file model. Always render
   tickers with `SymCell` (or `FocusSym` inside Focus Command) so they stay clickable.
 - Control Tower sector panel is selectable (bubble or list row): the industry panel then shows only that sector's
@@ -313,9 +320,40 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   only (weak stock, strong group) / Avoid / No edge; bidirectional downgrades Best case. `groupState`: strong = st ≥ 55
   or rank in top 25 %, weak = st < 45 and rank in bottom 50 % (absolute-only made 22/25 top stocks "weak" in a weak
   market). Thresholds chosen by Claude — owner may tune.
-- Customer **Trading mode** (2026-10-10, `MODES` / `applyMode` in app main.jsx): MERGED into the Timeframe filter (owner found two
-  controls confusing): `Balanced | Swing | Investing ‖ D W M Q Y` — a style replaces the old "Combined" button and clears single
-  TFs; picking a TF switches the style off (tooltip shows the weights). Page max-width 1440 px; filter bar one line from 1480 px. Styles: Balanced
+- HTF × LTF confluence (2026-10-10): FULL grid — rows Y/Q/M/W trigger × columns +Q/+M/+W/+D (10 valid pairs, lower
+  triangle "·"), was Y/Q/M × W/D only. New widget **NR Breakout Overlap** (anchor `ct-nroverlap`, under the confluence):
+  per stock the distinct NR breaks (event BREAKOUT / BREAKDOWN, key = TF × NR length from the signal name), so
+  W NR4 + W NR6 = 2 breaks. 5×5 grid Y..D: diagonal = 2+ NR lengths broke on that TF, other cells = NR broke on both
+  TFs; ▲ breakouts / ▼ breakdowns; "Min NR breaks 1+…4+"; list with the TF·length chips. Uses the Control Tower's
+  filtered list. The Bear Trap setup ("Failed Breakdown (Back to NR)") was removed from SETUP_DEFS (card, chip, stacked).
+- Setup Scanner navigator (2026-10-10): chips are built in the SAME order as the widgets below — Zone Breakout →
+  Stacked Setups → the `SCANNER_PAIRS` cards row by row (see "Control Tower ORDER" below); each chip scrolls to its widget (verified). Zone Breakout Analyser: new "◆ Confirmed by NR · n" pill =
+  rows whose `nrBreaks` (same-direction NR breakout / breakdown on any TF) is not empty; "Confirmed only · n" shows its count.
+- Control Tower ORDER (owner, 2026-10-10 — keep it): Sector strength | Industry Momentum → Sector × TF Heat | Industry ×
+  TF Heat (`ct-matrix`; new industry card = same maths per "Sector|Industry", strength from industryAnalysis, follows the
+  sector pick, row click = `indF` filter for the whole Focus Command part) → Alpha Composite (`alpha` prop of
+  FocusCommandTab, `ct-alpha`) → Priority Radar → HTF × LTF Confluence → NR Breakout Overlap → Setup Scanner (Zone
+  Breakout Analyser, Stacked, then 2-column pairs from `SCANNER_PAIRS`: Overlap Break | Overlap Retrace · Zone Cross |
+  Between · Flag | Virgin · Zone Retest | Trend Pullback (zone band) · Trend Pullback | Overlap Wall · NR Break | Near NR
+  Break · Multi-TF NR | NR Trap; "#…" ids = sections passed via `sections={trap,retest,trend}`, rendered as half-width
+  FocusCards; chips are built from the same list) → Opportunities → Return Expectations → Technical Quant (algo builder)
+  → Watchlist Builder. Removed: Near Breakout card, NR Trap "How the trap forms" graph, Technical breadth table.
+- Linked selection (2026-10-10): the "Focus Command" header is gone. ONE bordered section "🏭 Sector & Industry
+  Analysis" (ControlTower) holds the two bubble panels + `SectorIndustryHeat` (both heat maps, multi-select rows with the
+  bubble look: picked = tint + coloured edge + ✓, others dimmed). Selection state `pickSecs` / `pickInds` lives in
+  ControlTowerCombined (`picks`); `pickEx` → `dbP` / `dbDirP` / `modelP` feed EVERY widget below (alpha, radar,
+  confluence, NR overlap, setups + sections, opportunities, returns, Technical Quant, watchlist). Rule: a picked industry
+  narrows its own sector; other picked sectors stay whole. Banner "🎯 Showing only … · ✕ Show all" above Alpha.
+- Customer stock card one-screen layout (2026-10-10): `.modal.stock` on ≥ 1000 px = two columns (`.m-grid` / `.m-col`):
+  left = summary + verdict + AI insights + sector & industry table; right = trend by timeframe + top-5 peers; Copy sits
+  under the price; footer = data time + one-line "education only" (sector / industry lines inside AI insights and the
+  long disclaimer are hidden on desktop — the table and the page footer carry them). Extra compaction when height
+  ≤ 800 px. Measured: no scrolling at 1920×1080, 1536×864, 1440×900, 1366×768. Phones (< 1000 px): one column in the
+  order summary → timeframes → sector & industry → peers, scrolling as before.
+- Customer **Trading mode** (2026-10-10, `MODES` / `applyMode` in app main.jsx): two SEPARATE filters again (owner, 2026-10-10 later):
+  "Trading mode" `Balanced | Swing | Investing` and "Timeframe" `D W M Q Y`, mutually exclusive — picking a mode clears the TFs,
+  picking a TF switches the mode off, clearing every TF lights the last mode again (it is what the data uses). Tooltip shows
+  the weights. Page max-width 1440 px; filter bar one line from 1380 px. Styles: Balanced
   (D..Y equal, default) · Swing / Positional (1:2:3:3:1 → M & Q 30 % each) · Investing (0:0.5:1.5:4:4 → Q & Y 40 %).
   `applyMode` rewrites every Combined number on the client: stock `os` = weighted mean of `sc`; sector / industry
   "A" rows = weighted mean of their D..Y `st` and `nb` (n / sig / adv / dec / avg kept from the server's A row),

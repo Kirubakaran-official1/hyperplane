@@ -296,8 +296,24 @@ function CopyBtns({ syms, compact }) {
   );
 }
 
-function Info({ text, right }) {
-  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} aria-label={text}>i<span className={`info-pop ${right ? "r" : ""}`}>{text}</span></span>;
+function Info({ text, right, wide, label }) {
+  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} aria-label={label || (typeof text === "string" ? text : "More info")}>i<span className={`info-pop ${right ? "r" : ""} ${wide ? "wide" : ""}`}>{text}</span></span>;
+}
+
+// Trading-mode ⓘ: how much each timeframe counts in each mode (the active one highlighted, top weights in bold)
+function ModeWeights({ active }) {
+  const TF = "DWMQY".split("");
+  return <>
+    <div>Blends all five timeframes into one strength, weighted for how you trade. Picking a mode clears the Timeframe filter.</div>
+    <table className="mw">
+      <thead><tr><th>Mode</th>{TF.map(t => <th key={t}>{t}</th>)}<th>Best for</th></tr></thead>
+      <tbody>{Object.entries(MODES).map(([k, m]) => { const p = weightPct(m.w), top = Math.max(...Object.values(p));
+        return <tr key={k} className={k === active ? "mw-on" : ""}>
+          <td>{m.short}</td>{TF.map(t => <td key={t} className={`mw-n ${p[t] === top ? "mw-top" : ""} ${p[t] === 0 ? "mw-zero" : ""}`}>{p[t]}%</td>)}
+          <td className="mw-hint">{k === "equal" ? "an all-round view" : k === "swing" ? "trades of weeks to months" : "holding a year or more"}</td></tr>; })}</tbody>
+    </table>
+    <div className="mw-foot">D Daily · W Weekly · M Monthly · Q Quarterly · Y Yearly</div>
+  </>;
 }
 
 // Joined button group (Control-Tower style); multi = several can be on
@@ -467,7 +483,8 @@ function QuadrantChart({ items, selected, onSelect, height = 360 }) {
   const xs = items.map(i => i.x), xMin = Math.min(...xs, 0) - 4, xMax = Math.max(...xs, 0) + 4;
   const X = v => pad.l + (v - xMin) / ((xMax - xMin) || 1) * (w - pad.l - pad.r), Y = v => h - pad.b - v / 100 * (h - pad.t - pad.b);
   const maxS = Math.max(1, ...items.map(i => i.size)), R = v => 7 + Math.sqrt(Math.max(v, 0) / maxS) * 22;
-  const nodes = resolveCollisions(items.map(i => ({ ...i, r:R(i.size), x:X(i.x), y:Y(i.y) }))).sort((a, b) => a.key === hover ? 1 : b.key === hover ? -1 : b.r - a.r);
+  // `id` must be unique per bubble (industry names like "Miscellaneous" repeat across sectors); `key` is what gets selected
+  const nodes = resolveCollisions(items.map(i => ({ ...i, id:i.id || i.key, r:R(i.size), x:X(i.x), y:Y(i.y) }))).sort((a, b) => a.id === hover ? 1 : b.id === hover ? -1 : b.r - a.r);
   const q = [["STRONG + UPTREND","#00c896"],["STRONG + DOWNTREND","#ffaa00"],["WEAK + UPTREND","#a259ff"],["WEAK + DOWNTREND","#ff4454"]];
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="qchart">
@@ -481,9 +498,9 @@ function QuadrantChart({ items, selected, onSelect, height = 360 }) {
       <text x={w - pad.r} y={h - pad.b - 6} textAnchor="end" className="q-t" fill={q[2][1]}>{q[2][0]}</text>
       <text x={pad.l + 4} y={h - pad.b - 6} className="q-t" fill={q[3][1]}>{q[3][0]}</text>
       {nodes.map(n => {
-        const on = selected.includes(n.key), dim = selected.length > 0 && !on, r = hover === n.key ? n.r + 3 : n.r;
+        const on = selected.includes(n.key), dim = selected.length > 0 && !on, r = hover === n.id ? n.r + 3 : n.r;
         return (
-          <g key={n.key} onClick={() => onSelect && onSelect(n.key)} onMouseEnter={() => setHover(n.key)} onMouseLeave={() => setHover(k => k === n.key ? null : k)} style={{ cursor:"pointer", opacity: dim && hover !== n.key ? .28 : 1 }}>
+          <g key={n.id} onClick={() => onSelect && onSelect(n.key)} onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover(k => k === n.id ? null : k)} style={{ cursor:"pointer", opacity: dim && hover !== n.id ? .28 : 1 }}>
             {on && <circle cx={n.x} cy={n.y} r={r + 5} fill="none" stroke={n.color} strokeOpacity=".45" strokeWidth="1" strokeDasharray="3 3"/>}
             <circle cx={n.x} cy={n.y} r={r} fill={n.color} fillOpacity={on ? .6 : .22} stroke={n.color} style={on ? { stroke:"var(--sel-t)" } : undefined} strokeWidth={on ? 2 : 1.4}/>
             <text x={n.x} y={n.y + 3.5} textAnchor="middle" className="b-t" fill={n.color} style={on ? { fill:"var(--sel-t)" } : undefined}>{n.label.length > 12 ? n.label.slice(0, 11) + "…" : n.label}</text>
@@ -528,7 +545,7 @@ function IndustryPanel({ rows, tfLabel, sectors, selected, onPick }) {
       <div className="panel-h"><div><div className="panel-t">📐 Industry Bias Momentum <Info right text="Each bubble is an industry, coloured by its sector. Same axes as the sector chart. Picking a sector shows only its industries. Click an industry to filter the master data."/></div><div className="sub">{tfLabel}{sectors.length ? ` · in ${sectors.length === 1 ? sectors[0] : `${sectors.length} sectors`}` : " · busiest 40"} · click to filter</div></div>
         <div className="row-gap">{view === "list" && <div className="seg"><button className={side === "up" ? "on up" : ""} onClick={() => setSide("up")}>▲ Uptrend</button><button className={side === "down" ? "on down" : ""} onClick={() => setSide("down")}>▼ Downtrend</button></div>}<ViewToggle v={view} set={setView}/></div></div>
       {view === "bubble"
-        ? <QuadrantChart selected={selected} onSelect={onPick} items={bubbles.map(r => ({ key:r.k, label:r.k, x:r.nb, y:r.st, size:r.sig || r.n, color:colorOf(r.sec),
+        ? <QuadrantChart selected={selected} onSelect={onPick} items={bubbles.map(r => ({ id:`${r.sec}|${r.k}`, key:r.k, label:r.k, x:r.nb, y:r.st, size:r.sig || r.n, color:colorOf(r.sec),
             tip:`${r.k} (${r.sec}): strength ${r.st} · net bias ${r.nb > 0 ? "+" : ""}${r.nb} · ${r.n} stocks · ${r.adv} up / ${r.dec} down` }))}/>
         : <div className="lb">{list.map(r => { const pos = r.nb >= 0; return (
             <button key={r.sec + r.k} className={`lb-row ${selected.includes(r.k) ? "on" : ""}`} onClick={() => onPick(r.k)}>
@@ -559,20 +576,22 @@ function StockCard({ s, data, onOpen, onClose }) {
   const view = combinedView(od, bi, secA, indA, s.os, !!s.x);
   const ai = s.os != null ? insightsOf(s, od, bi, secA, indA, view, indRank, indPeers.length) : null;
   const grp = (kind, name, g) => (
-    <div className="cv-row"><span className="cv-k">{kind}</span>
+    <div className="cv-row cv-grp"><span className="cv-k">{kind}</span>
       <span className="cv-v"><b>{name}</b>{g
         ? <> is <span className={`cv-st ${groupState(g)}`}>{GROUP_WORD[groupState(g)]}</span> <span className="dim mono">· {Math.round(g.st)}% · #{g.rank} of {g.of}</span></>
         : <span className="dim"> — no data</span>}</span></div>
   );
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-label={s.n}>
+      <div className="modal stock" onClick={e => e.stopPropagation()} role="dialog" aria-label={s.n}>
         <button className="x" onClick={onClose} aria-label="Close">✕</button>
         <div className="m-head">
-          <div><div className="m-name">{s.n}</div><div className="sub"><span className="sym">{s.s}</span> · {s.sec} › {s.ind} · {sizeOf(s)} cap{s.f ? " · F&O" : ""}{s.h && <> · <span className={`bgtag ${s.h}`}>{BG_NAME[s.h]} reliability</span></>}{s.x ? <> · <span className="stretch-tag" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase.">🔥 Stretched</span></> : null}</div>
+          <div><div className="m-name">{s.n}</div><div className="sub"><span className="sym">{s.s}</span> · {s.sec} › {s.ind} · {sizeOf(s)} cap{s.f ? " · F&O" : ""}{s.h && <> · <span className={`bgtag ${s.h}`}>{BG_NAME[s.h]} reliability</span></>}{s.x ? <> · <span className="stretch-tag" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase.">🔥 Stretched</span></> : null}</div></div>
+          <div className="m-price"><div className="mono">₹{s.p}</div>{s.c != null && <div className={`mono ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}% today</div>}
             <span className="tcopy m-copy" title={`Copy ${s.s} only`}><span className="lbl">Copy {s.s}</span><CopyBtns syms={[s.s]}/></span></div>
-          <div className="m-price"><div className="mono">₹{s.p}</div>{s.c != null && <div className={`mono ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}% today</div>}</div>
         </div>
+        <div className="m-grid">
+        <div className="m-col">
         <div className="m-overall">
           <div className="mo-cell"><span className="lbl">Combined trend strength</span><StrengthTag v={s.os} d={od} big/><span className="grp-w">{od === 0 ? "Sideways" : od === 1 ? `${strengthWord(Math.abs(s.os))} uptrend` : od === -1 ? `${strengthWord(Math.abs(s.os))} downtrend` : "—"}</span></div>
           <div className="mo-cell"><span className="lbl">Direction</span><span className={`dirtag ${bi ? "bi" : od === 1 ? "up" : od === -1 ? "down" : "side"}`}>{bi ? "⇅ Bidirectional" : ups.length && !dns.length ? "▲ One-directional up" : dns.length && !ups.length ? "▼ One-directional down" : "◆ Sideways"}</span></div>
@@ -589,17 +608,7 @@ function StockCard({ s, data, onOpen, onClose }) {
             </div>}
           </div>
         </div>
-        <div className="m-rows">
-          {rows.map(r => (
-            <div key={r.k} className="m-row">
-              <div className="m-l"><b>{r.l}</b><span className="sub">{r.hint}</span></div>
-              <StrengthBar v={r.v} d={r.d}/>
-              <StrengthTag v={r.v} d={r.d}/>
-              <span className={`dirtag sm ${r.d === 1 ? "up" : r.d === -1 ? "down" : "side"}`}>{r.v == null ? "No data" : r.d === 1 ? "Uptrend" : r.d === -1 ? "Downtrend" : "Sideways"}</span>
-            </div>
-          ))}
-        </div>
-
+        <div className="blk blk-ctx">
         <div className="m-sec-t">Sector &amp; industry strength <Info text="How strong the stock's sector and industry are (0–100%), combined and on each timeframe, with their rank among all sectors / industries. Hover a cell for advancing vs declining stocks."/></div>
         <div className="ctx-wrap">
           <table className="ctx">
@@ -619,7 +628,23 @@ function StockCard({ s, data, onOpen, onClose }) {
           </table>
         </div>
 
-        {indPeers.length > 1 && <>
+        </div>
+        </div>
+        <div className="m-col">
+        <div className="blk blk-tf">
+        <div className="m-sec-t">Trend by timeframe <Info text="The stock's trend on each timeframe and how strong it is (0–100%) — not a price move."/></div>
+        <div className="m-rows">
+          {rows.map(r => (
+            <div key={r.k} className="m-row">
+              <div className="m-l" title={r.hint}><b>{r.l}</b><span className="sub">{r.hint}</span></div>
+              <StrengthBar v={r.v} d={r.d}/>
+              <StrengthTag v={r.v} d={r.d}/>
+              <span className={`dirtag sm ${r.d === 1 ? "up" : r.d === -1 ? "down" : "side"}`}>{r.v == null ? "No data" : r.d === 1 ? "Uptrend" : r.d === -1 ? "Downtrend" : "Sideways"}</span>
+            </div>
+          ))}
+        </div>
+        </div>
+        {indPeers.length > 1 && <div className="blk blk-peers">
           <div className="m-sec-t">Top {top.length} strongest in {s.ind} <span className="tcopy"><span className="lbl">Ticker copy · {top.length}</span><CopyBtns syms={top.map(x => x.s)} compact/></span></div>
           <div className="peers">
             {[...top.map((p, i) => [p, i + 1]), ...(showSelf ? [[s, indRank]] : [])].map(([p, rk]) => (
@@ -627,9 +652,12 @@ function StockCard({ s, data, onOpen, onClose }) {
                 <span className="mono dim">#{rk}</span><span className="sym">{p.s}</span><span className="sub pn">{p.n}</span><Meter v={p.os} d={dirVal(p.os)} label="Combined"/>
               </button>))}
           </div>
-        </>}
+        </div>}
 
-        <div className="m-foot"><span className="sub">Data as of {fmtDT(asOf)} · strength = how strong the trend is in its own direction (0–100%)</span></div>
+        </div>
+        </div>
+
+        <div className="m-foot"><span className="sub">Data as of {fmtDT(asOf)} · strength = how strong the trend is (0–100%), not a price move</span><span className="sub m-disc">For education only — not investment advice.</span></div>
         <p className="fine">{DISCLAIMER}</p>
       </div>
     </div>
@@ -712,11 +740,13 @@ function Home({ me, onOut }) {
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
       {view === "tower" && <>
       <div className="fbar">
-        <div className="fg"><span className="fl">Timeframe <Info text="Pick your trading style — it blends all five timeframes with the right weights: Balanced = all equal · Swing = Monthly & Quarterly count most · Investing = Quarterly & Yearly count most. Or pick D / W / M / Q / Y to look at single timeframes only (several = they must all agree)."/></span>
-          <Seg items={[...Object.entries(MODES).map(([k, m]) => [`mode:${k}`, m.short, null, `${m.label}: ${m.hint} — ${Object.entries(weightPct(m.w)).map(([t, p]) => `${t} ${p}%`).join(" · ")}`]),
-                       ...TFS.map(([k, l]) => [k, k, "tf", `${l} only`])]}
-            isOn={k => k.startsWith("mode:") ? !tfs.length && mode === k.slice(5) : tfs.includes(k)}
-            onPick={k => { if (k.startsWith("mode:")) { setMode(k.slice(5)); setTfs([]); } else toggleTf(k); }}/></div>
+        {/* Trading mode and Timeframe are separate but exclusive: a mode clears the timeframes, a timeframe switches the
+            mode off (with no timeframe left, the last mode is back on) */}
+        <div className="fg"><span className="fl">Trading mode <Info wide label="Trading mode weights per timeframe" text={<ModeWeights active={tfs.length ? null : mode}/>}/></span>
+          <Seg items={Object.entries(MODES).map(([k, m]) => [k, m.short, null, `${m.label}: ${m.hint} — ${Object.entries(weightPct(m.w)).map(([t, p]) => `${t} ${p}%`).join(" · ")}`])}
+            isOn={k => !tfs.length && mode === k} onPick={k => { setMode(k); setTfs([]); }}/></div>
+        <div className="fg"><span className="fl">Timeframe <Info text="Look at single timeframes only: D / W / M / Q / Y (several = they must all agree). Picking a timeframe switches the Trading mode off; clear the timeframes to go back to your mode."/></span>
+          <Seg items={TFS.map(([k, l]) => [k, k, "tf", `${l} only`])} isOn={k => tfs.includes(k)} onPick={toggleTf}/></div>
         <div className="fg"><span className="fl">Trend <Info text="Uptrend / Downtrend = direction on the chosen timeframe(s). Sideways = no clear direction. Bidirectional = up on some timeframes and down on others."/></span>
           <Seg items={[["all","All"],["up","▲ Up","up"],["down","▼ Down","down"],["side","◆ Sideways","flat"],["bi","⇅ Bidirectional","bi"]]} isOn={k => f.trend === k} onPick={setTrend}/></div>
         <div className="fg"><span className="fl">Market cap</span>
@@ -912,6 +942,11 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .info:hover,.info:focus{border-color:var(--acc);color:var(--acc);outline:none}
 .info-pop{display:none;position:absolute;top:calc(100% + 7px);left:-10px;z-index:50;width:250px;padding:9px 11px;border-radius:8px;background:var(--pop);border:1px solid var(--b2);box-shadow:0 14px 30px -10px rgba(0,0,0,.8);font:400 11.5px/1.5 var(--sans);color:var(--t1);white-space:normal;text-align:left}
 .info-pop.r{left:auto;right:-10px}.info:hover .info-pop,.info:focus .info-pop{display:block}
+.info-pop.wide{width:min(400px,calc(100vw - 32px))}
+.mw{width:100%;border-collapse:collapse;margin:8px 0 6px;font-size:11px}.mw th{font:700 9px var(--sans);color:var(--t3);text-transform:uppercase;letter-spacing:.6px;padding:4px 5px;border-bottom:1px solid var(--b2);text-align:left}
+.mw td{padding:5px;border-bottom:1px solid var(--b1);color:var(--t1);font-weight:600;white-space:nowrap}.mw td.mw-n{font:600 11px var(--mono);color:var(--t2);text-align:center}.mw th:not(:first-child):not(:last-child){text-align:center}
+.mw td.mw-n.mw-top{color:var(--acc);font-weight:800}.mw td.mw-n.mw-zero{color:var(--t3);opacity:.6}.mw td.mw-hint{font-weight:400;color:var(--t2);white-space:normal;font-size:10.5px}
+.mw tr.mw-on td{background:var(--adim)}.mw tr.mw-on td:first-child{color:var(--acc);box-shadow:inset 2px 0 0 var(--acc)}.mw-foot{font-size:10px;color:var(--t3)}
 .chip{border:1px solid var(--b2);background:var(--s2);color:var(--t2);border-radius:6px;padding:5px 11px;font-size:12px;font-weight:600;white-space:nowrap}
 .chip:hover{border-color:var(--accb);color:var(--t1)}.chip.on{border-color:var(--acc);background:var(--adim);color:var(--acc)}
 .chip.on.up{border-color:var(--long);background:var(--longd);color:var(--long)}.chip.on.down{border-color:var(--short);background:var(--shortd);color:var(--short)}.chip.on.bi{border-color:var(--ret);background:var(--retd);color:var(--ret)}
@@ -983,9 +1018,38 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 .m-rows{display:flex;flex-direction:column;border:1px solid var(--b1);border-radius:10px;overflow:hidden;background:var(--s1)}
 .m-row{display:grid;grid-template-columns:110px minmax(0,1fr) 112px 86px;gap:12px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--b1)}.m-row:last-child{border-bottom:0}.m-l{display:flex;flex-direction:column}
 .m-copy{margin-top:8px}
+/* stock card: one screen on desktop (two columns), single column + scroll on phones */
+@media (min-width:1000px){
+  .modal.stock{max-width:1240px;width:min(1240px,96vw);max-height:95vh;padding:16px 22px 12px}
+  .modal.stock .m-head{padding-right:30px}.modal.stock .m-name{font-size:19px}
+  .modal.stock .m-price{display:flex;flex-direction:column;align-items:flex-end;gap:3px}.modal.stock .m-copy{margin-top:3px}
+  .m-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px;align-items:start;margin-top:10px}
+  .m-col{display:flex;flex-direction:column;gap:12px;min-width:0}
+  .modal.stock .m-overall{margin:0;padding:11px 13px;gap:10px 14px}
+  .modal.stock .m-sec-t{margin:0 0 6px}
+  .modal.stock .m-row{padding:6px 12px;grid-template-columns:78px minmax(0,1fr) 106px 84px}.modal.stock .m-l .sub{display:none}
+  .modal.stock .ctx td{padding:4px 5px}.modal.stock .ctx th{padding:6px 5px}
+  .modal.stock .peer{padding:4px 12px}.modal.stock .ctx .rk{margin-top:0}
+  .modal.stock .mo-sum{padding-top:8px;gap:3px}.modal.stock .cv-row{line-height:1.35}
+  .modal.stock .m-foot{margin:8px 0 2px}.modal.stock .fine{margin:0;font-size:9.5px;line-height:1.4}
+  .modal.stock .ai-box{gap:4px;padding:8px 11px}.modal.stock .ai-l{font-size:12px;line-height:1.45}
+  .modal.stock .cv-grp,.modal.stock .fine{display:none}.modal.stock .m-foot{justify-content:space-between}
+  .m-grid{margin-top:8px}
+}
+@media (min-width:1000px) and (max-height:800px){
+  .modal.stock{max-height:98vh;padding:12px 20px 8px}.modal.stock .m-name{font-size:17px}
+  .modal.stock .m-row{padding:4px 12px}.modal.stock .peer{padding:3px 12px}.modal.stock .ctx td{padding:3px 5px}
+  .modal.stock .m-overall{padding:9px 12px;gap:8px 12px}.modal.stock .ai-box{padding:7px 10px}.modal.stock .ai-l{font-size:11.5px;line-height:1.4}
+  .modal.stock .m-col{gap:9px}.m-grid{gap:12px}.modal.stock .stag.big b{font-size:14px}
+}
+@media (max-width:999px){
+  .m-disc{display:none}
+  .m-grid{display:flex;flex-direction:column}.m-col{display:contents}
+  .m-overall{order:1}.blk-tf{order:2}.blk-ctx{order:3}.blk-peers{order:4}.blk{margin-top:14px}
+}
 .m-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0}
 footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
-@media (min-width:1480px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
+@media (min-width:1380px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
 @media (max-width:900px){.top .tabs{order:5;width:100%;margin:0 0 8px}.top .tabs button{flex:1;justify-content:center}.auth-page{grid-template-columns:1fr}.hero{padding:30px 22px;border-right:0;border-bottom:1px solid var(--b1)}.hero-h{font-size:28px}.hero-demo{display:none}.panels{grid-template-columns:1fr}.m-overall{grid-template-columns:auto auto}.cv-verdict{grid-column:1/-1;justify-self:start;white-space:normal}}
 @media (max-width:640px){.auth-page .feats,.auth-page .hero-fine{display:none}.hero-p{font-size:13.5px}.hero{gap:10px}.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
 `;

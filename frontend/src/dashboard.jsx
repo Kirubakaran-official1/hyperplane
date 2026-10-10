@@ -170,6 +170,17 @@ const CSS = `
   .blink { animation: blink 1.4s infinite; }
   @keyframes slide-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
   .slide-in { animation: slide-in .35s ease both; }
+  .rpt-ov{position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.6);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:2vh 1.5vw}
+  .rpt{width:min(1600px,100%);height:100%;max-height:96vh;background:var(--bg);border:1px solid var(--b2);border-radius:14px;box-shadow:0 30px 80px -20px rgba(0,0,0,.7);display:flex;flex-direction:column;overflow:hidden}
+  .rpt-head{display:flex;align-items:flex-start;gap:14px;padding:12px 16px;border-bottom:1px solid var(--b1);background:var(--s1)}
+  .rpt-x{margin-left:auto;font-size:18px;color:var(--t2);padding:0 6px;flex-shrink:0}.rpt-x:hover{color:var(--acc)}
+  .rpt-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:12px}
+  .rpt-col{min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-right:2px}
+  .rpt-col > div{flex-shrink:0;margin:0 !important}
+  .rpt-b{background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:10px 12px}
+  .rpt-bt{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;font-weight:700;margin-bottom:7px}
+  @media (max-width:1180px){.rpt-grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:max-content;overflow-y:auto;align-content:start}.rpt-col{overflow:visible;min-height:auto}}
+  @media (max-width:760px){.rpt-ov{padding:0}.rpt{max-height:none;border-radius:0}.rpt-grid{display:block;overflow-y:auto}.rpt-col{overflow:visible;margin-bottom:10px}}
 
   .hm-cell { border-radius: 4px; transition: transform .15s; cursor: default; }
   .hm-cell:hover { transform: scale(1.1); z-index: 10; }
@@ -1443,27 +1454,131 @@ function genInsights(biasCnt, total, db) {
 }
 
 // ─── CONTROL TOWER ────────────────────────────────────────────────────────────
-function ControlTower({ db, techOn=false }) {
-  // Multi-select sectors → industry panel shows their industries; industries are "Sector|Industry" keys.
-  // Changing sectors drops industries outside them (all of them when no sector is left).
-  const [pickSecs, setPickSecsRaw] = useState([]);
-  const [pickInds, setPickInds] = useState([]);
-  const setPickSecs = next => { setPickSecsRaw(next); setPickInds(p => next.length ? p.filter(k => next.includes(k.split("|")[0])) : []); };
-  const toggleSec = sec => setPickSecs(pickSecs.includes(sec) ? pickSecs.filter(s=>s!==sec) : [...pickSecs, sec]);
-  const toggleInd = key => setPickInds(p => p.includes(key) ? p.filter(k=>k!==key) : [...p, key]);
+// Sector & Industry Analysis: the two bubble panels and the two heat maps share ONE selection (`picks`, owned by
+// ControlTowerCombined): sectors = names, industries = "Sector|Industry" keys. The selection also filters every
+// widget below (radar, confluence, setups, opportunities, returns, algos, watchlist).
+function ControlTower({ db, techOn=false, picks, heat=null }) {
+  const { pickSecs, pickInds, toggleSec, toggleInd, setPickSecs, setPickInds, clearAll } = picks;
   const [secTf, setSecTf] = useState("ALL");
+  const any = pickSecs.length || pickInds.length;
+  const chip = (key, label, color, onX) => (
+    <span key={key} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10.5,fontWeight:600,padding:"3px 8px",borderRadius:12,border:`1px solid ${color}`,color,background:"var(--s2)"}}>
+      {label}<span onClick={onX} style={{cursor:"pointer",opacity:.8}} title="Remove">✕</span></span>);
   return (
     <div style={{padding:"18px 22px 0"}}>
       <Anchor id="ct-sector"/>
-      <EqRow height={440} cols="minmax(0,1fr) minmax(0,1fr)">
-        <SectorLeaderboardPanelV2 db={db} tf={secTf} setTf={setSecTf} selected={pickSecs} onSelect={toggleSec} recompute={techOn}/>
-        <IndustryMomentumPanelV2 db={db} tf={secTf} setTf={setSecTf} sectors={pickSecs} onClearSectors={()=>setPickSecs([])}
-          selected={pickInds} onSelect={toggleInd} onClearSelected={()=>setPickInds([])} recompute={techOn}/>
-      </EqRow>
-      <Anchor id="ct-alpha"/>
-      <div style={{marginBottom:12}}>
-        <AlphaIdeasPanel db={db}/>
+      <div style={{border:"1px solid var(--b2)",borderRadius:14,padding:"12px 12px 0",marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
+          <div style={{fontSize:15,fontWeight:700,color:"var(--t1)"}}>🏭 Sector & Industry Analysis</div>
+          <div style={{fontSize:11,color:"var(--t3)",flex:1,minWidth:240}}>Pick sectors and industries in any of the four widgets — they stay in sync and filter every widget below.</div>
+          {any ? <>
+            {pickSecs.map(x=>chip("s"+x, x, sectorColor(x), ()=>toggleSec(x)))}
+            {pickInds.map(k=>chip("i"+k, k.split("|")[1], "var(--acc)", ()=>toggleInd(k)))}
+            <button onClick={clearAll} style={{fontSize:10.5,padding:"3px 10px",borderRadius:6,border:"1px solid var(--b2)",color:"var(--t2)",background:"var(--s2)",cursor:"pointer"}}>Clear all</button>
+          </> : <span style={{fontSize:10.5,color:"var(--t3)",fontStyle:"italic"}}>Nothing picked — showing every sector</span>}
+        </div>
+        <EqRow height={440} cols="minmax(0,1fr) minmax(0,1fr)">
+          <SectorLeaderboardPanelV2 db={db} tf={secTf} setTf={setSecTf} selected={pickSecs} onSelect={toggleSec} recompute={techOn}/>
+          <IndustryMomentumPanelV2 db={db} tf={secTf} setTf={setSecTf} sectors={pickSecs} onClearSectors={()=>setPickSecs([])}
+            selected={pickInds} onSelect={toggleInd} onClearSelected={()=>setPickInds([])} recompute={techOn}/>
+        </EqRow>
+        <Anchor id="ct-matrix"/>
+        {heat}
       </div>
+    </div>
+  );
+}
+
+// Sector × TF and Industry × TF heat maps — multi-select rows, same selection as the bubble panels.
+function SectorIndustryHeat({ db, model, gDir="ALL", picks }) {
+  const { pickSecs, pickInds, toggleSec, toggleInd, setPickSecs, setPickInds } = picks;
+  const base = useMemo(()=>model.list.filter(s=>gDir==="ALL"||s.dir===gDir),[model,gDir]);
+  const TH = {position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"6px 8px",fontSize:9,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",whiteSpace:"nowrap",zIndex:1};
+  const secHeat = useMemo(()=>{
+    const m={};
+    base.forEach(s=>{
+      if(!m[s.sector]) m[s.sector]={sector:s.sector,tf:{D:0,W:0,M:0,Q:0,Y:0},focus:0,n:0,focusSyms:[]};
+      FOCUS_TFS.forEach(t=>{ m[s.sector].tf[t]+=s.ladder[t].net; });
+      m[s.sector].n++; if(s.score>=42&&s.dir!=="MIXED") { m[s.sector].focus++; m[s.sector].focusSyms.push(s.symbol); }
+    });
+    return Object.values(m).filter(r=>r.sector&&r.sector!=="Unknown"&&r.sector!=="Indices").map(r=>({...r,strength:(model.secMap[r.sector]||{}).Strength_Score||0})).sort((a,b)=>b.strength-a.strength);
+  },[base,model]);
+  const heatMax = Math.max(1,...secHeat.flatMap(r=>FOCUS_TFS.map(t=>Math.abs(r.tf[t]/Math.max(r.n,1)))));
+  const indStrength = useMemo(()=>{ const m={}; (db.industryAnalysis||[]).forEach(r=>{ m[`${r.Sector}|${r.Industry}`]=r.Strength_Score||0; }); return m; },[db.industryAnalysis]);
+  const indHeat = useMemo(()=>{
+    const m={};
+    base.filter(s=>!pickSecs.length||pickSecs.includes(s.sector)).forEach(s=>{
+      const k=`${s.sector}|${s.industry}`;
+      if(!m[k]) m[k]={key:k,sector:s.sector,industry:s.industry,tf:{D:0,W:0,M:0,Q:0,Y:0},focus:0,n:0,focusSyms:[]};
+      FOCUS_TFS.forEach(t=>{ m[k].tf[t]+=s.ladder[t].net; });
+      m[k].n++; if(s.score>=42&&s.dir!=="MIXED") { m[k].focus++; m[k].focusSyms.push(s.symbol); }
+    });
+    return Object.values(m).filter(r=>r.industry && r.industry!=="Unknown").map(r=>({...r,strength:indStrength[r.key]||0})).sort((a,b)=>b.strength-a.strength || b.focus-a.focus);
+  },[base,pickSecs,indStrength]);
+  const indHeatMax = Math.max(1,...indHeat.flatMap(r=>FOCUS_TFS.map(t=>Math.abs(r.tf[t]/Math.max(r.n,1)))));
+  const cells = (r, max, name) => FOCUS_TFS.map(t=>{
+    const v=r.tf[t]/Math.max(r.n,1), c=v>0?"var(--long)":"var(--short)";
+    return (
+      <td key={t} style={{padding:2}}>
+        <div title={`${name} ${TF_NAME[t]}: ${v>0?"+":""}${v.toFixed(2)} per stock`} style={{position:"relative",height:22,borderRadius:3,background:"var(--s2)",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{position:"absolute",inset:0,background:c,opacity:Math.min(.75,Math.abs(v)/max*.75)}}/>
+          <span style={{position:"relative",fontSize:9,fontFamily:"var(--mono)",color:"var(--t1)"}}>{v>0?"+":""}{v.toFixed(1)}</span>
+        </div>
+      </td>);
+  });
+  // bubble look: picked rows = tinted + coloured edge, the rest dimmed while something is picked
+  const rowStyle = (act, any, color) => ({borderBottom:"1px solid var(--b1)",cursor:"pointer",background:act?"var(--adim)":"transparent",
+    boxShadow:act?`inset 3px 0 0 ${color}`:"none",opacity:any&&!act?.42:1,transition:"opacity .15s"});
+  const selTag = (n, onClear) => n ? <span style={{fontSize:10.5,color:"var(--t2)",whiteSpace:"nowrap"}}>{n} selected · <span onClick={onClear} style={{color:"var(--acc)",cursor:"pointer"}}>✕ clear</span></span> : null;
+  const secSel = secHeat.filter(r=>pickSecs.includes(r.sector)), indSel = indHeat.filter(r=>pickInds.includes(r.key));
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:12,marginBottom:12,alignItems:"stretch"}}>
+      <FocusCard icon="🌡" title="Sector × Timeframe Heat" sub="Where each sector's move is happening. Click rows to pick several sectors (same selection as the bubbles)."
+        right={<>{selTag(pickSecs.length, ()=>setPickSecs([]))}<ListCopy symbols={(secSel.length?secSel:secHeat).flatMap(r=>r.focusSyms)}/></>}
+        learn={<>Each cell is the average bullish-minus-bearish evidence of that sector's stocks on that timeframe. A sector that is <strong>red on Q/Y but green on D/W</strong> is bouncing inside a downtrend — rallies there are suspect. <strong>Green on M/Q/Y</strong> means real accumulation. The <em>Focus</em> column counts names worth your time (score ≥ 42).</>}>
+        <div style={{maxHeight:420,overflowY:"auto"}} className="tower-scroll">
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead><tr><th style={TH}>Sector</th><th style={TH}>Str.</th>{FOCUS_TFS.map(t=><th key={t} style={{...TH,textAlign:"center"}}>{t}</th>)}<th style={TH}>Focus</th><th style={TH}>Copy</th></tr></thead>
+            <tbody>
+              {secHeat.map(r=>(
+                <tr key={r.sector} className="sec-row" onClick={()=>toggleSec(r.sector)} style={rowStyle(pickSecs.includes(r.sector), pickSecs.length>0, sectorColor(r.sector))}>
+                  <td style={{padding:"5px 8px",color:sectorColor(r.sector),fontWeight:700,whiteSpace:"nowrap",maxWidth:130,overflow:"hidden",textOverflow:"ellipsis"}}>{pickSecs.includes(r.sector)?"✓ ":""}{r.sector}</td>
+                  <td style={{padding:"5px 8px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{Math.round(r.strength)}</td>
+                  {cells(r, heatMax, r.sector)}
+                  <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:r.focus?"var(--acc)":"var(--t3)"}}>{r.focus}</td>
+                  <td style={{padding:"3px 6px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}><ListCopy symbols={r.focusSyms} compact/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </FocusCard>
+      <FocusCard icon="🏗" title="Industry × Timeframe Heat" sub={pickSecs.length ? `Industries of ${pickSecs.join(", ")}. Click rows to pick several industries.` : "Where each industry's move is happening. Click rows to pick several industries."}
+        right={<>{selTag(pickInds.length, ()=>setPickInds([]))}<ListCopy symbols={(indSel.length?indSel:indHeat).flatMap(r=>r.focusSyms)}/></>}
+        learn={<>Same idea as the sector heat, one level deeper: each cell is the average bullish-minus-bearish evidence of that industry's stocks on that timeframe. An industry <strong>green on M/Q/Y</strong> is being accumulated; green only on D/W is a short-term move. Picking sectors (here, in the bubbles or the sector heat) shows only their industries. <em>Focus</em> = names worth your time (score ≥ 42).</>}>
+        <div style={{maxHeight:420,overflowY:"auto"}} className="tower-scroll">
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead><tr><th style={TH}>Industry</th><th style={TH}>Str.</th>{FOCUS_TFS.map(t=><th key={t} style={{...TH,textAlign:"center"}}>{t}</th>)}<th style={TH}>Focus</th><th style={TH}>Copy</th></tr></thead>
+            <tbody>
+              {indHeat.map(r=>{
+                const act = pickInds.includes(r.key);
+                return (
+                  <tr key={r.key} className="sec-row" onClick={()=>toggleInd(r.key)} style={rowStyle(act, pickInds.length>0, "var(--acc)")}>
+                    <td style={{padding:"5px 8px",maxWidth:170}} title={`${r.industry} (${r.sector})`}>
+                      <div style={{fontWeight:700,color:act?"var(--acc)":"var(--t1)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{act?"✓ ":""}{r.industry}</div>
+                      <div style={{fontSize:8.5,color:sectorColor(r.sector),whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.sector}</div></td>
+                    <td style={{padding:"5px 8px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{Math.round(r.strength)}</td>
+                    {cells(r, indHeatMax, r.industry)}
+                    <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:r.focus?"var(--acc)":"var(--t3)"}}>{r.focus}</td>
+                    <td style={{padding:"3px 6px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}><ListCopy symbols={r.focusSyms} compact/></td>
+                  </tr>
+                );
+              })}
+              {!indHeat.length && <tr><td colSpan={9} style={{padding:14,color:"var(--t3)",textAlign:"center"}}>No industries for these filters.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </FocusCard>
     </div>
   );
 }
@@ -3371,7 +3486,235 @@ function ScoreRing({ score, size=46 }) {
 function tfWeightedNet(s, tfs) { return tfs.reduce((a,t)=>a+s.ladder[t].net*TF_WEIGHT[t],0); }
 
 // ─── STOCK DEEP-DIVE DRAWER ───────────────────────────────────────────────────
-function StockDeepDive({ s, onClose }) {
+// ─── Full-screen stock report (every admin tab) ──────────────────────────────
+// One popup instead of the old side drawer: header + three columns on wide screens (each column scrolls on its own),
+// two columns on laptops, one scrolling column on phones. Esc / ✕ / click outside closes it.
+function ReportShell({ onClose, head, children }) {
+  useEffect(() => {
+    const k = e => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", k);
+    const prev = document.body.style.overflow; document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", k); document.body.style.overflow = prev; };
+  }, []);
+  return (
+    <div onClick={onClose} className="rpt-ov">
+      <div onClick={e=>e.stopPropagation()} className="rpt slide-in" role="dialog">
+        <div className="rpt-head">{head}<button onClick={onClose} className="rpt-x" aria-label="Close" title="Close (Esc)">✕</button></div>
+        <div className="rpt-grid">{children}</div>
+      </div>
+    </div>
+  );
+}
+const RCol = ({ children }) => <div className="rpt-col tower-scroll">{children}</div>;
+const RBlock = ({ icon, title, right, children }) => (
+  <div className="rpt-b"><div className="rpt-bt"><span>{icon} {title}</span>{right}</div>{children}</div>
+);
+const R_POS = { ABOVE_TOP:["Above the zone","var(--long)"], IN_TOP_BAND:["In the top band","var(--long)"], INSIDE:["Inside the zone","var(--t2)"],
+  IN_BOTTOM_BAND:["In the bottom band","var(--short)"], BELOW_BOTTOM:["Below the zone","var(--short)"] };
+const rNum = (v, d=2) => v == null || isNaN(v) ? "—" : (+v).toLocaleString("en-IN", { maximumFractionDigits:d });
+const rPct = v => v == null || isNaN(v) ? "—" : `${v>0?"+":""}${(+v).toFixed(1)}%`;
+
+function RHead({ sym, name, sector, industry, price, chg, extra=null, ring=null, db }) {
+  const h = (db.priceHealth||[]).find(r=>r.Symbol===sym);
+  return (
+    <>
+      {ring}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <span style={{fontFamily:"var(--mono)",fontSize:22,fontWeight:700,color:"var(--acc)"}}>{sym}</span>
+          {extra}
+          {h && <HealthBadge h={h.Health}/>}
+          <TVCopyBtn symbols={[sym]} label="⎘ TV"/>
+          {price!=null && price!=="" && <span style={{fontSize:13,fontFamily:"var(--mono)",fontWeight:700,color:"var(--t1)",marginLeft:6}}>₹{price}
+            {chg!=null && chg!=="" && <span style={{fontSize:11.5,marginLeft:6,color:+chg>=0?"var(--long)":"var(--short)"}}>{+chg>=0?"+":""}{chg}%</span>}</span>}
+        </div>
+        <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{fontSize:12,color:"var(--t2)",marginRight:4}}>{name}</span>
+          {sector && <SectorChip sector={sector}/>}{industry && <IndustryTag industry={industry}/>}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Sector & industry strength with rank among all sectors / industries
+function RGroupBlock({ db, sector, industry }) {
+  const secs = [...(db.sectorAnalysis||[])].filter(r=>r.Sector!=="Unknown"&&r.Sector!=="Indices").sort((a,b)=>b.Strength_Score-a.Strength_Score);
+  const inds = [...(db.industryAnalysis||[])].filter(r=>r.Industry!=="Unknown").sort((a,b)=>b.Strength_Score-a.Strength_Score);
+  const si = secs.findIndex(r=>r.Sector===sector), ii = inds.findIndex(r=>r.Sector===sector&&r.Industry===industry);
+  const row = (kind, name, r, rank, of) => (
+    <div style={{padding:"6px 0",borderBottom:"1px solid var(--b1)"}}>
+      <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+        <span style={{fontSize:9,color:"var(--t3)",textTransform:"uppercase",fontWeight:700,width:58}}>{kind}</span>
+        <span style={{fontSize:12,fontWeight:700,color:"var(--t1)",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={name}>{name}</span>
+        {r && <span style={{fontFamily:"var(--mono)",fontSize:12,fontWeight:700,color:r.Strength_Score>=55?"var(--long)":r.Strength_Score>=45?"var(--mixed)":"var(--short)"}}>{Math.round(r.Strength_Score)}</span>}
+        {r && <span style={{fontSize:10,color:"var(--t3)",fontFamily:"var(--mono)"}}>#{rank+1}/{of}</span>}
+      </div>
+      {r ? <>
+        <div style={{height:4,borderRadius:2,background:"var(--s3)",margin:"5px 0 4px 66px",overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(100,r.Strength_Score)}%`,background:r.Strength_Score>=55?"var(--long)":r.Strength_Score>=45?"var(--mixed)":"var(--short)"}}/></div>
+        <div style={{fontSize:10.5,color:"var(--t2)",marginLeft:66}}>{r.Strength_Label} · {r.Total_Stocks} stocks · <span style={{color:"var(--long)"}}>▲{r.Advancing}</span> <span style={{color:"var(--short)"}}>▼{r.Declining}</span> · avg {rPct(r.Avg_Change_Pct)} · net bias {r.Net_Bias_Score>0?"+":""}{r.Net_Bias_Score}</div>
+      </> : <div style={{fontSize:10.5,color:"var(--t3)",marginLeft:66}}>No data</div>}
+    </div>
+  );
+  return (
+    <RBlock icon="🏭" title="Sector & industry">
+      {row("Sector", sector, secs[si], si, secs.length)}
+      {row("Industry", industry, inds[ii], ii, inds.length)}
+    </RBlock>
+  );
+}
+
+// Where price sits in each timeframe's zones: one box per timeframe — above the zone = green, below = red,
+// anything in between (inside or in a band) = grey. Levels and distances in the tooltip.
+function RZoneBlock({ z }) {
+  if (!z) return <RBlock icon="🧱" title="Zones by timeframe"><div style={{fontSize:11,color:"var(--t3)"}}>No zone levels for this stock in this collection.</div></RBlock>;
+  const look = pos => pos==="ABOVE_TOP" ? ["Above","var(--long)","var(--longd)"] : pos==="BELOW_BOTTOM" ? ["Below","var(--short)","var(--shortd)"] : ["Inside","var(--t2)","var(--s2)"];
+  return (
+    <RBlock icon="🧱" title="Zones by timeframe" right={<span style={{textTransform:"none",letterSpacing:0,fontWeight:500}}>price {rNum(z.Price)}</span>}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(0,1fr))",gap:6}}>
+        {[...FOCUS_TFS].reverse().map(t=>{ const x=z[t];
+          if (!x || x.tz==null) return <div key={t} style={{border:"1px dashed var(--b2)",borderRadius:8,padding:"8px 4px",textAlign:"center",color:"var(--t3)",fontSize:10.5}}><div style={{fontWeight:700}}>{TF_NAME[t]}</div>—</div>;
+          const [w,c,bg] = look(x.pos);
+          return (
+            <div key={t} title={`${TF_NAME[t]}: ${(R_POS[x.pos]||[x.pos])[0]} · top ${rNum(x.tz)} (${rPct(x.dTop)}) · bottom ${rNum(x.bz)} (${rPct(x.dBot)})`}
+              style={{border:`1px solid ${c}`,background:bg,borderRadius:8,padding:"8px 4px",textAlign:"center",cursor:"help"}}>
+              <div style={{fontSize:10,fontWeight:700,color:"var(--t2)"}}>{TF_NAME[t]}</div>
+              <div style={{fontSize:13,fontWeight:800,color:c,marginTop:2}}>{w==="Above"?"▲ ":w==="Below"?"▼ ":"◆ "}{w}</div>
+            </div>);
+        })}
+      </div>
+    </RBlock>
+  );
+}
+
+// NR picture of one stock per timeframe: how many NRs broke out / down, which are pressing the edge (ready),
+// and which are still coiling (Multi-TF NR list)
+function RNRBlock({ s }) {
+  const up = nrStatesFor(s, 1), dn = nrStatesFor(s, -1);
+  // coiling = NR patterns of the Multi-TF NR list that have not broken and are not pressing an edge yet
+  const coil = {}; (s.mtnr ? nrByTf(s.mtnr.NR_Signals) : []).forEach(r=>{
+    const used = new Set([...up[r.tf].bo, ...up[r.tf].near, ...dn[r.tf].bo, ...dn[r.tf].near]);
+    const left = [...new Set(r.groups.flatMap(g=>g.lens))].filter(n=>!used.has(n)).sort((a,b)=>a-b);
+    if (left.length) coil[r.tf] = left; });
+  const TFS = [...FOCUS_TFS].reverse();
+  const cnt = (st, k) => TFS.reduce((a,t)=>a+st[t][k].length,0), tfsWith = (st, k) => TFS.filter(t=>st[t][k].length);
+  const nBo = cnt(up,"bo"), nBd = cnt(dn,"bo"), nRu = cnt(up,"near"), nRd = cnt(dn,"near");
+  const chip = (n, c, dashed, key) => <span key={key} style={{fontSize:9.5,padding:"1px 5px",borderRadius:3,fontFamily:"var(--mono)",fontWeight:700,whiteSpace:"nowrap",
+    color:c,border:`1px ${dashed?"dashed":"solid"} ${c}`}}>NR{n||""}</span>;
+  const any = nBo+nBd+nRu+nRd+Object.keys(coil).length;
+  const stat = (lbl, n, sub, c) => (
+    <div style={{flex:1,minWidth:0,border:"1px solid var(--b1)",borderRadius:8,padding:"6px 8px",background:"var(--s2)"}}>
+      <div style={{fontSize:9,color:"var(--t3)",textTransform:"uppercase",fontWeight:700,letterSpacing:".4px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lbl}</div>
+      <div style={{fontFamily:"var(--mono)",fontSize:17,fontWeight:800,color:n?c:"var(--t3)"}}>{n}</div>
+      <div style={{fontSize:9.5,color:"var(--t3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sub||"—"}</div>
+    </div>);
+  return (
+    <RBlock icon="◆" title="Narrow Range (NR) by timeframe">
+      {!any ? <div style={{fontSize:11,color:"var(--t3)"}}>No NR pattern on any timeframe for this stock.</div> : <>
+        <div style={{display:"flex",gap:6,marginBottom:8}}>
+          {stat("▲ Broke out", nBo, tfsWith(up,"bo").join(" · "), "var(--long)")}
+          {stat("▲ Ready", nRu, tfsWith(up,"near").join(" · "), "var(--long)")}
+          {stat("▼ Broke down", nBd, tfsWith(dn,"bo").join(" · "), "var(--short)")}
+          {stat("▼ Ready", nRd, tfsWith(dn,"near").join(" · "), "var(--short)")}
+          {stat("◇ Coiling", Object.values(coil).reduce((x,l)=>x+l.length,0), Object.keys(coil).sort((x,y)=>TFS.indexOf(x)-TFS.indexOf(y)).join(" · "), "var(--t1)")}
+        </div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:10.5}}>
+          <thead><tr>{["TF","Broke out ▲","Ready ▲","Broke down ▼","Ready ▼","Coiling"].map(h=><th key={h} style={{textAlign:"left",fontSize:8.5,color:"var(--t3)",padding:"3px 4px",borderBottom:"1px solid var(--b1)",textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+          <tbody>{TFS.map(t=>{
+            const cells = [up[t].bo.map(n=>chip(n,"var(--long)",false,"a"+n)), up[t].near.map(n=>chip(n,"var(--long)",true,"b"+n)),
+                           dn[t].bo.map(n=>chip(n,"var(--short)",false,"c"+n)), dn[t].near.map(n=>chip(n,"var(--short)",true,"d"+n)),
+                           (coil[t]||[]).map(n=>chip(n,"var(--t2)",true,"e"+n))];
+            const empty = cells.every(c=>!c.length);
+            return (
+              <tr key={t} style={{borderBottom:"1px solid var(--b1)",opacity:empty?.45:1}}>
+                <td style={{padding:"4px",fontWeight:700,color:"var(--t1)",fontFamily:"var(--mono)"}}>{t}</td>
+                {cells.map((c,i)=><td key={i} style={{padding:"4px"}}><div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{c.length ? c : <span style={{color:"var(--t3)"}}>·</span>}</div></td>)}
+              </tr>);
+          })}</tbody>
+        </table>
+        <div style={{fontSize:9.5,color:"var(--t3)",marginTop:5,lineHeight:1.5}}>Solid = the NR range already broke · dashed = price pressing the NR high / low (ready to break) · grey = still coiling inside the NR. NR4 = narrowest range of the last 4 bars on that timeframe.</div>
+      </>}
+    </RBlock>
+  );
+}
+
+// Trade plan: return potential + NR trap + zone retest rows of this stock
+function RPlanBlock({ db, sym }) {
+  const rp = (db.returnPotential||[]).filter(r=>r.Symbol===sym), fn = (db.failedNR||[]).filter(r=>r.Symbol===sym), zr = (db.zoneRetest||[]).filter(r=>r.Symbol===sym);
+  const kv = (k, v, c) => <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11,padding:"2px 0"}}><span style={{color:"var(--t3)"}}>{k}</span><span style={{fontFamily:"var(--mono)",fontWeight:600,color:c||"var(--t1)"}}>{v}</span></div>;
+  const up = d => /long|buy|up/i.test(d||"");
+  return (
+    <RBlock icon="💰" title="Trade plan">
+      {!rp.length && !fn.length && !zr.length && <div style={{fontSize:11,color:"var(--t3)"}}>No return-potential, NR-trap or zone-retest plan for this stock in this collection.</div>}
+      {rp.map((r,i)=>(
+        <div key={"rp"+i} style={{padding:"4px 0 6px",borderBottom:"1px solid var(--b1)"}}>
+          <div style={{fontSize:11.5,fontWeight:700,color:up(r.Direction)?"var(--long)":"var(--short)",marginBottom:3}}>{up(r.Direction)?"▲":"▼"} {r.Direction} · <span style={{color:"var(--t2)",fontWeight:500}}>{r.Status}</span></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",columnGap:14}}>
+            {kv("Entry (M zone)", rNum(r.Entry_Monthly_Zone))}{kv("Stop", rNum(r.Stop), "var(--short)")}
+            {kv("Target Q", rNum(r.Target_Quarterly), "var(--long)")}{kv("Target Y", rNum(r.Target_Yearly), "var(--long)")}
+            {kv("Return to Q", rPct(r.Return_To_Q_Pct))}{kv("Return to Y", rPct(r.Return_To_Y_Pct))}
+            {kv("Risk", rPct(r.Risk_Pct))}{kv("R:R Q · Y", `${rNum(r.RR_Q,1)} · ${rNum(r.RR_Y,1)}`)}
+            {kv("To entry", rPct(r.Distance_To_Entry_Pct))}
+          </div>
+        </div>
+      ))}
+      {fn.map((r,i)=>(
+        <div key={"fn"+i} style={{padding:"5px 0",borderBottom:"1px solid var(--b1)",fontSize:11}}>
+          <span style={{fontWeight:700,color:up(r.Trade)?"var(--long)":"var(--short)"}}>🪤 NR trap · {r.Timeframe} · {up(r.Trade)?"buy":"sell"}</span>
+          <span style={{fontFamily:"var(--mono)",color:"var(--t2)",marginLeft:6}}>entry {rNum(r.Entry)} · stop {rNum(r.Stop)} · target {rNum(r.Target)} · R:R {rNum(r.RR,1)}</span>
+        </div>
+      ))}
+      {zr.map((r,i)=>(
+        <div key={"zr"+i} style={{padding:"5px 0",borderBottom:"1px solid var(--b1)",fontSize:11}}>
+          <span style={{fontWeight:700,color:up(r.Trade)?"var(--long)":"var(--short)"}}>🔁 Zone retest · {r.Timeframe}</span>
+          <span style={{color:"var(--t2)",marginLeft:6}}>{r.Setup}</span>
+          <span style={{fontFamily:"var(--mono)",color:"var(--t3)",marginLeft:6}}>zone {rNum(r.Zone_Bottom)} – {rNum(r.Zone_Top)}</span>
+        </div>
+      ))}
+    </RBlock>
+  );
+}
+
+// Long-term price health (reliability)
+function RHealthBlock({ db, sym }) {
+  const h = (db.priceHealth||[]).find(r=>r.Symbol===sym);
+  if (!h) return null;
+  const kv = (k, v) => <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11,padding:"2px 0"}}><span style={{color:"var(--t3)"}}>{k}</span><span style={{fontFamily:"var(--mono)",fontWeight:600,color:"var(--t1)"}}>{v}</span></div>;
+  return (
+    <RBlock icon="🩺" title="Price health" right={<HealthBadge h={h.Health} small/>}>
+      {h.Reason && <div style={{fontSize:11,color:"var(--t2)",marginBottom:5,lineHeight:1.5}}>{h.Reason}</div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",columnGap:14}}>
+        {kv("From peak", rPct(h.Drawdown))}{kv("Peak", `${rNum(h.Peak_High)}${h.Peak_Years_Ago!=null?` · ${rNum(h.Peak_Years_Ago,1)}y ago`:""}`)}
+        {kv("3-year return", rPct(h.Ret3Y))}{h.RetLongLabel && kv(`${h.RetLongLabel} return`, rPct(h.RetLong))}
+        {kv("History", h.Years!=null ? `${rNum(h.Years,0)} years` : "—")}
+      </div>
+    </RBlock>
+  );
+}
+
+// Strongest stocks of the same industry (click one to open its report)
+function RPeersBlock({ list, sym, sector, industry }) {
+  if (!list || !list.length) return null;
+  const peers = list.filter(x=>x.sector===sector&&x.industry===industry).sort((a,b)=>b.score-a.score);
+  if (peers.length < 2) return null;
+  const me = peers.findIndex(x=>x.symbol===sym), show = peers.slice(0,6);
+  if (me >= 6) show.push(peers[me]);
+  return (
+    <RBlock icon="👥" title={`Industry peers · ${me>=0?`#${me+1} of ${peers.length}`:`${peers.length} stocks`}`} right={<ListCopy symbols={peers.slice(0,6).map(x=>x.symbol)} compact/>}>
+      {show.map(x=>{ const i = peers.indexOf(x);
+        return (
+          <div key={x.symbol} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 4px",borderRadius:5,background:x.symbol===sym?"var(--adim)":"transparent"}}>
+            <span style={{width:22,fontSize:10,color:"var(--t3)",fontFamily:"var(--mono)"}}>#{i+1}</span>
+            <div style={{flex:1,minWidth:0}}><SymCell sym={x.symbol}/></div>
+            <span style={{fontSize:10,fontWeight:700,color:dirColor(x.dir)}}>{x.dir}</span>
+            <span style={{width:28,textAlign:"right",fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:tierOf(x.score).color}}>{Math.round(x.score)}</span>
+          </div>);
+      })}
+    </RBlock>
+  );
+}
+
+function StockDeepDive({ s, db, list=null, onClose }) {
   const techCtx = React.useContext(TechCtx);
   if (!s) return null;
   const d = s.sgn>0 ? "bullish" : "bearish";
@@ -3392,82 +3735,52 @@ function StockDeepDive({ s, onClose }) {
     : s.ltfTrig.length && !s.htfState.length ? "Only a short-term trigger with no bigger-picture support — trade small or skip."
     : s.setupTfs.length ? `Setup forming on ${s.setupTfs.join("+")}. Put an alert at the range ${s.sgn>0?"high":"low"} and wait.`
     : "Structure only, no trigger. Keep on the watchlist.";
-  const total = Object.values(s.comp).reduce((a,b)=>a+Math.max(0,b),0) || 1;
+  const dbx = db || {};
+  const z = (dbx.zoneLevels||[]).find(r=>r.Symbol===s.symbol);
   return (
-    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:600,display:"flex",justifyContent:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} className="tower-scroll slide-in" style={{width:"min(560px,100%)",height:"100%",background:"var(--bg)",borderLeft:"1px solid var(--b2)",overflowY:"auto",padding:"18px 20px",boxShadow:"-12px 0 40px var(--shadow)"}}>
-        <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:14}}>
-          <ScoreRing score={s.score} size={58}/>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <span style={{fontFamily:"var(--mono)",fontSize:20,fontWeight:700,color:"var(--acc)"}}>{s.symbol}</span>
-              {biasBadge(s.dir)}
-              <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,border:`1px solid ${tierOf(s.score).color}`,color:tierOf(s.score).color,fontWeight:700}}>{tierOf(s.score).label}</span>
-              <TVCopyBtn symbols={[s.symbol]} label="⎘ TV"/>
-            </div>
-            <div style={{fontSize:11.5,color:"var(--t2)",marginTop:3}}>{s.name}</div>
-            <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap",alignItems:"center"}}>
-              <SectorChip sector={s.sector}/><IndustryTag industry={s.industry}/>
-              <span style={{fontSize:10,color:"var(--t3)"}}>Horizon: <strong style={{color:"var(--t1)"}}>{s.horizon}</strong></span>
-              {s.price && <span style={{fontSize:10,fontFamily:"var(--mono)",color:+s.chg>=0?"var(--long)":"var(--short)"}}>₹{s.price} ({+s.chg>=0?"+":""}{s.chg}%)</span>}
-            </div>
+    <ReportShell onClose={onClose} head={
+      <RHead sym={s.symbol} name={s.name} sector={s.sector} industry={s.industry} price={s.price} chg={s.chg} db={dbx}
+        ring={<ScoreRing score={s.score} size={58}/>}
+        extra={<>{biasBadge(s.dir)}
+          <span style={{fontSize:10,padding:"2px 7px",borderRadius:4,border:`1px solid ${tierOf(s.score).color}`,color:tierOf(s.score).color,fontWeight:700}}>{tierOf(s.score).label}</span>
+          <span style={{fontSize:10.5,color:"var(--t3)"}}>Horizon <strong style={{color:"var(--t1)"}}>{s.horizon}</strong></span>
+          {s.isFNO && <span style={{fontSize:9.5,padding:"1px 6px",borderRadius:3,background:"var(--longd)",color:"var(--long)",fontWeight:700}}>FNO</span>}</>}/>}>
+      <RCol>
+        <RBlock icon="🧠" title="The story">
+          <div style={{fontSize:12,color:"var(--t1)",lineHeight:1.65}}>
+            <strong>{s.symbol}</strong> carries a <strong style={{color:dirColor(s.dir)}}>{d}</strong> bias — {pct}% of the timeframe-weighted evidence points {s.sgn>0?"up":"down"}.{" "}
+            {s.htfTrig.length ? <>A fresh <strong>{s.htfTrig.map(t=>TF_NAME[t]).join(" & ")}</strong> trigger fired — levels on these charts take months to build, so breaks here tend to matter. </>
+              : s.htfState.length ? <>Higher timeframes ({s.htfState.map(t=>TF_NAME[t]).join(", ")}) lean {d}, but there is no fresh higher-TF trigger — that's structure, not an entry. </>
+              : <>Nothing on the higher timeframes supports it — treat it as a short-term idea only. </>}
+            {s.ltfTrig.length ? <>The <strong>{s.ltfTrig.map(t=>TF_NAME[t]).join(" & ")}</strong> chart has also triggered, so timing is in place. </> : <>The lower timeframes haven't triggered yet — let the Daily/Weekly confirm. </>}
+            {s.secAlign>0.3 ? <>Its sector (<strong>{s.sector}</strong>) is moving the same way — a tailwind. </> : s.secAlign<-0.3 ? <>Careful: it's fighting its sector (<strong>{s.sector}</strong>). </> : null}
+            {opp.length ? <>Watch out: <strong>{opp.map(t=>TF_NAME[t]).join(", ")}</strong> point{opp.length===1?"s":""} the other way.</> : null}
           </div>
-          <button onClick={onClose} style={{fontSize:18,color:"var(--t2)",padding:"0 4px"}}>✕</button>
-        </div>
-
-        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginBottom:12,fontSize:12,color:"var(--t1)",lineHeight:1.7}}>
-          <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:6}}>🧠 The story</div>
-          <strong>{s.symbol}</strong> carries a <strong style={{color:dirColor(s.dir)}}>{d}</strong> bias — {pct}% of the timeframe-weighted evidence points {s.sgn>0?"up":"down"}.{" "}
-          {s.htfTrig.length ? <>A fresh <strong>{s.htfTrig.map(t=>TF_NAME[t]).join(" & ")}</strong> trigger fired — levels on these charts take months to build, so breaks here tend to matter. </>
-            : s.htfState.length ? <>Higher timeframes ({s.htfState.map(t=>TF_NAME[t]).join(", ")}) lean {d}, but there is no fresh higher-TF trigger — that's structure, not an entry. </>
-            : <>Nothing on the higher timeframes supports it — treat it as a short-term idea only. </>}
-          {s.ltfTrig.length ? <>The <strong>{s.ltfTrig.map(t=>TF_NAME[t]).join(" & ")}</strong> chart has also triggered, so timing is in place. </> : <>The lower timeframes haven't triggered yet — let the Daily/Weekly confirm. </>}
-          {s.secAlign>0.3 ? <>Its sector (<strong>{s.sector}</strong>) is moving the same way — a tailwind. </> : s.secAlign<-0.3 ? <>Careful: it's fighting its sector (<strong>{s.sector}</strong>). </> : null}
-          {opp.length ? <>Watch out: <strong>{opp.map(t=>TF_NAME[t]).join(", ")}</strong> point{opp.length===1?"s":""} the other way.</> : null}
-          <div style={{marginTop:8,padding:"8px 10px",background:"var(--adim)",borderRadius:6,borderLeft:"3px solid var(--acc)"}}><strong>Next action:</strong> {next}</div>
-        </div>
-
-        <DeepDiveSetups s={s}/>
-
-        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginBottom:12}}>
-          <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>🧮 Score anatomy — why {Math.round(s.score)}?</div>
-          <div style={{display:"flex",height:12,borderRadius:6,overflow:"hidden",background:"var(--s3)",marginBottom:8}}>
-            {COMP_META.filter(c=>s.comp[c.k]>0).map(c=><div key={c.k} title={`${c.label}: +${s.comp[c.k].toFixed(1)}`} style={{width:`${s.comp[c.k]/total*100}%`,background:c.color}}/>)}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px"}}>
-            {COMP_META.filter(c=>c.k!=="persistence"||s.nFiles>1).map(c=>(
-              <div key={c.k} style={{display:"flex",alignItems:"center",gap:6,fontSize:10.5}}>
-                <span style={{width:8,height:8,borderRadius:2,background:c.color}}/>
-                <span style={{color:"var(--t2)",flex:1}}>{c.label}</span>
-                <span style={{fontFamily:"var(--mono)",fontWeight:700,color:s.comp[c.k]<0?"var(--short)":"var(--t1)"}}>{s.comp[c.k]>=0?"+":""}{s.comp[c.k].toFixed(1)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginBottom:12}}>
-          <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>✅ Pre-trade checklist — {passed}/{checks.length} passed</div>
+          <div style={{marginTop:8,padding:"7px 10px",background:"var(--adim)",borderRadius:6,borderLeft:"3px solid var(--acc)",fontSize:11.5,color:"var(--t1)"}}><strong>Next action:</strong> {next}</div>
+        </RBlock>
+        <RBlock icon="✅" title={`Pre-trade checklist — ${passed}/${checks.length} passed`}>
           {checks.map((c,i)=>(
-            <div key={i} style={{display:"flex",gap:8,padding:"5px 0",borderBottom:i<checks.length-1?"1px solid var(--b1)":"none"}}>
+            <div key={i} style={{display:"flex",gap:8,padding:"4px 0",borderBottom:i<checks.length-1?"1px solid var(--b1)":"none"}}>
               <span style={{fontSize:13,color:c.ok?"var(--long)":"var(--short)",width:16,flexShrink:0}}>{c.ok?"✓":"✗"}</span>
               <div><div style={{fontSize:11.5,color:"var(--t1)",fontWeight:600}}>{c.t}</div><div style={{fontSize:10,color:"var(--t3)"}}>{c.why}</div></div>
             </div>
           ))}
-        </div>
-
-        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px"}}>
-          <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>🪜 Timeframe ladder — biggest picture on top</div>
+        </RBlock>
+        <RGroupBlock db={dbx} sector={s.sector} industry={s.industry}/>
+      </RCol>
+      <RCol>
+        <RBlock icon="🪜" title="Timeframe ladder — biggest picture on top">
           {[...FOCUS_TFS].reverse().map(t=>{
             const l=s.ladder[t], sigs=s.tfs[t].signals.filter(g=>g.kind!=="TECH"), hasTech=s.tfs[t].signals.length>sigs.length;
             const c = l.state>0?"var(--long)":l.state<0?"var(--short)":"var(--t3)";
             return (
-              <div key={t} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:"1px solid var(--b1)"}}>
+              <div key={t} style={{display:"flex",gap:10,padding:"6px 0",borderBottom:"1px solid var(--b1)"}}>
                 <div style={{width:74,flexShrink:0}}>
                   <div style={{fontSize:11.5,fontWeight:700,color:c}}>{TF_NAME[t]}</div>
                   <div style={{fontSize:9.5,color:"var(--t3)"}}>{l.state>0?"▲ bullish":l.state<0?"▼ bearish":"— quiet"}</div>
                 </div>
                 <div style={{flex:1,minWidth:0}}>
-                  {sigs.length===0 && <div style={{fontSize:10.5,color:"var(--t3)"}}>{hasTech?"No zone / NR signals — only technicals (table below).":"No signals on this timeframe."}</div>}
+                  {sigs.length===0 && <div style={{fontSize:10.5,color:"var(--t3)"}}>{hasTech?"No zone / NR signals — only technicals.":"No signals on this timeframe."}</div>}
                   {sigs.map((g,i)=>(
                     <div key={i} style={{display:"flex",gap:6,alignItems:"baseline",marginBottom:3}}>
                       <span style={{fontSize:8.5,padding:"1px 5px",borderRadius:3,fontWeight:700,fontFamily:"var(--mono)",flexShrink:0,
@@ -3481,52 +3794,43 @@ function StockDeepDive({ s, onClose }) {
               </div>
             );
           })}
-        </div>
+        </RBlock>
+        <RZoneBlock z={z}/>
+        <RNRBlock s={s}/>
+        <DeepDiveSetups s={s}/>
+      </RCol>
+      <RCol>
         {techCtx && <TechTable sym={s.symbol}/>}
-      </div>
-    </div>
+        <RPlanBlock db={dbx} sym={s.symbol}/>
+        <RHealthBlock db={dbx} sym={s.symbol}/>
+        <RPeersBlock list={list} sym={s.symbol} sector={s.sector} industry={s.industry}/>
+      </RCol>
+    </ReportShell>
   );
 }
 
 // Report for a ticker that has no signals in the loaded data (or is hidden by filters)
-function NoSignalReport({ sym, db, onClose }) {
+function NoSignalReport({ sym, db, list=null, onClose }) {
   const m = db.masterMap?.[sym], z = (db.zoneLevels||[]).find(r=>r.Symbol===sym);
-  const POS = { ABOVE_TOP:["Above the zone","var(--long)"], IN_TOP_BAND:["In the top band","var(--long)"], INSIDE:["Inside the zone","var(--t2)"],
-    IN_BOTTOM_BAND:["In the bottom band","var(--short)"], BELOW_BOTTOM:["Below the zone","var(--short)"] };
+  const sector = m?.Sector||z?.Sector, industry = m?.Industry||z?.Industry;
   return (
-    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:600,display:"flex",justifyContent:"flex-end"}}>
-      <div onClick={e=>e.stopPropagation()} className="tower-scroll slide-in" style={{width:"min(560px,100%)",height:"100%",background:"var(--bg)",borderLeft:"1px solid var(--b2)",overflowY:"auto",padding:"18px 20px",boxShadow:"-12px 0 40px var(--shadow)"}}>
-        <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:14}}>
-          <div style={{flex:1}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}><span style={{fontFamily:"var(--mono)",fontSize:20,fontWeight:700,color:"var(--acc)"}}>{sym}</span><TVCopyBtn symbols={[sym]} label="⎘ TV"/></div>
-            <div style={{fontSize:11.5,color:"var(--t2)",marginTop:3}}>{m?.Stock_Name || z?.Stock_Name || ""}</div>
-            <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap",alignItems:"center"}}>
-              {(m?.Sector||z?.Sector) && <SectorChip sector={m?.Sector||z?.Sector}/>}{(m?.Industry||z?.Industry) && <IndustryTag industry={m?.Industry||z?.Industry}/>}
-              {m?.Price && <span style={{fontSize:10,fontFamily:"var(--mono)",color:+m.Change_Pct>=0?"var(--long)":"var(--short)"}}>₹{m.Price} ({+m.Change_Pct>=0?"+":""}{m.Change_Pct}%)</span>}
-            </div>
-          </div>
-          <button onClick={onClose} style={{fontSize:18,color:"var(--t2)",padding:"0 4px"}}>✕</button>
-        </div>
-        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginBottom:12,fontSize:12,color:"var(--t2)",lineHeight:1.6}}>
-          No zone or NR signals for <strong style={{color:"var(--t1)"}}>{sym}</strong> in the data shown here — it has no active setup, or it is hidden by your filters (stock quality, segment, sector).
-        </div>
+    <ReportShell onClose={onClose} head={<RHead sym={sym} name={m?.Stock_Name || z?.Stock_Name || ""} sector={sector} industry={industry} price={m?.Price ?? z?.Price} chg={m?.Change_Pct} db={db}/>}>
+      <RCol>
+        <RBlock icon="ℹ" title="No active signal">
+          <div style={{fontSize:12,color:"var(--t2)",lineHeight:1.6}}>No zone or NR signals for <strong style={{color:"var(--t1)"}}>{sym}</strong> in the data shown here — it has no active setup, or it is hidden by your filters (stock quality, segment, sector).</div>
+        </RBlock>
+        {sector && <RGroupBlock db={db} sector={sector} industry={industry}/>}
+      </RCol>
+      <RCol>
+        <RZoneBlock z={z}/>
+      </RCol>
+      <RCol>
         <TechTable sym={sym}/>
-        {z && (
-          <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"12px 14px",marginTop:12}}>
-            <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:8}}>🧱 Where price sits in each timeframe's zones</div>
-            {[...FOCUS_TFS].reverse().map(t=>{ const x=z[t]; if (!x || x.tz==null) return null; const [lbl,c]=POS[x.pos]||[x.pos||"—","var(--t3)"];
-              return (
-                <div key={t} style={{display:"flex",gap:10,padding:"6px 0",borderBottom:"1px solid var(--b1)",fontSize:11,fontFamily:"var(--mono)",alignItems:"baseline"}}>
-                  <span style={{width:74,fontFamily:"inherit",fontWeight:700,color:"var(--t1)"}}>{TF_NAME[t]}</span>
-                  <span style={{flex:1,color:c}}>{lbl}</span>
-                  <span style={{color:"var(--t3)"}}>top {x.tz} · bottom {x.bz}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+        <RPlanBlock db={db} sym={sym}/>
+        <RHealthBlock db={db} sym={sym}/>
+        <RPeersBlock list={list} sym={sym} sector={sector} industry={industry}/>
+      </RCol>
+    </ReportShell>
   );
 }
 
@@ -3542,66 +3846,68 @@ function StockReportHost({ db, presence=null, nFiles=1, children }) {
   return (
     <StockOpenCtx.Provider value={setSym}>
       {children}
-      {opened && db && (bySym[sym] ? <StockDeepDive s={bySym[sym]} onClose={close}/> : <NoSignalReport sym={sym} db={db} onClose={close}/>)}
+      {opened && db && (bySym[sym] ? <StockDeepDive s={bySym[sym]} db={db} list={Object.values(bySym)} onClose={close}/> : <NoSignalReport sym={sym} db={db} list={Object.values(bySym)} onClose={close}/>)}
     </StockOpenCtx.Provider>
   );
 }
 
 // ─── FOCUS COMMAND TAB ────────────────────────────────────────────────────────
-function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSetups=null, gDir="ALL", setupExtra=null }) {
+function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSetups=null, gDir="ALL", sections=null, alpha=null, scope=null }) {
   const model = useMemo(()=>buildFocusModel(db, presence, nFiles), [db, presence, nFiles]);
   const dirF = gDir;
-  const [secF, setSecF] = useState(null);
   const fnoOnly = false;   // F&O filter lives in the side nav (applied to the data)
   const [openSym, setOpenSym] = useState(null);
   const [strict, setStrict] = useState(true);
   const [cellSel, setCellSel] = useState(null);
   const [indOpen, setIndOpen] = useState(null);
-  const open = sym => setOpenSym(sym);
+  // one report at a time: use the page's shared opener when there is one, own popup only when standalone
+  const ctxOpen = React.useContext(StockOpenCtx);
+  const open = sym => ctxOpen ? ctxOpen(sym) : setOpenSym(sym);
   const bySym = useMemo(()=>{ const m={}; model.list.forEach(s=>{m[s.symbol]=s;}); return m; },[model]);
 
   const base = useMemo(()=>model.list.filter(s=>(dirF==="ALL"||s.dir===dirF) && (!fnoOnly||s.isFNO)),[model,dirF,fnoOnly]);
-  const filtered = useMemo(()=>base.filter(s=>!secF||s.sector===secF),[base,secF]);
+  const filtered = base;   // sector / industry picks are applied to `db` by ControlTowerCombined
   const directional = filtered.filter(s=>s.dir!=="MIXED");
 
-  const secSorted = [...db.sectorAnalysis].filter(s=>s.Sector!=="Unknown"&&s.Sector!=="Indices").sort((a,b)=>b.Strength_Score-a.Strength_Score);
-
   // ── Confluence grid
-  const HTF_ROWS = ["Y","Q","M"], LTF_COLS = ["W","D"];
+  // every pair: row = the higher timeframe that triggered, column = a lower timeframe (Y×Q … W×D)
+  const CF_TFS = ["Y","Q","M","W","D"], HTF_ROWS = ["Y","Q","M","W"], LTF_COLS = ["Q","M","W","D"];
+  const higher = (h,l) => CF_TFS.indexOf(h) < CF_TFS.indexOf(l);
   const confMatch = (s,h,l) => s.ladder[h].trig>0 && s.ladder[h].state===s.sgn && (strict ? (s.ladder[l].trig>0 && s.ladder[l].state===s.sgn) : s.ladder[l].state===s.sgn);
   const confDirs = dirF==="ALL" ? ["LONG","SHORT"] : [dirF];
   const confList = directional.filter(s=>{
     if (cellSel) return s.dir===cellSel.dir && confMatch(s,cellSel.h,cellSel.l);
-    return HTF_ROWS.some(h=>LTF_COLS.some(l=>confMatch(s,h,l)));
+    return HTF_ROWS.some(h=>LTF_COLS.some(l=>higher(h,l) && confMatch(s,h,l)));
   });
 
-  // ── Sector × TF heat
-  const secHeat = useMemo(()=>{
-    const m={};
-    base.forEach(s=>{
-      if(!m[s.sector]) m[s.sector]={sector:s.sector,tf:{D:0,W:0,M:0,Q:0,Y:0},focus:0,n:0,focusSyms:[]};
-      FOCUS_TFS.forEach(t=>{ m[s.sector].tf[t]+=s.ladder[t].net; });
-      m[s.sector].n++; if(s.score>=42&&s.dir!=="MIXED") { m[s.sector].focus++; m[s.sector].focusSyms.push(s.symbol); }
+  // ── NR breakout overlap: every distinct NR break (timeframe × NR length) per stock, by direction
+  const [nrDir, setNrDir] = useState("LONG");
+  const [nrMin, setNrMin] = useState(2);
+  const [nrCell, setNrCell] = useState(null);
+  const nrInfo = useMemo(()=>{
+    const out = [];
+    filtered.forEach(s=>{
+      ["LONG","SHORT"].forEach(dd=>{
+        const ev = dd==="LONG" ? "BREAKOUT" : "BREAKDOWN", seen = {};
+        (s.signals||[]).forEach(g=>{
+          if (g.event!==ev) return;
+          const m = String(g.name||"").match(/_(\d+)[DWMQY]_/i), len = m ? +m[1] : null;
+          seen[`${g.tf}|${len ?? g.name}`] = { tf:g.tf, len };
+        });
+        const breaks = Object.values(seen).sort((a,b)=>CF_TFS.indexOf(a.tf)-CF_TFS.indexOf(b.tf) || (a.len||0)-(b.len||0));
+        if (breaks.length) {
+          const byTf = {}; breaks.forEach(b=>{ byTf[b.tf]=(byTf[b.tf]||0)+1; });
+          out.push({ s, dir:dd, breaks, byTf, n:breaks.length, nTf:Object.keys(byTf).length });
+        }
+      });
     });
-    return Object.values(m).map(r=>({...r,strength:(model.secMap[r.sector]||{}).Strength_Score||0})).sort((a,b)=>b.strength-a.strength);
-  },[base,model]);
-  const heatMax = Math.max(1,...secHeat.flatMap(r=>FOCUS_TFS.map(t=>Math.abs(r.tf[t]/Math.max(r.n,1)))));
-
-  // ── Special lists
-  const coiled = directional.filter(s=>(s.setupTfs.length>=2||(s.mtnr&&s.setupTfs.length>=1))&&s.trigTfs.length===0)
-    .sort((a,b)=>(b.setupTfs.reduce((x,t)=>x+TF_WEIGHT[t],0)+(b.mtnr?3:0))-(a.setupTfs.reduce((x,t)=>x+TF_WEIGHT[t],0)+(a.mtnr?3:0))).slice(0,12);
-
-  // ── Industry hotspots
-  const industries = useMemo(()=>{
-    const m={};
-    directional.filter(s=>s.score>=35).forEach(s=>{
-      const k=s.industry||"Unknown";
-      if(!m[k]) m[k]={ind:k,sector:s.sector,long:[],short:[]};
-      (s.dir==="LONG"?m[k].long:m[k].short).push(s);
-    });
-    return Object.values(m).sort((a,b)=>(b.long.length+b.short.length)-(a.long.length+a.short.length)).slice(0,12);
-  },[directional]);
-  const indMax = Math.max(1,...industries.map(i=>Math.max(i.long.length,i.short.length)));
+    return out;
+  },[filtered]);
+  const nrSide = nrInfo.filter(r=>r.dir===nrDir && r.n>=nrMin);
+  // diagonal (t,t) = 2+ different NR lengths broke on the same timeframe; other cells = NR breaks on both timeframes
+  const nrPair = (r,h,l) => h===l ? (r.byTf[h]||0)>=2 : !!(r.byTf[h] && r.byTf[l]);
+  const nrList = (nrCell ? nrSide.filter(r=>nrPair(r,nrCell.h,nrCell.l)) : nrSide)
+    .sort((a,b)=>b.n-a.n || b.nTf-a.nTf || b.s.score-a.s.score);
 
   const radar = directional.slice(0,12);
   const sel = openSym ? bySym[openSym] : null;
@@ -3620,23 +3926,13 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
 
   return (
     <div style={{padding:"18px 22px"}}>
-      {/* Header + filters */}
-      <div style={{display:"flex",alignItems:"flex-end",gap:12,flexWrap:"wrap",marginBottom:14}}>
-        <div style={{flex:1,minWidth:260}}>
-          <div style={{fontSize:embedded?18:22,fontWeight:700,color:"var(--t1)"}}>🔭 Focus Command{embedded&&nFiles>1?<span style={{fontSize:12,color:"var(--t3)",fontWeight:500}}> · combined view of {nFiles} files</span>:null}</div>
-          <div style={{fontSize:12.5,color:"var(--t2)",marginTop:2}}>Where to look first — every stock scored on timeframe confluence, fresh triggers, intensity and sector tailwind. Click any symbol for a full explanation.</div>
-        </div>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-          <select value={secF||""} onChange={e=>setSecF(e.target.value||null)} style={{background:"var(--s2)",border:`1px solid ${secF?sectorColor(secF):"var(--b2)"}`,color:secF?sectorColor(secF):"var(--t2)",borderRadius:6,fontSize:11.5,padding:"5px 8px"}}>
-            <option value="">All sectors</option>
-            {secSorted.map(s=><option key={s.Sector} value={s.Sector}>{s.Sector}</option>)}
-          </select>
-        </div>
-      </div>
+      {scope}
+
+      {alpha && <><Anchor id="ct-alpha"/><div style={{marginBottom:12}}>{alpha}</div></>}
 
       {/* Priority radar */}
       <Anchor id="ct-radar"/>
-      <FocusCard icon="🚨" title="Priority Radar — your first charts to open" sub={`Top ${radar.length} by Focus Score${secF?` in ${secF}`:""}. Coloured squares = D·W·M·Q·Y (bold border = fresh trigger).`}
+      <FocusCard icon="🚨" title="Priority Radar — your first charts to open" sub={`Top ${radar.length} by Focus Score. Coloured squares = D·W·M·Q·Y (bold border = fresh trigger).`}
         right={<ListCopy symbols={radar.map(s=>s.symbol)}/>}
         learn={<>The <strong>Focus Score (0–100)</strong> adds up: how many timeframes agree (weighted — a Yearly vote counts 5×, Daily 1×), whether fresh triggers fired on higher and lower timeframes, how many signals stack up, whether the sector moves the same way, and bonuses from your conviction / NR-coil / virgin scanners. Opposing timeframes subtract points. Read each card left-to-right: <em>score → direction → ladder → why</em>.</>}
         style={{marginBottom:12}}>
@@ -3672,7 +3968,7 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
       {/* Confluence grid */}
       <Anchor id="ct-confluence"/>
       <div style={{marginBottom:12}}>
-        <FocusCard icon="⚡" title="Higher-TF × Lower-TF Confluence" sub="Example: a Quarterly breakout that ALSO triggered on the Daily. Click a cell to list those stocks."
+        <FocusCard icon="⚡" title="Higher-TF × Lower-TF Confluence" sub="Every pair of timeframes — row = the higher timeframe that triggered, column = the lower one that also fired (e.g. Yearly × Monthly). Click a cell to list those stocks."
           right={<div onClick={()=>{setStrict(v=>!v);setCellSel(null);}} style={pill(strict,"var(--acc)")}>{strict?"Strict: both triggered":"Relaxed: LTF aligned"}</div>}
           learn={<>The <strong>higher timeframe</strong> (Monthly/Quarterly/Yearly) tells you <em>what</em> to trade — the big level just broke. The <strong>lower timeframe</strong> (Weekly/Daily) tells you <em>when</em> — momentum has arrived right now. When both fire together you get the best of both: a meaningful level and a timely entry. <strong>Strict</strong> mode needs a fresh trigger on both; <strong>Relaxed</strong> only needs the lower TF to lean the same way.</>}>
           <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:10}}>
@@ -3685,6 +3981,7 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
                     <tr key={h}>
                       <td style={{fontSize:9.5,color:"var(--t3)",fontWeight:600,paddingRight:4,whiteSpace:"nowrap"}}>{TF_NAME[h]} trigger</td>
                       {LTF_COLS.map(l=>{
+                        if (!higher(h,l)) return <td key={l} style={{textAlign:"center",color:"var(--b2)",fontSize:11}}>·</td>;
                         const n = directional.filter(s=>s.dir===dd&&confMatch(s,h,l)).length;
                         const act = cellSel&&cellSel.dir===dd&&cellSel.h===h&&cellSel.l===l;
                         return (
@@ -3712,129 +4009,74 @@ function FocusCommandTab({ db, presence=null, nFiles=1, embedded=false, afterSet
 
       </div>
 
-      {/* Alignment matrix + Sector×TF */}
-      <Anchor id="ct-matrix"/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12,alignItems:"stretch"}}>
-        <FocusCard icon="🪜" right={<ListCopy symbols={directional.slice(0,25).map(s=>s.symbol)}/>} title="Timeframe Alignment Matrix" sub="Top 25 names. A full row of one colour = the whole ladder agrees."
-          learn={<>Read each row from <strong>Y</strong> (right, the ocean) down to <strong>D</strong> (left, the waves). Trends that agree from Yearly down to Daily are the ones institutions are riding. A bold-bordered cell means a <strong>fresh trigger</strong> fired on that timeframe; a faint cell means the stock is simply holding above/below a level. The number is how many signals that timeframe contributes.</>}>
-          <div style={{maxHeight:420,overflowY:"auto"}} className="tower-scroll">
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-              <thead><tr><th style={TH}>Symbol</th>{FOCUS_TFS.map(t=><th key={t} style={{...TH,textAlign:"center"}}>{t}</th>)}<th style={TH}>Aligned</th><th style={TH}>Score</th></tr></thead>
-              <tbody>
-                {directional.slice(0,25).map(s=>(
-                  <tr key={s.symbol} className="sec-row" onClick={()=>open(s.symbol)} style={{borderBottom:"1px solid var(--b1)",cursor:"pointer"}}>
-                    <td style={{padding:"5px 8px"}}><FocusSym sym={s.symbol} onOpen={open}/><div style={{fontSize:8.5,color:sectorColor(s.sector)}}>{s.sector}</div></td>
-                    {FOCUS_TFS.map(t=>{
-                      const l=s.ladder[t], c=l.state>0?"var(--long)":l.state<0?"var(--short)":"transparent", trig=l.trig>0&&l.state===s.sgn;
-                      return (
-                        <td key={t} style={{padding:2}}>
-                          <div style={{position:"relative",height:26,borderRadius:4,border:`1.5px solid ${trig?c:"var(--b1)"}`,background:"var(--s2)",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
-                            <div style={{position:"absolute",inset:0,background:c,opacity:l.state===0?0:Math.min(.6,.18+Math.abs(l.net)*.18)}}/>
-                            <span style={{position:"relative",fontFamily:"var(--mono)",fontSize:10,fontWeight:700,color:l.count?"var(--t1)":"var(--t3)"}}>{l.count||"·"}</span>
-                          </div>
-                        </td>
-                      );
-                    })}
-                    <td style={{padding:"5px 8px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{s.alignedTfs.length}/5</td>
-                    <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:tierOf(s.score).color}}>{Math.round(s.score)}</td>
-                  </tr>
-                ))}
-              </tbody>
+      {/* NR breakout overlap */}
+      <Anchor id="ct-nroverlap"/>
+      <div style={{marginBottom:12}}>
+        <FocusCard icon="◆" title="NR Breakout Overlap — every timeframe pair"
+          sub="Stocks whose Narrow Range broke on several timeframes, or several NR lengths on the same timeframe. Every distinct NR break counts (e.g. Monthly NR4 + Monthly NR7 + Daily NR4 = 3)."
+          right={<>
+            {(dirF==="ALL"||dirF==="LONG") && <div onClick={()=>{setNrDir("LONG");setNrCell(null);}} style={pill(nrDir==="LONG","var(--long)")}>▲ NR breakouts · {nrInfo.filter(r=>r.dir==="LONG"&&r.n>=nrMin).length}</div>}
+            {(dirF==="ALL"||dirF==="SHORT") && <div onClick={()=>{setNrDir("SHORT");setNrCell(null);}} style={pill(nrDir==="SHORT","var(--short)")}>▼ NR breakdowns · {nrInfo.filter(r=>r.dir==="SHORT"&&r.n>=nrMin).length}</div>}
+            <span style={{width:1,height:18,background:"var(--b2)"}}/>
+            <span style={{fontSize:10,color:"var(--t3)",fontWeight:700,textTransform:"uppercase",letterSpacing:".6px"}}>Min NR breaks</span>
+            {[1,2,3,4].map(k=><div key={k} onClick={()=>{setNrMin(k);setNrCell(null);}} style={pill(nrMin===k,"var(--acc)")}>{k}+</div>)}
+          </>}
+          learn={<>A Narrow Range is a coil; its <strong>breakout</strong> is the release. When the coil releases on <strong>several timeframes at once</strong> — or several NR lengths on the same timeframe (NR4, NR5, NR7…) — the move is backed by compression on every horizon. The <strong>diagonal</strong> cell of a timeframe counts stocks with 2+ different NR lengths breaking on that timeframe; the other cells count stocks breaking on <strong>both</strong> timeframes. <strong>Min NR breaks</strong> counts every distinct break (timeframe × NR length).</>}>
+          {(()=>{ const nc = nrDir==="LONG" ? "var(--long)" : "var(--short)"; return (
+          <div style={{display:"grid",gridTemplateColumns:"minmax(320px,.9fr) minmax(0,1.6fr)",gap:14,alignItems:"start"}}>
+            <table style={{borderCollapse:"separate",borderSpacing:3,width:"100%"}}>
+              <thead><tr><th/>{CF_TFS.map(l=><th key={l} style={{fontSize:9.5,color:"var(--t3)",fontWeight:600}}>{TF_NAME[l]}</th>)}</tr></thead>
+              <tbody>{CF_TFS.map(h=>(
+                <tr key={h}>
+                  <td style={{fontSize:9.5,color:"var(--t3)",fontWeight:600,paddingRight:4,whiteSpace:"nowrap"}}>{TF_NAME[h]}</td>
+                  {CF_TFS.map(l=>{
+                    if (CF_TFS.indexOf(l) < CF_TFS.indexOf(h)) return <td key={l} style={{textAlign:"center",color:"var(--b2)",fontSize:11}}>·</td>;
+                    const n = nrSide.filter(r=>nrPair(r,h,l)).length;
+                    const act = nrCell && nrCell.h===h && nrCell.l===l;
+                    return (
+                      <td key={l} onClick={()=>setNrCell(act?null:{h,l})} title={h===l ? `${TF_NAME[h]}: 2+ different NR lengths broke` : `NR broke on both ${TF_NAME[h]} and ${TF_NAME[l]}`}
+                        style={{cursor:"pointer",textAlign:"center",borderRadius:6,padding:"9px 4px",position:"relative",border:`1.5px solid ${act?nc:h===l?"var(--b2)":"var(--b1)"}`,background:"var(--s2)",borderStyle:h===l?"dashed":"solid"}}>
+                        <div style={{position:"absolute",inset:0,borderRadius:5,background:nc,opacity:n?Math.min(.55,.12+n/25):0}}/>
+                        <span style={{position:"relative",fontFamily:"var(--mono)",fontSize:15,fontWeight:700,color:n?"var(--t1)":"var(--t3)"}}>{n}</span>
+                      </td>);
+                  })}
+                </tr>
+              ))}</tbody>
             </table>
-          </div>
-        </FocusCard>
-
-        <FocusCard icon="🏭" title="Sector × Timeframe Heat" sub="Where each sector's move is happening. Click a row to focus the whole tab on that sector."
-          right={<>{secF && <button onClick={()=>setSecF(null)} style={{fontSize:10.5,padding:"3px 9px",borderRadius:5,border:`1px solid ${sectorColor(secF)}`,color:sectorColor(secF),background:"var(--s2)"}}>✕ {secF}</button>}<ListCopy symbols={secHeat.filter(r=>!secF||r.sector===secF).flatMap(r=>r.focusSyms)}/></>}
-          learn={<>Each cell is the average bullish-minus-bearish evidence of that sector's stocks on that timeframe. A sector that is <strong>red on Q/Y but green on D/W</strong> is bouncing inside a downtrend — rallies there are suspect. <strong>Green on M/Q/Y</strong> means real accumulation. The <em>Focus</em> column counts names worth your time (score ≥ 42).</>}>
-          <div style={{maxHeight:420,overflowY:"auto"}} className="tower-scroll">
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-              <thead><tr><th style={TH}>Sector</th><th style={TH}>Str.</th>{FOCUS_TFS.map(t=><th key={t} style={{...TH,textAlign:"center"}}>{t}</th>)}<th style={TH}>Focus</th><th style={TH}>Copy</th></tr></thead>
-              <tbody>
-                {secHeat.map(r=>{
-                  const act = secF===r.sector;
-                  return (
-                    <tr key={r.sector} className="sec-row" onClick={()=>setSecF(act?null:r.sector)} style={{borderBottom:"1px solid var(--b1)",cursor:"pointer",background:act?"var(--adim)":"transparent"}}>
-                      <td style={{padding:"5px 8px",color:sectorColor(r.sector),fontWeight:700,whiteSpace:"nowrap",maxWidth:130,overflow:"hidden",textOverflow:"ellipsis"}}>{r.sector}</td>
-                      <td style={{padding:"5px 8px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{Math.round(r.strength)}</td>
-                      {FOCUS_TFS.map(t=>{
-                        const v=r.tf[t]/Math.max(r.n,1), c=v>0?"var(--long)":"var(--short)";
-                        return (
-                          <td key={t} style={{padding:2}}>
-                            <div title={`${r.sector} ${TF_NAME[t]}: ${v>0?"+":""}${v.toFixed(2)} per stock`} style={{position:"relative",height:22,borderRadius:3,background:"var(--s2)",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                              <div style={{position:"absolute",inset:0,background:c,opacity:Math.min(.75,Math.abs(v)/heatMax*.75)}}/>
-                              <span style={{position:"relative",fontSize:9,fontFamily:"var(--mono)",color:"var(--t1)"}}>{v>0?"+":""}{v.toFixed(1)}</span>
-                            </div>
-                          </td>
-                        );
-                      })}
-                      <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:r.focus?"var(--acc)":"var(--t3)"}}>{r.focus}</td>
-                      <td style={{padding:"3px 6px",whiteSpace:"nowrap"}}><ListCopy symbols={r.focusSyms} compact/></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </FocusCard>
-      </div>
-
-      {/* Special situations + industry hotspots */}
-      <Anchor id="ct-special"/>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:12,marginBottom:12,alignItems:"stretch"}}>
-        <FocusCard icon="🔥" right={<ListCopy symbols={industries.flatMap(g=>[...g.short,...g.long]).map(s=>s.symbol)}/>} title="Industry Hotspots" sub="Industries with the most focus-worthy names (score ≥ 35). Click to see the names."
-          learn={<>When several stocks from the <strong>same industry</strong> light up together, it's rarely coincidence — it's usually money rotating into or out of that theme. One stock breaking out is a trade; five from the same industry is a <strong>theme</strong>, and themes last longer. Left bars = short candidates, right bars = long candidates.</>}>
-          {industries.map(g=>{
-            const act = indOpen===g.ind;
-            return (
-              <div key={g.ind} style={{marginBottom:5}}>
-                <div onClick={()=>setIndOpen(act?null:g.ind)} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
-                  <div style={{flex:1,display:"flex",justifyContent:"flex-end",alignItems:"center",gap:4}}>
-                    {g.short.length>0&&<span style={{fontSize:9.5,fontFamily:"var(--mono)",color:"var(--short)"}}>{g.short.length}</span>}
-                    <div style={{height:12,width:`${g.short.length/indMax*100}%`,background:"var(--short)",borderRadius:"3px 0 0 3px",opacity:.8}}/>
-                  </div>
-                  <div title={`${g.ind} (${g.sector})`} style={{width:150,textAlign:"center",fontSize:10,color:act?"var(--acc)":"var(--t1)",fontWeight:act?700:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flexShrink:0}}>{g.ind}</div>
-                  <div style={{flex:1,display:"flex",alignItems:"center",gap:4}}>
-                    <div style={{height:12,width:`${g.long.length/indMax*100}%`,background:"var(--long)",borderRadius:"0 3px 3px 0",opacity:.8}}/>
-                    {g.long.length>0&&<span style={{fontSize:9.5,fontFamily:"var(--mono)",color:"var(--long)"}}>{g.long.length}</span>}
-                  </div>
-                </div>
-                {act && (
-                  <div style={{padding:"6px 0 4px"}}>
-                    <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",marginBottom:6,alignItems:"center"}}>
-                      <span style={{fontSize:9.5,color:"var(--t3)"}}>All</span><ListCopy symbols={[...g.short,...g.long].map(s=>s.symbol)}/>
-                      {g.long.length>0 && <><span style={{fontSize:9.5,color:"var(--long)"}}>▲</span><ListCopy symbols={g.long.map(s=>s.symbol)} compact/></>}
-                      {g.short.length>0 && <><span style={{fontSize:9.5,color:"var(--short)"}}>▼</span><ListCopy symbols={g.short.map(s=>s.symbol)} compact/></>}
-                    </div>
-                    <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
-                      {[...g.short,...g.long].map(s=>(
-                        <span key={s.symbol} className="sym-cell" style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:10,fontFamily:"var(--mono)",fontWeight:700,padding:"2px 5px 2px 7px",borderRadius:4,border:`1px solid ${dirColor(s.dir)}`,color:dirColor(s.dir)}}>
-                          <span onClick={()=>open(s.symbol)} style={{cursor:"pointer"}}>{s.symbol} {Math.round(s.score)}</span>
-                          <CopyBtn text={s.symbol}/>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
+            <div style={{minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
+                <div style={{fontSize:10.5,color:"var(--t2)"}}>{nrCell ? (nrCell.h===nrCell.l ? `${TF_NAME[nrCell.h]} · 2+ NR lengths` : `${TF_NAME[nrCell.h]} + ${TF_NAME[nrCell.l]}`) : `All with ${nrMin}+ NR ${nrDir==="LONG"?"breakouts":"breakdowns"}`} ({nrList.length})
+                  {nrCell && <span onClick={()=>setNrCell(null)} style={{marginLeft:8,color:"var(--acc)",cursor:"pointer"}}>✕ clear</span>}</div>
+                <ListCopy symbols={nrList.map(r=>r.s.symbol)}/>
               </div>
-            );
-          })}
-          {!industries.length && <div style={{color:"var(--t3)",fontSize:11}}>No industry clusters for these filters.</div>}
-        </FocusCard>
-        <FocusCard icon="🎯" title="Near Breakout — set alerts" sub="Near a zone or NR edge on 2+ timeframes, not broken yet."
-          right={<ListCopy symbols={coiled.map(s=>s.symbol)}/>}
-          learn={<>A narrow range or price hugging a level on several timeframes at once is energy being stored. These aren't trades <em>yet</em> — they're <strong>alerts</strong>. Put an alert at the range high (for ▲) or low (for ▼). When it fires, the stock usually jumps straight into the Priority Radar.</>}>
-          {coiled.map(s=><MiniRow key={s.symbol} s={s} extra={`${s.sgn>0?"pressing top":"sitting on floor"} · ${s.setupTfs.join("+")}${s.mtnr?` · ${s.mtnr.Timeframe_Count}-TF NR`:""}`}/>)}
-          {!coiled.length && <div style={{color:"var(--t3)",fontSize:11}}>None right now.</div>}
+              <div style={{maxHeight:300,overflowY:"auto"}} className="tower-scroll">
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                  <thead><tr>{["Symbol","Breaks","TFs","NR breaks (timeframe · length)","Score"].map(hd=><th key={hd} style={TH}>{hd}</th>)}</tr></thead>
+                  <tbody>
+                    {nrList.slice(0,80).map(r=>(
+                      <tr key={r.s.symbol} className="sec-row" style={{borderBottom:"1px solid var(--b1)"}}>
+                        <td style={{padding:"5px 8px",whiteSpace:"nowrap"}}><FocusSym sym={r.s.symbol} onOpen={open}/><div style={{fontSize:8.5,color:sectorColor(r.s.sector)}}>{r.s.sector}</div></td>
+                        <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:nc}}>{r.n}</td>
+                        <td style={{padding:"5px 8px",fontFamily:"var(--mono)",color:"var(--t2)"}}>{r.nTf}</td>
+                        <td style={{padding:"5px 8px"}}><div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{r.breaks.map(b=><span key={`${b.tf}${b.len}`} style={{fontSize:9.5,padding:"1px 6px",borderRadius:3,border:`1px solid ${nc}`,color:nc,fontFamily:"var(--mono)",whiteSpace:"nowrap"}}>{b.tf} NR{b.len ?? ""}</span>)}</div></td>
+                        <td style={{padding:"5px 8px",fontFamily:"var(--mono)",fontWeight:700,color:tierOf(r.s.score).color}}>{Math.round(r.s.score)}</td>
+                      </tr>
+                    ))}
+                    {!nrList.length && <tr><td colSpan={5} style={{padding:14,color:"var(--t3)",textAlign:"center"}}>No stock has {nrMin}+ NR {nrDir==="LONG"?"breakouts":"breakdowns"} for this selection.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>); })()}
         </FocusCard>
       </div>
 
       <Anchor id="ct-setups"/>
-      <SetupScanner list={filtered} open={open} extra={setupExtra} zoneLevels={db.zoneLevels} lockDir={gDir==="ALL"?null:gDir}/>
+      <SetupScanner list={filtered} open={open} sections={sections} zoneLevels={db.zoneLevels} lockDir={gDir==="ALL"?null:gDir}/>
 
       {afterSetups && <div style={{margin:"0 -22px"}}>{afterSetups}</div>}
 
-      <StockDeepDive s={sel} onClose={()=>setOpenSym(null)}/>
+      <StockDeepDive s={sel} db={db} list={model.list} onClose={()=>setOpenSym(null)}/>
     </div>
   );
 }
@@ -4020,16 +4262,15 @@ function HealthListPanel({ level, hIdx, onClose }) {
 // ─── CONTROL TOWER SIDE NAV — filters + jump links ───────────────────────────
 const CT_NAV = [
   { group:"Market", items:[
-    ["ct-sector","🏭","Sector & industry strength"], ["ct-alpha","💎","Alpha rankings"] ]},
+    ["ct-sector","🏭","Sector & industry strength"], ["ct-matrix","🌡","Sector & industry × TF heat"], ["ct-alpha","💎","Alpha rankings"] ]},
   { group:"Focus Command", items:[
-    ["ct-radar","🚨","Priority radar"], ["ct-confluence","⚡","HTF × LTF confluence"], ["ct-matrix","🪜","Alignment & sector heat"],
-    ["ct-special","🎯","Hotspots · near breakout"] ]},
+    ["ct-radar","🚨","Priority radar"], ["ct-confluence","⚡","HTF × LTF confluence"], ["ct-nroverlap","◆","NR breakout overlap"] ]},
   { group:"Setups", items:[
-    ["ct-intraday","🚀","Zone breakout analyser"], ["ct-stacked","🏆","Stacked setups"], ["ct-setupcards","🎯","Setup lists"], ["ct-trap","🪤","NR trap"], ["ct-retest","🔁","Zone retest"], ["ct-trend","📈","Trend pullback"] ]},
-  { group:"Technical Quant", items:[
-    ["ct-quant","🧪","Algo builder"] ]},
+    ["ct-intraday","🚀","Zone breakout analyser"], ["ct-stacked","🏆","Stacked setups"], ["ct-setupcards","🎯","Setup lists"], ["ct-retest","🔁","Zone retest"], ["ct-trend","📈","Trend pullback"], ["ct-trap","🪤","NR trap"] ]},
   { group:"Trade ideas", items:[
-    ["ct-opps","🔮","Opportunities"], ["ct-returns","💰","Return expectations"], ["ct-watch","📌","Watchlist builder"] ]},
+    ["ct-opps","🔮","Opportunities"], ["ct-returns","💰","Return expectations"] ]},
+  { group:"More", items:[
+    ["ct-quant","🧪","Technical Quant algos"], ["ct-watch","📌","Watchlist builder"] ]},
 ];
 const CAP_OPTS = [["all","All stocks"],["n500","Nifty 500"],["large","Large 100"],["mid","Mid 150"],["small","Small 250"]];
 
@@ -4303,6 +4544,37 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
     const ex = new Set(model.list.filter(s=>s.dir!==f.dir).map(s=>s.symbol));
     return filterDB(db, ex);
   }, [db, model, f.dir]);
+  // Sector & Industry Analysis selection (bubbles + heat maps) → filters every widget below it.
+  // A picked industry narrows its own sector; other picked sectors stay whole.
+  const [pickSecs, setPickSecsRaw] = useState([]);
+  const [pickInds, setPickInds] = useState([]);
+  const setPickSecs = next => { setPickSecsRaw(next); setPickInds(p => next.length ? p.filter(k => next.includes(k.split("|")[0])) : p); };
+  const picks = { pickSecs, pickInds, setPickSecs, setPickInds,
+    toggleSec: sec => setPickSecs(pickSecs.includes(sec) ? pickSecs.filter(x=>x!==sec) : [...pickSecs, sec]),
+    toggleInd: key => setPickInds(p => p.includes(key) ? p.filter(k=>k!==key) : [...p, key]),
+    clearAll: () => { setPickSecsRaw([]); setPickInds([]); } };
+  const pickEx = useMemo(()=>{
+    const ex = new Set();
+    if (!pickSecs.length && !pickInds.length) return ex;
+    const indSecs = new Set(pickInds.map(k=>k.split("|")[0]));
+    Object.entries(attrs).forEach(([sym,x]) => {
+      const ok = pickInds.includes(`${x.sector}|${x.industry}`) || (pickSecs.includes(x.sector) && !indSecs.has(x.sector));
+      if (!ok) ex.add(sym);
+    });
+    return ex;
+  }, [attrs, pickSecs, pickInds]);
+  const dbP = useMemo(()=>filterDB(db, pickEx), [db, pickEx]);
+  const dbDirP = useMemo(()=>filterDB(dbDir, pickEx), [dbDir, pickEx]);
+  const modelP = useMemo(()=>pickEx.size ? buildFocusModel(dbP, merged.presence, merged.nFiles) : model, [dbP, pickEx, model, merged]);
+  const pickN = pickEx.size ? Object.keys(attrs).length - [...pickEx].filter(x=>attrs[x]).length : 0;
+  const scopeBanner = (pickSecs.length || pickInds.length) ? (
+    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",padding:"8px 12px",marginBottom:12,borderRadius:10,border:"1px solid var(--accborder)",background:"var(--adim)",fontSize:11.5,color:"var(--t2)"}}>
+      <span>🎯 Showing only</span>
+      {pickSecs.filter(x=>!pickInds.some(k=>k.startsWith(x+"|"))).map(x=><strong key={x} style={{color:sectorColor(x)}}>{x}</strong>)}
+      {pickInds.map(k=><strong key={k} style={{color:"var(--acc)"}}>{k.split("|")[1]}</strong>)}
+      <span style={{color:"var(--t3)"}}>· {pickN} stocks · every widget below follows this selection</span>
+      <span onClick={picks.clearAll} style={{marginLeft:"auto",color:"var(--acc)",cursor:"pointer",fontWeight:600}}>✕ Show all</span>
+    </div>) : null;
   const lock = f.dir==="ALL" ? null : f.dir;
   const lockLS = lock ? (lock==="LONG"?"L":"S") : null;
   const [openSym, setOpenSym] = useState(null);
@@ -4389,28 +4661,27 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
           </div>
         </div>
 
-        <ControlTower db={dbDir} techOn={techOn}/>
-        <Divider/>
-        <FocusCommandTab db={db} presence={merged.presence} nFiles={merged.nFiles} embedded gDir={f.dir}
-          setupExtra={<>
-            <NRTrapSection db={db} open={setOpenSym} lockDir={lock} embedded/>
-            <ZoneRetestSection db={db} lockDir={lock}/>
-            <TrendPullbackSection db={db} lockDir={lock}/>
-          </>}
+        <ControlTower db={dbDir} techOn={techOn} picks={picks}
+          heat={<SectorIndustryHeat db={db} model={model} gDir={f.dir} picks={picks}/>}/>
+        <FocusCommandTab db={dbP} presence={merged.presence} nFiles={merged.nFiles} embedded gDir={f.dir} scope={scopeBanner}
+          alpha={<AlphaIdeasPanel db={dbDirP}/>}
+          sections={{ trap:<NRTrapSection db={dbP} open={setOpenSym} lockDir={lock} embedded/>,
+                      retest:<ZoneRetestSection db={dbP} lockDir={lock}/>,
+                      trend:<TrendPullbackSection db={dbP} lockDir={lock}/> }}
           afterSetups={<>
-            {techOn && <TechQuantSection db={db} tech={tech}/>}
             <Anchor id="ct-opps"/>
-            <OpportunitiesSection db={db} model={model} open={setOpenSym} lockDir={lockLS}/>
+            <OpportunitiesSection db={dbP} model={modelP} open={setOpenSym} lockDir={lockLS}/>
             <Anchor id="ct-returns"/>
-            <ReturnExpectationsSection db={db} open={setOpenSym} lockDir={lock}/>
+            <ReturnExpectationsSection db={dbP} open={setOpenSym} lockDir={lock}/>
+            {techOn && <TechQuantSection db={dbP} tech={tech}/>}
           </>}/>
         <div style={{padding:"0 22px 24px"}}>
           <Anchor id="ct-watch"/>
-          <WatchlistBuilder db={dbDir}/>
+          <WatchlistBuilder db={dbDirP}/>
         </div>
         {openSym && (modelBySym[openSym]
-          ? <StockDeepDive s={modelBySym[openSym]} onClose={()=>setOpenSym(null)}/>
-          : <NoSignalReport sym={openSym} db={db} onClose={()=>setOpenSym(null)}/>)}
+          ? <StockDeepDive s={modelBySym[openSym]} db={db} list={model.list} onClose={()=>setOpenSym(null)}/>
+          : <NoSignalReport sym={openSym} db={db} list={model.list} onClose={()=>setOpenSym(null)}/>)}
       </div>
     </div>
     </TechCtx.Provider>
@@ -4799,10 +5070,6 @@ const SETUP_DEFS = [
     sub:"Price is right at stacked zones of two timeframes — very strong support/resistance.",
     learn:<>Price is <strong>at</strong> the overlap band but hasn't broken it. ▼ rows are just <strong>below stacked resistance</strong>: a rejection here is a short, but a close above turns it into a very strong <strong>Overlap Zone Break</strong> — set an alert. ▲ rows are sitting <strong>on stacked support</strong>: bounce candidates, and a close below would be a strong breakdown.</>,
     match:(nl)=>/near_and_(abv|blw)_overlap/.test(nl), detail:(nl)=>overlapPair(nl)+(nl.includes("abv")?" support":" resistance") },
-  { id:"bearTrap", icon:"🪤", title:"Failed Breakdown (Back to NR)", short:"Bear Trap", rank:1.5,
-    sub:"Broke below the NR range, then came back inside — trapped sellers.",
-    learn:<>Price broke down, sellers piled in, then price came back inside the range. Those sellers are now trapped and their stops sit above — fuel for a move up. Stronger on higher timeframes.</>,
-    match:(nl,g)=>g.event==="RECLAIM", detail:(nl,g)=>`${g.tf} NR` },
   { id:"nrCoil", icon:"🎯", title:"Near NR Breakout — set alerts", short:"Near NR Break", rank:1,
     sub:"Price is close to the mother candle High (▲) or Low (▼) — the breakout has not happened yet.",
     learn:<>These are <strong>alerts, not trades</strong>. Price is inside the mother candle and within 5% of its High (▲) or Low (▼). Set an alert at that edge; when it closes beyond, the stock moves to the NR Breakout · Breakdown list.</>,
@@ -4909,7 +5176,12 @@ function SetupCard({ def, rows, open }) {
   );
 }
 
-function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null }) {
+// Setup cards in pairs, row by row (owner's order, 2026-10-10). "#…" = a full section shown as a half-width card.
+const SCANNER_PAIRS = [["overlapBreak","overlapRetrace"],["zoneCross","between"],["flag","virgin"],["#retest","#trend"],
+                       ["trendPullback","overlapWall"],["nrBreak","nrCoil"],["#mtnr","#trap"]];
+const SCANNER_SECTION = { "#retest":["ct-retest","🔁","Zone Retest"], "#trend":["ct-trend","📈","Trend Pullback (zone band)"],
+                          "#mtnr":["setup-mtnr","📐","Multi-TF NR"], "#trap":["ct-trap","🪤","NR Trap"] };
+function SetupScanner({ list, open, sections=null, zoneLevels=null, lockDir=null }) {
   const [minStack, setMinStack] = useState(3);
   const [stackAll, setStackAll] = useState(false);
   const [stackDir, setStackDir] = useLockable(lockDir, "ALL");
@@ -4944,22 +5216,30 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
 
       {/* Navigator */}
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
-        {extra && <div className="version-chip" onClick={()=>{const el=document.getElementById("ct-trap"); if(el) el.scrollIntoView({behavior:"smooth",block:"start"});}} title="Failed NR breakout / breakdown, price back at the other mother edge" style={{cursor:"pointer",display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:8,background:"var(--s1)",border:"1px solid var(--accborder)"}}><span>🪤</span><span style={{fontSize:11,fontWeight:600,color:"var(--t1)"}}>NR Trap</span></div>}
-        {(()=>{ const n = list.filter(s=>s.mtnr).length; return (
-          <div className="version-chip" onClick={()=>jump("mtnr")} title="Narrow Range on several timeframes at once" style={{cursor:"pointer",display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:8,background:"var(--s1)",border:"1px solid var(--b1)",opacity:n?1:.5}}>
-            <span>📐</span><span style={{fontSize:11,fontWeight:600,color:"var(--t1)"}}>Multi-TF NR</span><span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--acc)"}}>{n}</span>
-          </div>); })()}
-        {SETUP_DEFS.map(d=>{
-          const rows = bySetup[d.id], nL = rows.filter(r=>r.e.dir>0).length, nS = rows.length-nL;
-          return (
-            <div key={d.id} className="version-chip" onClick={()=>jump(d.id)} title={d.sub} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:8,background:"var(--s1)",border:"1px solid var(--b1)",opacity:rows.length?1:.5}}>
-              <span>{d.icon}</span>
-              <span style={{fontSize:11,fontWeight:600,color:"var(--t1)"}}>{d.short}</span>
-              <span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--long)"}}>▲{nL}</span>
-              <span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--short)"}}>▼{nS}</span>
-            </div>
-          );
-        })}
+        {(()=>{
+          // chips follow the page: analyser → stacked → the setup pairs, row by row
+          const go = id => { const el=document.getElementById(id); if(el) el.scrollIntoView({behavior:"smooth",block:"start"}); };
+          const chip = (key, icon, label, onClick, title, counts=null, dim=false, accent=false) => (
+            <div key={key} className="version-chip" onClick={onClick} title={title} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:8,background:"var(--s1)",border:`1px solid ${accent?"var(--accborder)":"var(--b1)"}`,opacity:dim?.5:1}}>
+              <span>{icon}</span><span style={{fontSize:11,fontWeight:600,color:"var(--t1)"}}>{label}</span>{counts}
+            </div>);
+          const nm = list.filter(s=>s.mtnr).length;
+          return <>
+            {chip("zb", "🚀", "Zone Breakout", ()=>go("ct-intraday"), "Broke a zone and still near the level", null, false, true)}
+            {chip("st", "🏆", "Stacked Setups", ()=>go("ct-stacked"), "Several setups agree on the same stock", <span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--acc)"}}>{stacked.length}</span>)}
+            {SCANNER_PAIRS.flat().map(id=>{
+              if (SCANNER_SECTION[id]) {
+                if (id!=="#mtnr" && !(sections && sections[id.slice(1)])) return null;
+                const [anchor, icon, label] = SCANNER_SECTION[id];
+                return chip(id, icon, label, ()=>go(anchor), label, id==="#mtnr" ? <span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--acc)"}}>{nm}</span> : null, id==="#mtnr" && !nm);
+              }
+              const d = SETUP_BY_ID[id]; if (!d) return null;
+              const rows = bySetup[id], nL = rows.filter(r=>r.e.dir>0).length, nS = rows.length-nL;
+              return chip(id, d.icon, d.short, ()=>jump(id), d.sub,
+                <><span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--long)"}}>▲{nL}</span><span style={{fontSize:10,fontFamily:"var(--mono)",color:"var(--short)"}}>▼{nS}</span></>, !rows.length);
+            })}
+          </>;
+        })()}
       </div>
 
       {/* Intraday momentum — first thing in the scanner */}
@@ -5013,11 +5293,14 @@ function SetupScanner({ list, open, extra=null, zoneLevels=null, lockDir=null })
       </FocusCard>
 
       <Anchor id="ct-setupcards"/>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(460px,1fr))",gap:12}}>
-        {SETUP_DEFS.map(d=><SetupCard key={d.id} def={d} rows={bySetup[d.id]} open={open}/>)}
-        <MTNRCard list={list} open={open}/>
+      <div className="scanner-pairs" style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12,alignItems:"stretch"}}>
+        {SCANNER_PAIRS.flat().map(id=>{
+          if (id==="#mtnr") return <MTNRCard key={id} list={list} open={open}/>;
+          if (SCANNER_SECTION[id]) { const el = sections && sections[id.slice(1)]; return el ? <div key={id} style={{display:"flex",minWidth:0}}>{el}</div> : null; }
+          const d = SETUP_BY_ID[id];
+          return d ? <SetupCard key={id} def={d} rows={bySetup[id]} open={open}/> : null;
+        })}
       </div>
-      {extra && <div style={{marginTop:14}}>{extra}</div>}
     </div>
   );
 }
@@ -6053,6 +6336,7 @@ function ZoneBreakoutAnalyser({ zoneLevels, list, open, lockDir=null }) {
   const [maxExt, setMaxExt] = useState(3);
   const [freshOnly, setFreshOnly] = useState(false);
   const [confOnly, setConfOnly] = useState(false);
+  const [nrOnly, setNrOnly] = useState(false);
   const [sort, setSort] = useState("closest");
   const [showAll, setShowAll] = useState(false);
   const sgn = dir==="LONG" ? 1 : -1;
@@ -6061,7 +6345,9 @@ function ZoneBreakoutAnalyser({ zoneLevels, list, open, lockDir=null }) {
   const perTf = {}; ZB_TFS.forEach(t => { perTf[t] = { fresh:0, near:0 }; });
   all.forEach(r => { perTf[r.t][r.fresh?"fresh":"near"]++; });
   const tfRank = t => ZB_TFS.indexOf(t);
-  const rows = all.filter(r => tfs.has(r.t) && (!freshOnly || r.fresh) && (!confOnly || r.confirmed))
+  const inTf = all.filter(r => tfs.has(r.t) && (!freshOnly || r.fresh));
+  const nConf = inTf.filter(r => r.confirmed).length, nNr = inTf.filter(r => r.nrBreaks.length > 0).length;
+  const rows = inTf.filter(r => (!confOnly || r.confirmed) && (!nrOnly || r.nrBreaks.length > 0))
     .sort((a,b) => sort==="closest" ? (b.fresh-a.fresh) || a.ext-b.ext
                  : sort==="rr" ? (b.rr??-1)-(a.rr??-1)
                  : tfRank(b.t)-tfRank(a.t) || a.ext-b.ext);
@@ -6077,7 +6363,7 @@ function ZoneBreakoutAnalyser({ zoneLevels, list, open, lockDir=null }) {
     <FocusCard icon="🚀" title="Zone Breakout Analyser — broke out, still near the level" style={{marginBottom:12,border:"1px solid var(--accborder)"}}
       sub={`Stocks that ${sgn>0?"broke above a top zone":"broke below a bottom zone"} and are within ${maxExt}% of the breakout level. ${nExt.toLocaleString()} breakouts that already ran further are left out.`}
       right={<ListCopy symbols={[...new Set(rows.map(r=>r.z.Symbol))]}/>}
-      learn={<>A breakout is only worth taking while price is still <strong>near the level it broke</strong>: the stop (the other edge of that zone band) is close, so the risk is small, and the move has not happened yet. Once a stock runs far past the level, the easy part is gone, so those are left out (<strong>Max distance</strong>). <strong>Fresh</strong> = the break happened on this bar (the previous {sgn>0?"close was below":"close was above"} the level); <strong>Holding</strong> = broke earlier but is still close to the level. <strong>Daily</strong> is the intraday view. <strong>Next zone</strong> is the nearest zone edge of any timeframe in the way; <strong>R:R</strong> = room to it ÷ risk to the stop. <strong>Confirmed</strong> = another timeframe's zone is also broken, or an NR breakout agrees.</>}>
+      learn={<>A breakout is only worth taking while price is still <strong>near the level it broke</strong>: the stop (the other edge of that zone band) is close, so the risk is small, and the move has not happened yet. Once a stock runs far past the level, the easy part is gone, so those are left out (<strong>Max distance</strong>). <strong>Fresh</strong> = the break happened on this bar (the previous {sgn>0?"close was below":"close was above"} the level); <strong>Holding</strong> = broke earlier but is still close to the level. <strong>Daily</strong> is the intraday view. <strong>Next zone</strong> is the nearest zone edge of any timeframe in the way; <strong>R:R</strong> = room to it ÷ risk to the stop. <strong>Confirmed</strong> = another timeframe's zone is also broken, or an NR breakout agrees. <strong>Confirmed by NR</strong> = only the ones where a Narrow Range {sgn>0?"breakout":"breakdown"} (any timeframe) points the same way — two independent signals agreeing.</>}>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:8}}>
         {(!lockDir || dir==="LONG") && <Pill active={dir==="LONG"} color="var(--long)" onClick={()=>setDir("LONG")}>▲ Breakouts</Pill>}
         {(!lockDir || dir==="SHORT") && <Pill active={dir==="SHORT"} color="var(--short)" onClick={()=>setDir("SHORT")}>▼ Breakdowns</Pill>}
@@ -6088,7 +6374,8 @@ function ZoneBreakoutAnalyser({ zoneLevels, list, open, lockDir=null }) {
       </div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
         <Pill active={freshOnly} color="var(--acc)" onClick={()=>setFreshOnly(v=>!v)}>{freshOnly?"✓ ":""}Fresh break only</Pill>
-        <Pill active={confOnly} color="var(--ret)" onClick={()=>setConfOnly(v=>!v)}>{confOnly?"✓ ":""}Confirmed only</Pill>
+        <Pill active={confOnly} color="var(--ret)" onClick={()=>setConfOnly(v=>!v)} title="Another timeframe's zone is also broken, or an NR break agrees">{confOnly?"✓ ":""}Confirmed only · {nConf}</Pill>
+        <Pill active={nrOnly} color="var(--ret)" onClick={()=>setNrOnly(v=>!v)} title={`An NR ${sgn>0?"breakout":"breakdown"} on any timeframe agrees with this zone break`}>{nrOnly?"✓ ":""}◆ Confirmed by NR · {nNr}</Pill>
         <Sep/><Lbl>Sort</Lbl>
         {[["closest","Closest to level"],["rr","Best R:R"],["tf","Biggest timeframe"]].map(([k,l])=><Pill key={k} active={sort===k} onClick={()=>setSort(k)}>{l}</Pill>)}
       </div>
@@ -6189,52 +6476,22 @@ function NRTrapSection({ db, open, lockDir=null, embedded=false }) {
   );
 
   return (
-    <div style={{padding:embedded?0:"4px 22px 8px"}}>
+    <div style={{display:"flex",flex:1,minWidth:0}}>
       <Anchor id="ct-trap"/>
-      <SectionTitle icon="🪤" title={title}
-        sub={trade==="LONG" ? "The NR breakout above the mother High failed and price fell back to the mother Low. Trapped buyers are out: buy at the Low, stop below it."
-                            : "The NR breakdown below the mother Low failed and price came back to the mother High. Trapped sellers are out: sell at the High, stop above it."}
-        right={<div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-          {(!lockDir || lockDir==="LONG") && <Pill active={trade==="LONG"} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Failed BO → buy at Low</Pill>}
-          {(!lockDir || lockDir==="SHORT") && <Pill active={trade==="SHORT"} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Failed BD → sell at High</Pill>}
-          <span style={{width:1,height:20,background:"var(--b2)"}}/>
+      <FocusCard icon="🪤" title={title} style={{flex:1}} right={<ListCopy symbols={[...new Set(rows.map(r=>r.Symbol))]}/>}
+        sub={trade==="LONG" ? "NR breakout above the mother High failed, price is back at the mother Low — buy at the Low, stop below it."
+                            : "NR breakdown below the mother Low failed, price is back at the mother High — sell at the High, stop above it."}
+        learn={<>Mother candle = N bars ago with a real body. After it, one or more bars <strong>closed {trade==="LONG"?"above the mother High":"below the mother Low"}</strong> (the breakout that failed), and the latest close is back inside and <strong>near the mother {trade==="LONG"?"Low":"High"}</strong>. <strong>Entry</strong> = CMP, <strong>Stop</strong> = mother {trade==="LONG"?"Low":"High"}, <strong>Target</strong> = mother {trade==="LONG"?"High":"Low"}. Bigger timeframes first, then best R:R.</>}>
+        <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center",marginBottom:6}}>
+          {(!lockDir || lockDir==="LONG") && <Pill active={trade==="LONG"} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Failed BO</Pill>}
+          {(!lockDir || lockDir==="SHORT") && <Pill active={trade==="SHORT"} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Failed BD</Pill>}
+          <span style={{width:1,height:16,background:"var(--b2)"}}/>
           {TRAP_TFS.map(t=><Pill key={t} active={tfs.has(t)} onClick={()=>toggleTf(t)}>{t} · {tfCount[t]||0}</Pill>)}
-          <span style={{width:1,height:20,background:"var(--b2)"}}/>
-          {[0,2,3,5].map(v=><Pill key={v} active={minRR===v} onClick={()=>setMinRR(v)}>{v?`R:R ≥ ${v}`:"any R:R"}</Pill>)}
-          <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)}>FNO only</Pill>
-        </div>}/>
-
-      <EqRow height={420} cols="minmax(0,.8fr) minmax(0,2.2fr)" min={300}>
-        <FocusCard icon="🧭" title="How the trap forms" sub="Same mother candle rule as your NR scans."
-          learn={<>Mother candle = N bars ago with a real body (Number 1.5). After it, one or more bars <strong>closed {trade==="LONG"?"above the mother High":"below the mother Low"}</strong> (the breakout that failed), the other bars' bodies stayed inside, and the latest close is back inside and <strong>near the mother {trade==="LONG"?"Low":"High"}</strong> (the same 1.9/2 near rule). <strong>Entry</strong> = CMP, <strong>Stop</strong> = mother {trade==="LONG"?"Low":"High"}, <strong>Target</strong> = mother {trade==="LONG"?"High":"Low"}. For each stock and timeframe the biggest mother candle is shown.</>}>
-          <svg viewBox="0 0 230 124" style={{width:"100%",maxHeight:132,marginBottom:10}}>
-            <rect x="20" y="30" width="176" height="60" fill="none" stroke="var(--b2)" strokeDasharray="4 3"/>
-            <text x="199" y="33" fontSize="8" fill="var(--t3)">High</text>
-            <text x="199" y="93" fontSize="8" fill="var(--t3)">Low</text>
-            <rect x="26" y="30" width="12" height="60" rx="1" fill="var(--t2)" opacity=".45"/>
-            <text x="18" y="22" fontSize="8" fill="var(--t3)">mother</text>
-            {trade==="LONG" ? <>
-              <polyline points="44,60 64,52 84,58 104,40 124,18 144,44 164,70 184,84" fill="none" stroke="var(--t2)" strokeWidth="2"/>
-              <circle cx="124" cy="18" r="4" fill="none" stroke="var(--short)" strokeWidth="2"/><text x="132" y="16" fontSize="8" fill="var(--short)">failed BO</text>
-              <circle cx="184" cy="84" r="4.5" fill="var(--long)"/><text x="146" y="110" fontSize="8.5" fill="var(--long)" fontWeight="700">buy at Low</text>
-            </> : <>
-              <polyline points="44,60 64,68 84,62 104,80 124,102 144,76 164,50 184,36" fill="none" stroke="var(--t2)" strokeWidth="2"/>
-              <circle cx="124" cy="102" r="4" fill="none" stroke="var(--long)" strokeWidth="2"/><text x="132" y="114" fontSize="8" fill="var(--long)">failed BD</text>
-              <circle cx="184" cy="36" r="4.5" fill="var(--short)"/><text x="146" y="22" fontSize="8.5" fill="var(--short)" fontWeight="700">sell at High</text>
-            </>}
-          </svg>
-          <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".6px",fontWeight:700,marginBottom:6}}>Setups by timeframe</div>
-          {TRAP_TFS.map(t=>(
-            <div key={t} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-              <span style={{width:70,fontSize:11,color:"var(--t2)"}}>{RE_TF_NAME[t]}</span>
-              <div style={{flex:1,height:10,background:"var(--s3)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${(tfCount[t]||0)/maxTf*100}%`,background:c,opacity:tfs.has(t)?.85:.3}}/></div>
-              <span style={{width:30,textAlign:"right",fontFamily:"var(--mono)",fontSize:11}}>{tfCount[t]||0}</span>
-            </div>
-          ))}
-        </FocusCard>
-
-        <FocusCard icon="🪤" title={`${rows.length} ${trade==="LONG"?"buy-after-trap":"sell-after-trap"} setups`} sub="Bigger timeframes first, then best R:R." right={<ListCopy symbols={[...new Set(rows.map(r=>r.Symbol))]}/>}>
-          <div style={{overflow:"auto",flex:1}} className="tower-scroll">
+          <span style={{width:1,height:16,background:"var(--b2)"}}/>
+          {[0,2,3].map(v=><Pill key={v} active={minRR===v} onClick={()=>setMinRR(v)}>{v?`R:R ≥ ${v}`:"any R:R"}</Pill>)}
+          <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)}>FNO</Pill>
+        </div>
+          <div style={{overflow:"auto",maxHeight:330}} className="tower-scroll">
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
               <thead><tr>{["Symbol","TF","Mother","Failed","CMP","Where in mother","Stop","Target","Risk","Reward","R:R"].map(h=><th key={h} style={TH}>{h}</th>)}</tr></thead>
               <tbody>
@@ -6258,8 +6515,7 @@ function NRTrapSection({ db, open, lockDir=null, embedded=false }) {
             </table>
           </div>
           {rows.length>30 && <button onClick={()=>setShowAll(v=>!v)} style={{marginTop:6,fontSize:10.5,color:"var(--acc)",alignSelf:"flex-start"}}>{showAll?"Show top 30":`Show all ${rows.length}`}</button>}
-        </FocusCard>
-      </EqRow>
+      </FocusCard>
     </div>
   );
 }
@@ -6282,30 +6538,29 @@ function ZoneRetestSection({ db, lockDir=null }) {
   const buy = trade==="LONG", c = buy ? "var(--long)" : "var(--short)";
   const title = "Zone Retest — broke last bar's zone, back at the current zone";
   return (
-    <div>
+    <div style={{display:"flex",flex:1,minWidth:0}}>
       <Anchor id="ct-retest"/>
-      <SectionTitle icon="🔁" title={title}
-        sub={buy ? "Last bar CLOSED above its own zone (breakout). Now price has come back into the current zone's bottom band — the breakout is being retested from the zone low."
-                 : "Last bar CLOSED below its own zone (breakdown). Now price has come back up into the current zone's top band — the breakdown is being retested from the zone high."}
-        right={<div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-          {(!lockDir || lockDir==="LONG") && <Pill active={buy} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Broke up → buy at zone low</Pill>}
-          {(!lockDir || lockDir==="SHORT") && <Pill active={!buy} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Broke down → sell at zone high</Pill>}
-          <span style={{width:1,height:20,background:"var(--b2)"}}/>
+      <FocusCard icon="🔁" title={title} style={{flex:1}} right={<ListCopy symbols={[...new Set(rows.map(r=>r.Symbol))]}/>}
+        sub={buy ? "Last bar closed above its zone (breakout); price is back in the current zone's bottom band — retest from the zone low."
+                 : "Last bar closed below its zone (breakdown); price is back in the current zone's top band — retest from the zone high."}>
+        <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center",marginBottom:6}}>
+          {(!lockDir || lockDir==="LONG") && <Pill active={buy} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Broke up → buy at low</Pill>}
+          {(!lockDir || lockDir==="SHORT") && <Pill active={!buy} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Broke down → sell at high</Pill>}
+          <span style={{width:1,height:16,background:"var(--b2)"}}/>
           {RETEST_TFS.map(t=><Pill key={t} active={tfs.has(t)} onClick={()=>toggleTf(t)}>{t} · {tfCount[t]||0}</Pill>)}
-          <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)}>FNO only</Pill>
-          <ListCopy symbols={[...new Set(rows.map(r=>r.Symbol))]}/>
-        </div>}/>
+          <Pill active={fnoOnly} color="var(--long)" onClick={()=>setFnoOnly(v=>!v)}>FNO</Pill>
+        </div>
       {!(db.has && db.has.zoneRetest) && !all.length ? (
-        <div style={{background:"var(--s1)",border:"1px dashed var(--b2)",borderRadius:12,padding:"22px",textAlign:"center",color:"var(--t2)",fontSize:12.5,lineHeight:1.7,marginBottom:14}}>
+        <div style={{border:"1px dashed var(--b2)",borderRadius:10,padding:"18px",textAlign:"center",color:"var(--t2)",fontSize:12,lineHeight:1.7}}>
           This collection has no <strong>Zone_Retest</strong> sheet.<br/>It appears from the next scanner run.
         </div>
       ) : (
-        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",marginBottom:14}}>
+        <div>
           <div style={{fontSize:10.5,color:"var(--t3)",marginBottom:6,display:"flex",alignItems:"center"}}>
             {rows.length} setups · Yearly first, then closest to the zone edge
             <InfoTip><strong>Rule</strong> (W, M, Q, Y): {buy ? <>the previous bar <strong>closed above its own top zone</strong> and the price is now <strong>inside the current bar's bottom band</strong> (bottom_zone … bottom_near)</> : <>the previous bar <strong>closed below its own bottom zone</strong> and the price is now <strong>inside the current bar's top band</strong> (top_near … top_zone)</>}. Daily isn't included — the raw scans have no previous-day zones. <strong>From edge</strong> = how far price is from the zone {buy?"bottom":"top"}.</InfoTip>
           </div>
-          <div style={{maxHeight:380,overflow:"auto"}} className="tower-scroll">
+          <div style={{maxHeight:330,overflow:"auto"}} className="tower-scroll">
             <table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead><tr>{["Symbol","TF","Last bar closed","Its zone","CMP",buy?"Current bottom band":"Current top band","Current zone","From edge","Health"].map(h=><th key={h} style={ZR_TH}>{h}</th>)}</tr></thead>
               <tbody>
@@ -6328,6 +6583,7 @@ function ZoneRetestSection({ db, lockDir=null }) {
           </div>
         </div>
       )}
+      </FocusCard>
     </div>
   );
 }
@@ -6358,25 +6614,24 @@ function TrendPullbackSection({ db, lockDir=null }) {
   const rows = side.filter(r => tfs.has(r.tf)).sort((a,b) => rank[a.tf]-rank[b.tf] || b.bars-a.bars);
   const buy = trade==="LONG", c = buy ? "var(--long)" : "var(--short)";
   return (
-    <div>
+    <div style={{display:"flex",flex:1,minWidth:0}}>
       <Anchor id="ct-trend"/>
-      <SectionTitle icon="📈" title="Trend Pullback — trend intact, price back at the zone"
-        sub={buy ? "Several bars trending up, and price is now back in the current zone's bottom band — buy the dip in an uptrend."
-                 : "Several bars trending down, and price is now back in the current zone's top band — sell the rise in a downtrend."}
-        right={<div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-          {(!lockDir || lockDir==="LONG") && <Pill active={buy} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Uptrend → buy near zone low</Pill>}
-          {(!lockDir || lockDir==="SHORT") && <Pill active={!buy} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Downtrend → sell near zone high</Pill>}
-          <span style={{width:1,height:20,background:"var(--b2)"}}/>
+      <FocusCard icon="📈" title="Trend Pullback — trend intact, price back at the zone" style={{flex:1}} right={<ListCopy symbols={[...new Set(rows.map(r=>r.sym))]}/>}
+        sub={buy ? "Several bars trending up and price is back in the current zone's bottom band — buy the dip in an uptrend."
+                 : "Several bars trending down and price is back in the current zone's top band — sell the rise in a downtrend."}>
+        <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center",marginBottom:6}}>
+          {(!lockDir || lockDir==="LONG") && <Pill active={buy} color="var(--long)" onClick={()=>setTrade("LONG")}>▲ Uptrend → buy</Pill>}
+          {(!lockDir || lockDir==="SHORT") && <Pill active={!buy} color="var(--short)" onClick={()=>setTrade("SHORT")}>▼ Downtrend → sell</Pill>}
+          <span style={{width:1,height:16,background:"var(--b2)"}}/>
           {["M","W","D"].map(t=><Pill key={t} active={tfs.has(t)} onClick={()=>toggleTf(t)}>{t} · {tfCount[t]||0}</Pill>)}
-          <Pill active={only4} onClick={()=>setOnly4(v=>!v)}>{only4?"✓ ":""}4-bar trend only</Pill>
-          <ListCopy symbols={[...new Set(rows.map(r=>r.sym))]}/>
-        </div>}/>
-      <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",marginBottom:14}}>
+          <Pill active={only4} onClick={()=>setOnly4(v=>!v)}>{only4?"✓ ":""}4-bar only</Pill>
+        </div>
+      <div>
         <div style={{fontSize:10.5,color:"var(--t3)",marginBottom:6,display:"flex",alignItems:"center"}}>
           {rows.length} setups · Monthly first, then the longest trend
           <InfoTip>From your <strong>last_3/4 mon · wk · day _{buy?"up":"down"}_trend_with_close_nearto_{buy?"low":"high"}_zone</strong> scans. How the scanner reads them today: the last 3 or 4 completed bars each <strong>closed {buy?"higher":"lower"}</strong> than the bar before, and the price is inside the current bar's {buy?"bottom":"top"} band.</InfoTip>
         </div>
-        <div style={{maxHeight:380,overflow:"auto"}} className="tower-scroll">
+        <div style={{maxHeight:330,overflow:"auto"}} className="tower-scroll">
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr>{["Symbol","TF","Trend","CMP",buy?"Current bottom band":"Current top band","Current zone"].map(h=><th key={h} style={ZR_TH}>{h}</th>)}</tr></thead>
             <tbody>
@@ -6397,6 +6652,7 @@ function TrendPullbackSection({ db, lockDir=null }) {
           </table>
         </div>
       </div>
+      </FocusCard>
     </div>
   );
 }
@@ -6521,12 +6777,6 @@ function TechQuantSection({ db, tech }) {
     });
   }, [db.technicals, db.zoneLevels, db.flat]);
 
-  const breadth = useMemo(() => {
-    const m = {}; FOCUS_TFS.forEach(tf => { m[tf] = {}; });
-    rows.forEach(r => { const rd = techReadings(r, r.price, cfg); FOCUS_TFS.forEach(tf => rd[tf].forEach(x => { const c = (m[tf][x.ind] = m[tf][x.ind] || { b:0, s:0 }); x.dir>0 ? c.b++ : c.s++; })); });
-    return m;
-  }, [rows, cfg]);
-
   const val = (r, tf, f) => { const v = r[tf] && r[tf][f]; return v == null ? null : +v; };
   const evalRule = (r, q) => {
     const a = val(r, q.tf, q.f), b = q.rhs === "num" ? (q.v === "" || q.v == null ? null : +q.v) : val(r, q.rtf || q.tf, q.rf);
@@ -6556,18 +6806,6 @@ function TechQuantSection({ db, tech }) {
           This collection has no <strong>Technicals</strong> sheet yet.<br/>It appears from the next scanner run that loads the technical-data screener.
         </div>
       ) : (<>
-        <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",marginBottom:12,overflowX:"auto"}}>
-          <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:6}}>Technical breadth — stocks bullish ▲ / bearish ▼ per indicator</div>
-          <table style={{borderCollapse:"collapse",fontSize:11,fontFamily:"var(--mono)"}}>
-            <thead><tr><th style={{...TH,position:"static"}}>TF</th>{IND.map(i=><th key={i} style={{...TH,position:"static"}}>{i}</th>)}</tr></thead>
-            <tbody>{FOCUS_TFS.map(tf=>(
-              <tr key={tf} style={{borderBottom:"1px solid var(--b1)"}}>
-                <td style={{padding:"4px 8px",fontWeight:700}}>{tf}</td>
-                {IND.map(i=>{ const c = breadth[tf][i] || {b:0,s:0}; return <td key={i} style={{padding:"4px 10px",whiteSpace:"nowrap"}}><span style={{color:"var(--long)"}}>▲{c.b}</span> <span style={{color:"var(--short)"}}>▼{c.s}</span></td>; })}
-              </tr>))}</tbody>
-          </table>
-        </div>
-
         <div style={{display:"grid",gridTemplateColumns:"minmax(200px,240px) minmax(0,1fr)",gap:12,marginBottom:14}}>
           <div style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 10px",maxHeight:560,overflowY:"auto"}} className="tower-scroll">
             <div style={{fontSize:10,color:"var(--t3)",textTransform:"uppercase",letterSpacing:".8px",fontWeight:700,marginBottom:6}}>Algorithms ({algos.length})</div>

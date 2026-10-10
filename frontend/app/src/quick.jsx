@@ -46,9 +46,9 @@ export function QuickGuideButton({ onDocs }) {
                 {[["D", "Daily", "days"], ["W", "Weekly", "weeks"], ["M", "Monthly", "months"], ["Q", "Quarterly", "about a year"], ["Y", "Yearly", "years"]].map(([k, l, s]) =>
                   <div key={k}><b>{k}</b><span>{l}</span><small>{s}</small></div>)}
               </div>
-              <p>Every <b>stock</b>, every <b>industry</b> and every <b>sector</b> is checked on all five. In the <b>Timeframe</b> filter, pick your style:
+              <p>Every <b>stock</b>, every <b>industry</b> and every <b>sector</b> is checked on all five. In the <b>Trading mode</b> filter, pick your style:
                 <b>Swing</b> gives Monthly &amp; Quarterly the most weight, <b>Investing</b> gives Quarterly &amp; Yearly the most,
-                <b>Balanced</b> treats all five the same. Or pick D / W / M / Q / Y to see one timeframe alone.</p>
+                <b>Balanced</b> treats all five the same. Or use the <b>Timeframe</b> filter (D / W / M / Q / Y) to see one timeframe alone.</p>
             </section>
 
             <section>
