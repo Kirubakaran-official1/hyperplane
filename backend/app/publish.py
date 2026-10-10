@@ -103,6 +103,7 @@ def build_public(sheets, settings, as_of):
     zl = {_sym(r.get("Symbol")): r for r in sheets.get("Zone_Levels", [])}
     master = {_sym(r.get("Symbol")): r for r in sheets.get("Master_Stock_Data", [])}
     health = {_sym(r.get("Symbol")): str(r.get("Health") or "").upper() for r in sheets.get("Price_Health", [])}
+    stretched = {_sym(r.get("Symbol")) for r in sheets.get("Price_Health", []) if str(r.get("Stretched") or "") == "Yes"}
     tech = {_sym(r.get("Symbol")): r for r in sheets.get("Technicals", [])} if settings.get("tech_enabled") else {}
     tech_w = float(settings.get("tech_weight") or 0)
     tech_cfg = settings.get("tech") or {}
@@ -159,7 +160,9 @@ def build_public(sheets, settings, as_of):
                        "p": round(price, 2), "c": _num(m.get("Change_Pct") if m else z.get("Change_Pct")),
                        "r": rating, "sc": sc, "os": overall_sc, "o": overall,
                        # background (Price_Health): S = Healthy, M = Weak or unrated (as the Control Tower), W = Poor
-                       "h": ({"HEALTHY": "S", "POOR": "W"}.get(health.get(sym), "M") if health else None)})
+                       "h": ({"HEALTHY": "S", "POOR": "W"}.get(health.get(sym), "M") if health else None),
+                       # stretched: ≥ 3x its 1-year low (Price_Health "Stretched") — shown as a warning, never chase
+                       "x": 1 if sym in stretched else 0})
         if "-" not in rating and health.get(sym) != "POOR":
             weighted = sum(TF_WEIGHT[tf] * (1 if ch == "G" else -1 if ch == "W" else 0) for tf, ch in zip(TFS, rating))
             if weighted > 0:

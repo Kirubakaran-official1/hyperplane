@@ -112,12 +112,13 @@ function summaryOf(s) {
 // strong = strength ≥ 55% or in the top quarter of all sectors / industries; weak = under 45% and in the bottom half.
 const groupState = g => !g ? null : (g.st >= 55 || g.rank / g.of <= 0.25) ? "up" : (g.st < 45 && g.rank / g.of > 0.5) ? "down" : "side";
 const GROUP_WORD = { up:"strong", side:"average", down:"weak" };
-function combinedView(od, bi, sec, ind, os = null) {
+function combinedView(od, bi, sec, ind, os = null, stretched = false) {
   const gs = [sec && ["sector", groupState(sec)], ind && ["industry", groupState(ind)]].filter(Boolean);
   const weak = gs.filter(([, st]) => st === "down").map(([n]) => n), strong = gs.length > 0 && gs.every(([, st]) => st === "up");
   const which = weak.join(" and ");
   let v;
-  if (od === 1 && strong && os != null && Math.abs(os) < 50) v = ["watch", "👁 Watch — stock still building", "Its sector and industry are strong, but the stock's own trend is only moderate. Keep it on your watch list and act when it turns strong."];
+  if (od === 1 && stretched) v = ["warn", "⚠ Overheated — don't chase", "The stock has run up 3x or more in about a year. Even if the trend looks strong, prices this stretched often fall back sharply — wait for it to cool down and build a base."];
+  else if (od === 1 && strong && os != null && Math.abs(os) < 50) v = ["watch", "👁 Watch — stock still building", "Its sector and industry are strong, but the stock's own trend is only moderate. Keep it on your watch list and act when it turns strong."];
   else if (od === 1) v = strong ? ["good", "✓ Best case — with the tide", "Strong stock in a strong industry and a strong sector. Everything points the same way."]
     : weak.length ? ["warn", "⚠ Careful — against its group", `The stock is strong, but its ${which} ${weak.length > 1 ? "are" : "is"} weak. It is moving against its own group — avoid or wait (golden rule 2).`]
     : ["mid", "◐ Okay — group is only average", "The stock is strong, but its group is only average. Candidates in stronger sectors / industries are better."];
@@ -183,6 +184,72 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
       )}
     </div>
   );
+}
+
+// ─── trading mode: how much each timeframe counts in the COMBINED strength (stocks, sectors, industries) ───
+const MODES = {
+  equal:  { label: "Balanced",           short: "Balanced",  hint: "every timeframe counts the same",                       w: { D: 1, W: 1, M: 1, Q: 1, Y: 1 } },
+  swing:  { label: "Swing / Positional", short: "Swing",     hint: "Monthly and Quarterly count most — trades of weeks to months", w: { D: 1, W: 2, M: 3, Q: 3, Y: 1 } },
+  invest: { label: "Investing",          short: "Investing", hint: "Quarterly and Yearly count most — holding for a year or more", w: { D: 0, W: 0.5, M: 1.5, Q: 4, Y: 4 } },
+};
+const MODE_KEY = "qf_mode";
+const getMode = () => { try { const m = localStorage.getItem(MODE_KEY); return MODES[m] ? m : "equal"; } catch { return "equal"; } };
+const weightPct = w => { const t = Object.values(w).reduce((a, b) => a + b, 0); return Object.fromEntries(Object.entries(w).map(([k, v]) => [k, Math.round(v / t * 100)])); };
+// Recompute every "Combined" number with the mode's weights: stock os from its D..Y strengths; sector / industry
+// strength and net bias from their D..Y rows (counts, breadth and moves stay from the server's combined rows).
+function applyMode(data, mode) {
+  const W = MODES[mode].w, TF = "DWMQY".split("");
+  const comb = sc => { let a = 0, b = 0; TF.forEach((t, i) => { const v = (sc || [])[i]; if (v != null && W[t] > 0) { a += W[t] * v; b += W[t]; } }); return b ? Math.round(a / b) : null; };
+  const groups = byTf => {
+    if (!byTf) return byTf;
+    const acc = {}, key = r => `${r.k}|${r.sec || ""}`;
+    TF.forEach(t => W[t] > 0 && (byTf[t] || []).forEach(r => {
+      const a = acc[key(r)] = acc[key(r)] || { k: r.k, sec: r.sec, st: 0, nb: 0, w: 0 };
+      a.st += W[t] * r.st; a.nb += W[t] * r.nb; a.w += W[t];
+    }));
+    const base = Object.fromEntries((byTf.A || []).map(r => [key(r), r]));
+    const A = Object.values(acc).map(a => ({ ...(base[`${a.k}|${a.sec || ""}`] || { k: a.k, sec: a.sec, n: 0, sig: 0, adv: 0, dec: 0, avg: 0 }),
+      st: Math.round(a.st / a.w * 10) / 10, nb: Math.round(a.nb / a.w * 10) / 10 })).sort((x, y) => y.st - x.st);
+    return { ...byTf, A };
+  };
+  return { ...data, stocks: data.stocks.map(s => ({ ...s, os: comb(s.sc) })), sectors: groups(data.sectors), industries: groups(data.industries) };
+}
+
+// "AI insights" on the stock card: three short lines (good · watch out · focus) written by rules from the published
+// numbers of the stock, its industry and its sector. Information, never a buy / sell call.
+function insightsOf(s, od, bi, sec, ind, view, indRank, indCount) {
+  const names = ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
+  const sc = s.sc || [];
+  const ups = names.filter((_, i) => dirTf(s, i) === 1), dns = names.filter((_, i) => dirTf(s, i) === -1);
+  const good = [], bad = [];
+  if (od === 1 && ups.length) {
+    const best = sc.reduce((b, v, i) => (v != null && dirTf(s, i) === 1 && (b < 0 || v > sc[b]) ? i : b), -1);
+    good.push(`Uptrend on ${ups.length} of 5 timeframes${best >= 0 ? `, strongest on ${names[best]} (${Math.abs(sc[best])}%)` : ""}`);
+  }
+  if (s.h === "S") good.push("strong reliability");
+  if (groupState(ind) === "up") good.push(`industry ranks #${ind.rank} of ${ind.of}`);
+  if (groupState(sec) === "up") good.push(`sector ranks #${sec.rank} of ${sec.of}`);
+  if (indRank && indRank <= 3 && indCount > 3) good.push(`#${indRank} of ${indCount} in its industry`);
+  if (s.x) bad.push("ran up 3× or more in about a year — stretched");
+  if (s.h === "W") bad.push("weak reliability (past crash or wild moves)");
+  else if (s.h === "M") bad.push("only moderate reliability");
+  if (od === -1) bad.push(`in a downtrend${dns.length ? ` on ${dns.join(", ")}` : ""}`);
+  else if (bi && dns.length) bad.push(`timeframes disagree — down on ${dns.join(", ")}`);
+  const wk = [["sector", s.sec, sec], ["industry", s.ind, ind]].filter(([, , g]) => g && groupState(g) !== "up");
+  wk.forEach(([k, n, g]) => bad.push(`${k} ${n} is ${GROUP_WORD[groupState(g)]} (#${g.rank} of ${g.of})`));
+  if (od === 1 && sc[0] != null && sc[1] != null && dirTf(s, 1) === 1 && Math.abs(sc[0]) < Math.abs(sc[1]) - 30)
+    bad.push(`short term cooling — Daily ${Math.abs(sc[0])}% vs Weekly ${Math.abs(sc[1])}%`);
+  const weakGroup = wk.find(([, , g]) => groupState(g) === "down") || wk[0];
+  const tone = view ? view.tone : "mid";
+  const focus = s.x && od === 1 ? "Don't chase. Wait for it to cool down or build a base — the Daily strength turning up again is the first sign."
+    : tone === "good" ? "Plan your entry and stop-loss on the chart; the Daily trend is the one to watch for timing."
+    : tone === "warn" ? `Watch ${weakGroup ? `the ${weakGroup[1]} ${weakGroup[0]}` : "its group"} — the idea improves only when it turns strong. Until then, wait.`
+    : tone === "watch" && od === 1 ? "Keep it on your watch list and act when the stock's own trend turns strong on your timeframe."
+    : tone === "watch" ? "A laggard in a strong group — wait for its Weekly and Daily trend to turn up before acting."
+    : tone === "bad" ? "Avoid for buying — look at stronger stocks in stronger groups (see the top 5 in its industry below)."
+    : od === 0 ? "No edge yet — skip it until a clear trend appears."
+    : `Prefer it only when its ${weakGroup ? weakGroup[0] : "group"} turns strong; compare it with the top 5 in its industry below.`;
+  return { good: good.slice(0, 3), bad: bad.slice(0, 3), focus };
 }
 
 // ─── small pieces ────────────────────────────────────────────────────────────
@@ -489,7 +556,8 @@ function StockCard({ s, data, onOpen, onClose }) {
     return i < 0 ? null : { ...list[i], rank:i + 1, of:list.length }; };
   const top = indPeers.slice(0, 5), showSelf = indRank > 5;
   const secA = data ? ctx("A", false) : null, indA = data ? ctx("A", true) : null;
-  const view = combinedView(od, bi, secA, indA, s.os);
+  const view = combinedView(od, bi, secA, indA, s.os, !!s.x);
+  const ai = s.os != null ? insightsOf(s, od, bi, secA, indA, view, indRank, indPeers.length) : null;
   const grp = (kind, name, g) => (
     <div className="cv-row"><span className="cv-k">{kind}</span>
       <span className="cv-v"><b>{name}</b>{g
@@ -501,7 +569,7 @@ function StockCard({ s, data, onOpen, onClose }) {
       <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-label={s.n}>
         <button className="x" onClick={onClose} aria-label="Close">✕</button>
         <div className="m-head">
-          <div><div className="m-name">{s.n}</div><div className="sub"><span className="sym">{s.s}</span> · {s.sec} › {s.ind} · {sizeOf(s)} cap{s.f ? " · F&O" : ""}{s.h && <> · <span className={`bgtag ${s.h}`}>{BG_NAME[s.h]} reliability</span></>}</div>
+          <div><div className="m-name">{s.n}</div><div className="sub"><span className="sym">{s.s}</span> · {s.sec} › {s.ind} · {sizeOf(s)} cap{s.f ? " · F&O" : ""}{s.h && <> · <span className={`bgtag ${s.h}`}>{BG_NAME[s.h]} reliability</span></>}{s.x ? <> · <span className="stretch-tag" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase.">🔥 Stretched</span></> : null}</div>
             <span className="tcopy m-copy" title={`Copy ${s.s} only`}><span className="lbl">Copy {s.s}</span><CopyBtns syms={[s.s]}/></span></div>
           <div className="m-price"><div className="mono">₹{s.p}</div>{s.c != null && <div className={`mono ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}% today</div>}</div>
         </div>
@@ -510,11 +578,15 @@ function StockCard({ s, data, onOpen, onClose }) {
           <div className="mo-cell"><span className="lbl">Direction</span><span className={`dirtag ${bi ? "bi" : od === 1 ? "up" : od === -1 ? "down" : "side"}`}>{bi ? "⇅ Bidirectional" : ups.length && !dns.length ? "▲ One-directional up" : dns.length && !ups.length ? "▼ One-directional down" : "◆ Sideways"}</span></div>
           {view && <div className={`cv-verdict ${view.tone}`}>{view.title}</div>}
           <div className="mo-sum">
-            <div className="lbl">Combined view <Info text="The stock, its sector and its industry read together (Combined timeframe). A group is strong when it ranks in the top quarter or is above 55%, weak when it is in the bottom half and under 45%. The best ideas have all three pointing the same way — see Docs → golden rules."/></div>
+            <div className="lbl ai-h"><span className="ai-spark">✦</span> AI insights <Info text="Short insights written automatically from Hyperplane's quant data for this stock, its industry and its sector (Combined timeframe) — information, not advice. A group is strong when it ranks in the top quarter or is above 55%, weak when it is in the bottom half and under 45%. The best ideas have all three pointing the same way — see Docs → golden rules."/></div>
             <div className="cv-row"><span className="cv-k">Stock</span><span className="cv-v">{summaryOf(s)}</span></div>
             {grp("Sector", s.sec, secA)}
             {grp("Industry", s.ind, indA)}
-            {view && <div className={`cv-say ${view.tone}`}>{view.text}</div>}
+            {ai && <div className={`ai-box ${view ? view.tone : "mid"}`}>
+              <div className="ai-l good"><b>✓ Good</b><span>{ai.good.length ? ai.good.join(" · ") : "No clear strength right now."}</span></div>
+              <div className="ai-l bad"><b>⚠ Watch out</b><span>{ai.bad.length ? ai.bad.join(" · ") : "Nothing major — stock, industry and sector point the same way."}</span></div>
+              <div className="ai-l focus"><b>◎ Focus</b><span>{ai.focus}</span></div>
+            </div>}
           </div>
         </div>
         <div className="m-rows">
@@ -568,9 +640,12 @@ function StockCard({ s, data, onOpen, onClose }) {
 const EMPTY = { sectors:[], industries:[], sizes:[], bg:[], fno:false, trend:"all" };
 
 function Home({ me, onOut }) {
-  const [data, setData] = useState(null); const [err, setErr] = useState("");
+  const [rawData, setData] = useState(null); const [err, setErr] = useState("");
+  const [mode, setModeState] = useState(getMode);
+  const setMode = m => { setModeState(m); try { localStorage.setItem(MODE_KEY, m); } catch { /* storage blocked */ } };
+  const data = useMemo(() => rawData && applyMode(rawData, mode), [rawData, mode]);
   const [f, setF] = useState(EMPTY); const [tfs, setTfs] = useState([]);
-  const [q, setQ] = useState(""); const [sort, setSort] = useState("up"); const [page, setPage] = useState(0);
+  const [q, setQ] = useState(""); const [sort, setSort] = useState("best"); const [page, setPage] = useState(0);
   const [open, setOpen] = useState(null);
   const [view, setView] = useState("tower"); const [hdReq, setHdReq] = useState(null);
   const hdApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); throw e; }), []);
@@ -589,7 +664,11 @@ function Home({ me, onOut }) {
     return base.filter(s => ok(s) && (!qq || s.s.toLowerCase().includes(qq) || s.n.toLowerCase().includes(qq))); }, [base, f.trend, tfs, q]);
   const sorted = useMemo(() => {
     const v = s => focusOf(s, tfs), arr = [...filtered];
-    if (sort === "up") arr.sort((a, b) => (v(b) ?? -999) - (v(a) ?? -999) || (b.os ?? -999) - (a.os ?? -999) || a.n.localeCompare(b.n));
+    // 0 = Strong reliability & not stretched, 1 = Moderate, 2 = Weak or stretched
+    const tier = s => (s.x || s.h === "W") ? 2 : s.h === "M" ? 1 : 0;
+    const dirUp = s => focusDir(s, tfs) === 1 ? 0 : 1;
+    if (sort === "best") arr.sort((a, b) => dirUp(a) - dirUp(b) || tier(a) - tier(b) || (v(b) ?? -999) - (v(a) ?? -999) || a.n.localeCompare(b.n));
+    else if (sort === "up") arr.sort((a, b) => (v(b) ?? -999) - (v(a) ?? -999) || (b.os ?? -999) - (a.os ?? -999) || a.n.localeCompare(b.n));
     else if (sort === "down") arr.sort((a, b) => (v(a) ?? 999) - (v(b) ?? 999) || (a.os ?? 999) - (b.os ?? 999) || a.n.localeCompare(b.n));
     else if (sort === "change") arr.sort((a, b) => (b.c ?? -99) - (a.c ?? -99));
     else arr.sort((a, b) => a.n.localeCompare(b.n));
@@ -598,8 +677,8 @@ function Home({ me, onOut }) {
   const cats = useMemo(() => { const c = { up:0, down:0, bi:0, side:0 }; base.forEach(s => { const k = categoryOf(s, tfs); if (k) c[k]++; }); return c; }, [base, tfs]);
   const nUp = cats.up, nDown = cats.down, nBi = cats.bi;
   const panelTf = tfs.length === 1 ? tfs[0] : "A";
-  const tfLabel = tfs.length > 1 ? "Combined (pick one timeframe to see it alone)" : TF_NAME[panelTf];
-  const focusLabel = !tfs.length ? "Combined" : tfs.length === 1 ? TF_NAME[tfs[0]] : `Avg ${tfs.join("+")}`;
+  const tfLabel = tfs.length > 1 ? "Combined (pick one timeframe to see it alone)" : panelTf === "A" ? `${MODES[mode].label} (all timeframes)` : TF_NAME[panelTf];
+  const focusLabel = !tfs.length ? `${MODES[mode].label} (all timeframes)` : tfs.length === 1 ? TF_NAME[tfs[0]] : `Avg ${tfs.join("+")}`;
   const secRows = data ? (data.sectors || {})[panelTf] || [] : [], indRows = data ? (data.industries || {})[panelTf] || [] : [];
   const PAGE = 50, pages = Math.max(1, Math.ceil(sorted.length / PAGE));
   // removing a sector also removes its industries; clearing all sectors clears the industries
@@ -607,7 +686,7 @@ function Home({ me, onOut }) {
     ? { industries: v.length ? p.industries.filter(i => stocks.some(s => s.ind === i && v.includes(s.sec))) : [] } : {}) }));
   const pick = (k, v) => setK(k, f[k].includes(v) ? f[k].filter(x => x !== v) : [...f[k], v]);
   const toggleTf = t => setTfs(p => p.includes(t) ? p.filter(x => x !== t) : "DWMQY".split("").filter(x => x === t || p.includes(x)));
-  const setTrend = t => { setK("trend", t); if (t === "down") setSort("down"); else if (t === "up") setSort("up"); };
+  const setTrend = t => { setK("trend", t); if (t === "down") setSort("down"); else if (t === "up") setSort("best"); };
   const active = f.sectors.length || f.industries.length || f.sizes.length || f.bg.length || f.fno || f.trend !== "all" || tfs.length;
   const scope = tfs.length ? (tfs.length === 1 ? TF_NAME[tfs[0]] : `all of ${tfs.join(" · ")}`) : "combined";
 
@@ -633,9 +712,11 @@ function Home({ me, onOut }) {
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
       {view === "tower" && <>
       <div className="fbar">
-        <div className="fg"><span className="fl">Timeframe <Info text="Combined = all five timeframes together. Pick one timeframe, or several (they must all agree for Uptrend / Downtrend)."/></span>
-          <Seg items={[["A","Combined",null,"All five timeframes together"], ...TFS.map(([k, l]) => [k, k, null, l])]} isOn={k => k === "A" ? !tfs.length : tfs.includes(k)}
-            onPick={k => k === "A" ? setTfs([]) : toggleTf(k)}/></div>
+        <div className="fg"><span className="fl">Timeframe <Info text="Pick your trading style — it blends all five timeframes with the right weights: Balanced = all equal · Swing = Monthly & Quarterly count most · Investing = Quarterly & Yearly count most. Or pick D / W / M / Q / Y to look at single timeframes only (several = they must all agree)."/></span>
+          <Seg items={[...Object.entries(MODES).map(([k, m]) => [`mode:${k}`, m.short, null, `${m.label}: ${m.hint} — ${Object.entries(weightPct(m.w)).map(([t, p]) => `${t} ${p}%`).join(" · ")}`]),
+                       ...TFS.map(([k, l]) => [k, k, "tf", `${l} only`])]}
+            isOn={k => k.startsWith("mode:") ? !tfs.length && mode === k.slice(5) : tfs.includes(k)}
+            onPick={k => { if (k.startsWith("mode:")) { setMode(k.slice(5)); setTfs([]); } else toggleTf(k); }}/></div>
         <div className="fg"><span className="fl">Trend <Info text="Uptrend / Downtrend = direction on the chosen timeframe(s). Sideways = no clear direction. Bidirectional = up on some timeframes and down on others."/></span>
           <Seg items={[["all","All"],["up","▲ Up","up"],["down","▼ Down","down"],["side","◆ Sideways","flat"],["bi","⇅ Bidirectional","bi"]]} isOn={k => f.trend === k} onPick={setTrend}/></div>
         <div className="fg"><span className="fl">Market cap</span>
@@ -646,7 +727,7 @@ function Home({ me, onOut }) {
           <Seg items={[["fno","F&O only","up"]]} isOn={() => f.fno} onPick={() => setK("fno", !f.fno)}/></div>
         <div className="fg grow"><span className="fl">Sector</span><MultiSelect label="sectors" options={sectorOpts} value={f.sectors} onChange={v => setK("sectors", v)} width={138}/></div>
         <div className="fg grow"><span className="fl">Industry</span><MultiSelect label="industries" options={industryOpts} value={f.industries} onChange={v => setK("industries", v)} width={150}/></div>
-        {active ? <button className="reset" onClick={() => { setF(EMPTY); setTfs([]); setSort("up"); }} title="Clear every filter">✕ Reset</button> : null}
+        {active ? <button className="reset" onClick={() => { setF(EMPTY); setTfs([]); setSort("best"); }} title="Clear every filter">✕ Reset</button> : null}
       </div>
 
       {err && <div className="card empty">{err}</div>}
@@ -674,7 +755,7 @@ function Home({ me, onOut }) {
             <div className="t-tools">
               <input className="search" placeholder="Search a stock" value={q} onChange={e => setQ(e.target.value)} aria-label="Search"/>
               <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
-                <option value="up">Strongest uptrend first</option><option value="down">Strongest downtrend first</option>
+                <option value="best">Best uptrend first (reliable, not stretched)</option><option value="up">Strongest uptrend first</option><option value="down">Strongest downtrend first</option>
                 <option value="change">Biggest gain today</option><option value="name">Name A–Z</option>
               </select>
               <span className="tcopy"><span className="lbl">Ticker copy · {sorted.length}</span><CopyBtns syms={sorted.map(s => s.s)}/></span>
@@ -693,7 +774,7 @@ function Home({ me, onOut }) {
                 {sorted.slice(page * PAGE, page * PAGE + PAGE).map((s, i) => { const v = focusOf(s, tfs), d = focusDir(s, tfs), cat = categoryOf(s, tfs); return (
                   <tr key={s.s} onClick={() => setOpen(s)} tabIndex={0} onKeyDown={e => e.key === "Enter" && setOpen(s)}>
                     <td className="mono dim">{page * PAGE + i + 1}</td>
-                    <td><span className="sym">{s.s}</span>{s.f ? <span className="fno">F&amp;O</span> : null}{isBi(s, []) && <span className="bi-tag" title="Uptrend on some timeframes, downtrend on others">⇅</span>}<div className="sub">{s.n} · {sizeOf(s)}</div></td>
+                    <td><span className="sym">{s.s}</span>{s.f ? <span className="fno">F&amp;O</span> : null}{s.x ? <span className="stretch-tag sm" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase.">🔥</span> : null}{isBi(s, []) && <span className="bi-tag" title="Uptrend on some timeframes, downtrend on others">⇅</span>}<div className="sub">{s.n} · {sizeOf(s)}</div></td>
                     <td className="hide-sm"><span className="sec" style={{ color:colorOf(s.sec) }}>● {s.sec}</span><div className="sub">{s.ind}</div></td>
                     <td className="num mono">₹{s.p}{s.c != null && <div className={`small ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}%</div>}</td>
                     <td>{cat ? <span className={`dirtag ${CAT[cat][1]}`}>{CAT[cat][0]}</span> : <span className="dim">—</span>}</td>
@@ -711,7 +792,7 @@ function Home({ me, onOut }) {
       </>}
 
       <footer><p className="fine">{DISCLAIMER}</p><p className="fine">© {new Date().getFullYear()} QuantFriday · Hyperplane</p></footer>
-      {open && <StockCard key={open.s} s={open} data={data} onOpen={setOpen} onClose={() => setOpen(null)}/>}
+      {open && <StockCard key={open.s} s={(data && data.stocks.find(x => x.s === open.s)) || open} data={data} onOpen={setOpen} onClose={() => setOpen(null)}/>}
     </div>
   );
 }
@@ -789,8 +870,14 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .agree.on{border-color:var(--acc);background:var(--adim)}.agree input{width:22px;height:22px;flex-shrink:0;margin:1px 0 0;accent-color:#00e5ff;cursor:pointer}.agree b{color:var(--t1);font-size:12.5px}
 .switch{font-size:13px;text-align:center;color:var(--t2)}
 /* page */
-.page{max-width:1380px;margin:0 auto;padding:0 20px 30px}
-.tabs{display:flex;gap:4px;margin:12px 0 0;border-bottom:1px solid var(--b1)}.tabs button{position:relative;display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border:0;border-bottom:2px solid transparent;background:none;color:var(--t2);font-size:13px;font-weight:600;margin-bottom:-1px}.tabs button:hover{color:var(--t1)}.tabs button.on{color:var(--acc);border-bottom-color:var(--acc)}.bgtag{font-weight:700}.bgtag.S{color:var(--long)}.bgtag.M{color:var(--mixed)}.bgtag.W{color:var(--short)}
+.page{max-width:1440px;margin:0 auto;padding:0 20px 30px}
+.tabs{display:flex;gap:4px;margin:12px 0 0;border-bottom:1px solid var(--b1)}.tabs button{position:relative;display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border:0;border-bottom:2px solid transparent;background:none;color:var(--t2);font-size:13px;font-weight:600;margin-bottom:-1px}.tabs button:hover{color:var(--t1)}.tabs button.on{color:var(--acc);border-bottom-color:var(--acc)}.sg button.tf:nth-child(4){border-left:2px solid var(--b2)}
+.modebar{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;margin:12px 0 0;padding:8px 12px;border:1px solid var(--b1);border-radius:10px;background:var(--s1)}
+.modebar .fl{height:auto}.mode-w{display:inline-flex;gap:6px;font:600 11px var(--mono);color:var(--t3)}.mode-w span{padding:2px 6px;border-radius:5px;background:var(--s2);border:1px solid var(--b1)}
+.mode-w .hi{color:var(--acc);border-color:var(--accb);background:var(--adim)}.mode-w .off{opacity:.45}.mode-hint{font-size:11.5px;color:var(--t2)}
+.modebar+.fbar{margin-top:8px}
+.stretch-tag{font-weight:700;color:#ff7a1a}.stretch-tag.sm{margin-left:5px;font-size:12px;cursor:help}
+.bgtag{font-weight:700}.bgtag.S{color:var(--long)}.bgtag.M{color:var(--mixed)}.bgtag.W{color:var(--short)}
 .brand-home{border:0;background:none;padding:0;text-align:left;color:inherit}
 .crumb{display:flex;align-items:center;gap:8px;margin:12px 0 0;font-size:12.5px}
 .crumb button{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border:1px solid var(--b2);border-radius:8px;background:var(--s2);color:var(--t2);font-weight:600}
@@ -817,7 +904,7 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .fbar{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 14px;padding:9px 12px;margin:12px 0 12px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--b1);border-radius:10px}
 .fg{display:flex;flex-direction:column;gap:5px}.fl{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--t2);text-transform:uppercase;letter-spacing:.9px;font-weight:700;height:13px}
 .sg{display:inline-flex;border:1px solid var(--b2);border-radius:6px;overflow:hidden;background:var(--s2);height:27px}
-.sg button{background:transparent;border:0;border-right:1px solid var(--b2);padding:0 8px;font-size:11px;font-weight:600;color:var(--t2);white-space:nowrap}
+.sg button{background:transparent;border:0;border-right:1px solid var(--b2);padding:0 7px;font-size:11px;font-weight:600;color:var(--t2);white-space:nowrap}
 .sg button:last-child{border-right:0}.sg button:hover{color:var(--t1);background:var(--hover)}
 .sg button.on{background:var(--adim);color:var(--acc)}.sg button.on.up{background:var(--longd);color:var(--long)}.sg button.on.down{background:var(--shortd);color:var(--short)}.sg button.on.bi{background:var(--retd);color:var(--ret)}.sg button.on.side{background:var(--mixedd);color:var(--mixed)}.sg button.on.flat{background:rgba(106,134,166,.16);color:var(--t1)}
 .reset{margin-left:auto;height:27px;padding:0 12px;border:1px solid var(--b2);border-radius:6px;background:transparent;color:var(--t2);font-size:11.5px;font-weight:600}.reset:hover{border-color:var(--short);color:var(--short)}
@@ -875,7 +962,12 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 .x{position:absolute;top:10px;right:12px;background:none;border:0;font-size:18px;color:var(--t2)}
 .m-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding-right:26px}.m-name{font-size:19px;font-weight:800}.m-price{text-align:right;font-weight:700;font-size:16px}.m-price div+div{font-size:12px}
 .m-overall{display:grid;grid-template-columns:auto auto 1fr;gap:16px;align-items:center;margin:14px 0 10px;padding:12px 14px;border-radius:10px;background:var(--s1);border:1px solid var(--b1)}
-.mo-cell{display:flex;flex-direction:column;gap:5px;align-items:flex-start}.mo-sum{grid-column:1/-1;font-size:12.5px;color:var(--t1);line-height:1.5;border-top:1px solid var(--b1);padding-top:10px;display:flex;flex-direction:column;gap:5px}.mo-sum>.lbl{display:flex;align-items:center;gap:5px;margin-bottom:2px}.cv-row{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px;align-items:baseline}.cv-k{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--t3);font-weight:700}.cv-st{font-weight:700}.cv-st.up{color:var(--long)}.cv-st.down{color:var(--short)}.cv-st.side{color:var(--mixed)}.cv-say{margin-top:4px;padding:8px 11px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);border-left:3px solid var(--b2)}.cv-say.good{border-left-color:var(--long)}.cv-say.warn{border-left-color:var(--mixed)}.cv-say.bad{border-left-color:var(--short)}.cv-say.watch{border-left-color:var(--acc)}.cv-verdict{justify-self:end;align-self:center;font-size:12.5px;font-weight:700;padding:6px 12px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);color:var(--t1);white-space:nowrap}.cv-verdict.good{color:var(--long);border-color:rgba(0,200,150,.45);background:var(--longd)}.cv-verdict.warn{color:var(--mixed);border-color:rgba(255,170,0,.45);background:var(--mixedd)}.cv-verdict.bad{color:var(--short);border-color:rgba(255,68,84,.45);background:var(--shortd)}.cv-verdict.watch{color:var(--acc);border-color:var(--accb);background:var(--adim)}.cv-verdict.mid{color:var(--t2)}
+.mo-cell{display:flex;flex-direction:column;gap:5px;align-items:flex-start}.mo-sum{grid-column:1/-1;font-size:12.5px;color:var(--t1);line-height:1.5;border-top:1px solid var(--b1);padding-top:10px;display:flex;flex-direction:column;gap:5px}.mo-sum>.lbl{display:flex;align-items:center;gap:5px;margin-bottom:2px}.cv-row{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px;align-items:baseline}.cv-k{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--t3);font-weight:700}.cv-st{font-weight:700}.cv-st.up{color:var(--long)}.cv-st.down{color:var(--short)}.cv-st.side{color:var(--mixed)}.ai-h{display:flex;align-items:center;gap:6px}.ai-spark{color:#a78bfa;font-size:12px;filter:drop-shadow(0 0 4px rgba(167,139,250,.6))}
+.ai-box{margin-top:6px;display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:9px;border:1px solid var(--b2);background:var(--s2);border-left:3px solid #a78bfa}
+.ai-l{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px;font-size:12.5px;line-height:1.5}.ai-l b{font-size:11.5px;white-space:nowrap}
+.ai-l.good b{color:var(--long)}.ai-l.bad b{color:var(--mixed)}.ai-l.focus b{color:#a78bfa}.ai-l.focus span{font-weight:600;color:var(--t1)}
+@media (max-width:640px){.ai-l{grid-template-columns:1fr;gap:1px}}
+.cv-say{margin-top:4px;padding:8px 11px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);border-left:3px solid var(--b2)}.cv-say.good{border-left-color:var(--long)}.cv-say.warn{border-left-color:var(--mixed)}.cv-say.bad{border-left-color:var(--short)}.cv-say.watch{border-left-color:var(--acc)}.cv-verdict{justify-self:end;align-self:center;font-size:12.5px;font-weight:700;padding:6px 12px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);color:var(--t1);white-space:nowrap}.cv-verdict.good{color:var(--long);border-color:rgba(0,200,150,.45);background:var(--longd)}.cv-verdict.warn{color:var(--mixed);border-color:rgba(255,170,0,.45);background:var(--mixedd)}.cv-verdict.bad{color:var(--short);border-color:rgba(255,68,84,.45);background:var(--shortd)}.cv-verdict.watch{color:var(--acc);border-color:var(--accb);background:var(--adim)}.cv-verdict.mid{color:var(--t2)}
 .dirtag{font:700 11px var(--mono);padding:4px 9px;border-radius:5px;white-space:nowrap}.dirtag.sm{font-size:10px;padding:3px 7px;text-align:center}
 .dirtag.up{background:var(--longd);color:var(--long)}.dirtag.down{background:var(--shortd);color:var(--short)}.dirtag.side{background:rgba(106,134,166,.12);color:var(--t2)}.dirtag.bi{background:var(--retd);color:var(--ret)}
 .grp-w{font-size:10.5px;color:var(--t2)}
@@ -893,7 +985,7 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 .m-copy{margin-top:8px}
 .m-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0}
 footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
-@media (min-width:1300px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
+@media (min-width:1480px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
 @media (max-width:900px){.top .tabs{order:5;width:100%;margin:0 0 8px}.top .tabs button{flex:1;justify-content:center}.auth-page{grid-template-columns:1fr}.hero{padding:30px 22px;border-right:0;border-bottom:1px solid var(--b1)}.hero-h{font-size:28px}.hero-demo{display:none}.panels{grid-template-columns:1fr}.m-overall{grid-template-columns:auto auto}.cv-verdict{grid-column:1/-1;justify-self:start;white-space:normal}}
 @media (max-width:640px){.auth-page .feats,.auth-page .hero-fine{display:none}.hero-p{font-size:13.5px}.hero{gap:10px}.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
 `;

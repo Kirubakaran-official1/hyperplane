@@ -86,13 +86,17 @@ const SECTIONS = [
       <tr><td><b>Monthly</b></td><td>Several months. For positional traders.</td></tr>
       <tr><td><b>Quarterly</b></td><td>About a year or more. For investors.</td></tr>
       <tr><td><b>Yearly</b></td><td>The long-term picture over years.</td></tr>
-      <tr><td><b>Combined</b></td><td>All five blended into one number — the overall picture.</td></tr>
+      <tr><td><b>Balanced · Swing · Investing</b></td><td>All five blended into one number for your trading style — Balanced: all equal ·
+        Swing: Monthly &amp; Quarterly count most (D 10 · W 20 · M 30 · Q 30 · Y 10 %) · Investing: Quarterly &amp; Yearly count most (D 0 · W 5 · M 15 · Q 40 · Y 40 %).</td></tr>
     </tbody></table>
     <h3>Stock reliability</h3>
     <p>How healthy and steady the stock's longer-term price history is. <b>Strong</b> = healthy and steady,
       <b> Moderate</b> = average, <b>Weak</b> = poor or erratic (big gaps, unstable). Prefer <b>Strong</b>.
       A stock that <b>crashed 80–90% or more</b> in the past, or that has <b>shot up many times from its lows</b> in the last
       few years, is marked Moderate or Weak — even if its price looks fine today. Such stocks can swing wildly.</p>
+    <p><b>🔥 Stretched</b> — the stock has run up <b>3× or more in about a year</b> (for example ₹100 → ₹1,000). A big winner,
+      but prices this stretched often fall back sharply. It is shown with a 🔥, its reliability is lowered, and it is
+      never called a “best case” — <b>don't chase it</b>; wait for it to cool down.</p>
     <h3>Sector and industry</h3>
     <p>A <b>sector</b> is a big group (for example Bank, IT, Healthcare). An <b>industry</b> is a smaller group inside it
       (for example Pharmaceuticals inside Healthcare). Stocks in the same group usually move together.</p>
@@ -105,16 +109,27 @@ const SECTIONS = [
   </> },
 
   { id: "filters", t: "The filter bar", body: <>
-    <p>The bar at the top of the Control Tower narrows down what you see. Filters work together (all of them must match).</p>
+    <p>The filter bar at the top of the Control Tower narrows down what you see. Filters work together (all of them must match).</p>
     <table className="g-table"><tbody>
-      <tr><td><b>Timeframe</b></td><td><i>Combined</i> = the overall picture. Pick <b>one</b> timeframe (e.g. W) to see only that one.
-        Pick <b>several</b> (e.g. D + W) and a stock counts as an uptrend only if it is up on <b>all</b> of them.</td></tr>
+      <tr><td><b>Timeframe · style</b><span className="g-sub">Balanced · Swing · Investing</span></td>
+        <td>Start here. Pick your <b>trading style</b> — it blends <b>all five timeframes</b> into one number, giving more weight to the
+          ones that matter for how long you hold (see the table below). The whole page — list, tiles, charts and stock card — follows it.</td></tr>
+      <tr><td><b>Timeframe · one</b><span className="g-sub">D · W · M · Q · Y</span></td>
+        <td>Pick a single timeframe to see <b>only that one</b> — for example <b>W</b> shows the weekly trend alone. The style switches off.</td></tr>
+      <tr><td><b>Timeframe · several</b><span className="g-sub">e.g. D + W</span></td>
+        <td>Pick more than one. A stock counts as an uptrend <b>only if it is up on all of them</b> — a stricter check.</td></tr>
       <tr><td><b>Trend</b></td><td>All, ▲ Up, ▼ Down, ◆ Sideways or ⇅ Bidirectional on the chosen timeframe(s). Up / Down also sorts the list for you.</td></tr>
       <tr><td><b>Market cap</b></td><td>Large, Mid, Small, Others — pick one or more.</td></tr>
       <tr><td><b>Stock reliability</b></td><td>Strong, Moderate, Weak — pick one or more.</td></tr>
       <tr><td><b>Segment</b></td><td>F&amp;O only — just stocks that trade in futures &amp; options.</td></tr>
       <tr><td><b>Sector / Industry</b></td><td>Pick one or more from the list (or click bubbles in the charts). Removing a sector also removes its industries.</td></tr>
       <tr><td><b>✕ Reset</b></td><td>Clears every filter at once.</td></tr>
+    </tbody></table>
+    <h3>How much each timeframe counts in each style</h3>
+    <table className="g-table g-weights"><thead><tr><th>Style</th><th>D</th><th>W</th><th>M</th><th>Q</th><th>Y</th><th>Best for</th></tr></thead><tbody>
+      <tr><td><b>Balanced</b></td><td>20%</td><td>20%</td><td>20%</td><td>20%</td><td>20%</td><td>a general, all-round view</td></tr>
+      <tr><td><b>Swing</b></td><td>10%</td><td>20%</td><td className="hi">30%</td><td className="hi">30%</td><td>10%</td><td>swing &amp; positional trades — weeks to months</td></tr>
+      <tr><td><b>Investing</b></td><td>0%</td><td>5%</td><td>15%</td><td className="hi">40%</td><td className="hi">40%</td><td>holding for a year or more</td></tr>
     </tbody></table>
     <Tip title="Each filter has an ⓘ">Hover or tap the small ⓘ next to a name for a one-line reminder.</Tip>
   </> },
@@ -158,7 +173,8 @@ const SECTIONS = [
       <tr><td><b>Ticker copy</b></td><td><b>⎘</b> copies the symbol, <b>TV</b> copies it in TradingView format.</td></tr>
     </tbody></table>
     <ul>
-      <li><b>Search</b> by symbol or name; <b>sort</b> by strongest uptrend, strongest downtrend, biggest gain today or name.</li>
+      <li><b>Search</b> by symbol or name. The default sort, <b>Best uptrend first</b>, puts reliable, not-stretched uptrends at the
+        top; you can also sort by pure strongest uptrend, strongest downtrend, biggest gain today or name.</li>
       <li><b>Ticker copy · N</b> (top right of the table) copies <b>every stock in your current list</b>: <i>Copy</i> gives
         <code>A,B,C</code>; <i>TV</i> gives <code>NSE:A,NSE:B,</code> — paste it into a TradingView watchlist.</li>
       <li>Click any row to open the <b>stock card</b>.</li>
@@ -171,7 +187,8 @@ const SECTIONS = [
         <b> Copy &lt;symbol&gt;</b> to copy just this stock.</li>
       <li><b>Combined trend strength</b> — the overall strength with a word (e.g. “Strong uptrend”), the <b>Direction</b>
         (one-directional up / down, or bidirectional) and a one-line summary in plain words.</li>
-      <li><b>Combined view</b> — the stock, its <b>sector</b> and its <b>industry</b> read together, with a verdict:
+      <li><b>AI insights</b> — the stock, its <b>sector</b> and its <b>industry</b> read together, three short lines
+        (<b>Good</b> · <b>Watch out</b> · <b>Focus</b>) and a verdict:
         <b> ✓ Best case</b> (all three strong), <b>⚠ Careful</b> (strong stock, weak group), <b>◐ Okay</b> (group only average),
         <b> 👁 Watch</b> (strong group, but the stock is weak or only moderate) or <b>✕ Avoid for buying</b>. A group counts as strong when it ranks in the
         top quarter (or is above 55%), and weak when it is in the bottom half and under 45%.</li>
@@ -204,7 +221,7 @@ const SECTIONS = [
     <Tip kind="rule" title="6 · Sideways means no edge">If the trend is sideways on your timeframe, skip it — there are better candidates.</Tip>
     <Tip kind="rule" title="7 · Respect the market mood">When downtrends far outnumber uptrends in the tiles, be pickier and trade smaller.</Tip>
     <Tip kind="rule" title="8 · Strength is not a target — don't chase">A very strong trend is a reason to look, not a reason to buy at any price.
-      Plan your entry on the chart.</Tip>
+      A stock marked <b>🔥 Stretched</b> (3× or more in a year) can fall sharply at any time. Plan your entry on the chart.</Tip>
     <Tip kind="rule" title="9 · Always manage risk">Decide your stop-loss and position size before you enter. Hyperplane shows where the strength
       is — your plan protects your capital.</Tip>
   </> },
@@ -212,16 +229,16 @@ const SECTIONS = [
   { id: "example", t: "Examples — finding ideas in 2 minutes", must: true, body: <>
     <h3>A swing trader (holds for weeks)</h3>
     <ol className="g-steps">
-      <li>Timeframe: pick <b>W</b> and <b>M</b>. Trend: <b>▲ Up</b>. Stock reliability: <b>Strong</b>.</li>
+      <li>Timeframe: pick <b>Swing</b>. Trend: <b>▲ Up</b>. Stock reliability: <b>Strong</b>.</li>
       <li>In the sector chart, click the 2–3 bubbles highest and furthest right.</li>
       <li>In the industry chart, click the strongest industries of those sectors.</li>
-      <li>The list now shows strong stocks, in strong industries, in strong sectors, up on both Weekly and Monthly.</li>
+      <li>The list now shows strong stocks, in strong industries, in strong sectors, weighted for swing trading (Monthly and Quarterly count most).</li>
       <li>Open the top few cards, check the sector &amp; industry ranks, then <b>Ticker copy · N → TV</b> and paste into TradingView.</li>
     </ol>
     <h3>An investor (holds for months or years)</h3>
     <ol className="g-steps">
-      <li>Timeframe: <b>Q</b> and <b>Y</b>. Trend: <b>▲ Up</b>. Market cap: <b>Large</b> and <b>Mid</b>. Reliability: <b>Strong</b>.</li>
-      <li>Pick sectors that are strong on <b>Combined</b> as well — long-term leaders.</li>
+      <li>Timeframe: <b>Investing</b>. Trend: <b>▲ Up</b>. Market cap: <b>Large</b> and <b>Mid</b>. Reliability: <b>Strong</b>.</li>
+      <li>Use the <b>Investing</b> style in the Timeframe filter — it gives Quarterly and Yearly the most weight.</li>
       <li>Shortlist stocks that are not <b>⇅ Bidirectional</b>, then study the businesses.</li>
     </ol>
     <h3>Spotting what to avoid</h3>
@@ -318,6 +335,9 @@ export const GUIDE_CSS = `
 .g-table{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:13px}.g-table td,.g-table th{padding:8px 10px;border-bottom:1px solid var(--b1);vertical-align:top;text-align:left}
 .g-table td:first-child{width:190px;white-space:nowrap}.g-table th{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3)}
 .g-matrix td:first-child,.g-matrix td:nth-child(2){width:130px}
+.g-sub{display:block;font-size:11px;font-weight:500;color:var(--t3);margin-top:2px}
+.g-weights td,.g-weights th{text-align:center}.g-weights td:first-child,.g-weights th:first-child,.g-weights td:last-child,.g-weights th:last-child{text-align:left}
+.g-weights td:first-child{width:110px}.g-weights td.hi{color:var(--acc);font-weight:700;background:var(--adim)}
 .g-note{border:1px solid var(--b2);border-left:3px solid var(--acc);border-radius:9px;padding:10px 14px;margin:10px 0;background:var(--s2)}
 .g-note-t{font-weight:700;margin-bottom:2px;color:var(--t1)}.g-note.warn{border-left-color:var(--mixed)}.g-note.rule{border-left-color:var(--long)}
 .g-quad{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;gap:6px 8px;margin:12px 0}

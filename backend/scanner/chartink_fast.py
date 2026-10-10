@@ -143,6 +143,11 @@ HEALTH_CRASH_RECENT_YEARS = 5
 HEALTH_CRASH_WEAK_PCT = 80
 HEALTH_ROUNDTRIP_X = 10
 HEALTH_RUNUP_WEAK_X = 8
+# Stretched / parabolic: price ÷ lowest monthly low of the last 12 months (owner's STLTECH example 2026-10-10:
+# ~100 → ~1,000 in a year — "anytime it will come down, not proper growth"). On 6 Oct data 72 of 2,658 stocks were
+# ≥ 3x and 9 were ≥ 5x their 1-year low.
+HEALTH_STRETCH_WEAK_X = 3        # ≥ 3x in a year  → WEAK ("stretched")
+HEALTH_STRETCH_POOR_X = 5        # ≥ 5x in a year  → POOR ("parabolic")
 
 # ---------------------------------------------------------------- FAILED NR / TRAP (Failed_NR sheet) --
 #   Same mother candle as NR (NR_MOTHER_BODY_PCT), then:
@@ -3456,6 +3461,7 @@ def build_price_health_rows(frame, zone_rows):
     H = x.ohlc_matrix('y', 'high')
     L = x.ohlc_matrix('y', 'low')
     C = x.ohlc_matrix('y', 'close')
+    ML = x.ohlc_matrix('m', 'low')          # this month + the last 12 months
     idx = {sym: i for i, sym in enumerate(frame['symbol'].tolist())}
     out = []
     for z in zone_rows:
@@ -3489,6 +3495,8 @@ def build_price_health_rows(frame, zone_rows):
         lows3 = L[i, :4]
         low3 = float(np.nanmin(lows3)) if not np.isnan(lows3).all() else np.nan
         run_up = c / low3 if low3 > 0 else None
+        mlows = ML[i][ML[i] > 0]
+        run_1y = c / float(mlows.min()) if mlows.size else None
         crash_txt = (f"crashed {-crash:.0f}% ({crash_from:,.2f} → {crash_to:,.2f}, "
                      f"{'this year' if crash_bar == 0 else f'{crash_bar} year' + ('s' if crash_bar > 1 else '') + ' ago'})") if crash_bar is not None else ""
 
@@ -3500,6 +3508,8 @@ def build_price_health_rows(frame, zone_rows):
             poor.append(crash_txt)
         elif crash <= -HEALTH_CRASH_WEAK_PCT and run_up is not None and run_up >= HEALTH_ROUNDTRIP_X:
             poor.append(f"{crash_txt}, then {run_up:.0f}x from its 3-year low")
+        if run_1y is not None and run_1y >= HEALTH_STRETCH_POOR_X:
+            poor.append(f"parabolic: {run_1y:.1f}x its 1-year low — very stretched, sharp falls are common")
         if poor:
             status, reasons = 'POOR', poor
         else:
@@ -3511,6 +3521,8 @@ def build_price_health_rows(frame, zone_rows):
                 reasons.append(crash_txt)
             if run_up is not None and run_up >= HEALTH_RUNUP_WEAK_X:
                 reasons.append(f"{run_up:.0f}x its 3-year low — a very fast run-up")
+            if run_1y is not None and run_1y >= HEALTH_STRETCH_WEAK_X:
+                reasons.append(f"stretched: {run_1y:.1f}x its 1-year low")
             status = 'WEAK' if reasons else 'HEALTHY'
         out.append({
             'Symbol': z['Symbol'], 'Stock_Name': z['Stock_Name'], 'Sector': z['Sector'], 'Industry': z['Industry'],
@@ -3519,7 +3531,8 @@ def build_price_health_rows(frame, zone_rows):
             'Drawdown_From_Peak_Pct': _r2(dd),
             f'Return_{HEALTH_WEAK_YEARS}Y_Pct': _r2(r_old), 'Return_3Y_Pct': _r2(r3),
             'Worst_Crash_Pct': _r2(crash) if crash_bar is not None else None, 'Worst_Crash_Years_Ago': crash_bar,
-            'Run_Up_From_3Y_Low_X': _r2(run_up),
+            'Run_Up_From_3Y_Low_X': _r2(run_up), 'Run_Up_1Y_X': _r2(run_1y),
+            'Stretched': 'Yes' if run_1y is not None and run_1y >= HEALTH_STRETCH_WEAK_X else 'No',
             'Years_Of_History': years,
             'Reason': '; '.join(reasons) if reasons else 'price holds up well against its history',
             'Is_FNO': z['Is_FNO'], 'Is_Nifty_500': z['Is_Nifty_500'],

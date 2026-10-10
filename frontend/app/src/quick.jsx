@@ -46,8 +46,9 @@ export function QuickGuideButton({ onDocs }) {
                 {[["D", "Daily", "days"], ["W", "Weekly", "weeks"], ["M", "Monthly", "months"], ["Q", "Quarterly", "about a year"], ["Y", "Yearly", "years"]].map(([k, l, s]) =>
                   <div key={k}><b>{k}</b><span>{l}</span><small>{s}</small></div>)}
               </div>
-              <p>Every <b>stock</b>, every <b>industry</b> and every <b>sector</b> is checked on all five. <b>Combined</b> = all five together.
-                Use the ones that match how long you hold.</p>
+              <p>Every <b>stock</b>, every <b>industry</b> and every <b>sector</b> is checked on all five. In the <b>Timeframe</b> filter, pick your style:
+                <b>Swing</b> gives Monthly &amp; Quarterly the most weight, <b>Investing</b> gives Quarterly &amp; Yearly the most,
+                <b>Balanced</b> treats all five the same. Or pick D / W / M / Q / Y to see one timeframe alone.</p>
             </section>
 
             <section>
@@ -66,7 +67,8 @@ export function QuickGuideButton({ onDocs }) {
                   </div>
                 ))}
               </div>
-              <p className="qg-tip">💡 You don't have to work this out yourself — click any stock and its <b>Combined view</b> shows this verdict.</p>
+              <p className="qg-tip">💡 You don't have to work this out yourself — click any stock and its <b>AI insights</b> show this verdict.
+                A <b>🔥 Stretched</b> stock (3× or more in a year) is never a best case — don't chase it.</p>
             </section>
 
             <section>
@@ -75,7 +77,7 @@ export function QuickGuideButton({ onDocs }) {
                 <li><b>Sector chart</b> (left): look at the <b>top-right</b> corner — <i>Strong + Uptrend</i>. Click one or two bubbles.</li>
                 <li><b>Industry chart</b> (right): it now shows only those sectors' industries. Again click the <b>top-right</b> ones.</li>
                 <li><b>Filters</b>: set <i>Trend</i> = <b>▲ Up</b> and <i>Stock reliability</i> = <b>Strong</b>. The list shows the strongest first.</li>
-                <li><b>Click a stock</b>: read its <b>Combined view</b>. <b>✓ Best case</b> = stock, industry and sector all agree.
+                <li><b>Click a stock</b>: read its <b>AI insights</b>. <b>✓ Best case</b> = stock, industry and sector all agree.
                   Then press <b>TV</b> to copy it to TradingView and check the chart yourself.</li>
               </ol>
             </section>

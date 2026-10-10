@@ -157,7 +157,7 @@ Zone vocabulary per timeframe (from raw-data-5): **top band** = `top_near .. top
 |---|---|
 | Zone_Levels | per stock: price, prev closes, per TF `{L}_Top_Zone/_Top_Near/_Bottom_Near/_Bottom_Zone/_Position/_Dist_Top_Pct/_Dist_Bottom_Pct`, Is_FNO, Is_Nifty_500 |
 | Return_Potential | monthly-zone breakout entry → Q/Y zone targets; stop = other edge of the monthly band; Status Triggered / Near Entry (≤ `NEAR_ENTRY_PCT`) / Waiting / Target Q/Y Hit |
-| Price_Health | long-term quality from yearly candles (current + 12 years): **POOR** > 70% below the peak, or crashed ≥ 90% with the bottom in the last 5 years, or a round trip (crashed ≥ 80% and now ≥ 10× its 3-year low — the owner's MBECL example 2026-10-04: 114 → 2 → 494) · **WEAK** > 50% below peak, lower than 5 years ago, crashed ≥ 80% at any time, or ≥ 8× its 3-year low · **HEALTHY** otherwise (`HEALTH_*` settings). Extra columns Worst_Crash_Pct, Worst_Crash_Years_Ago, Run_Up_From_3Y_Low_X. On 3 Oct data: Healthy 1,812 → 1,293 (customer Strong 1,405 → 1,088); HAL/BEL/SBIN/LT/TITAN stay Healthy; old crashes alone only give WEAK (unadjusted demergers, e.g. ADANIENT 2015). Thresholds chosen with the owner's example — tune in the scanner settings. |
+| Price_Health | long-term quality from yearly candles (current + 12 years): **POOR** > 70% below the peak, or crashed ≥ 90% with the bottom in the last 5 years, or a round trip (crashed ≥ 80% and now ≥ 10× its 3-year low — the owner's MBECL example 2026-10-04: 114 → 2 → 494) · **WEAK** > 50% below peak, lower than 5 years ago, crashed ≥ 80% at any time, or ≥ 8× its 3-year low · **HEALTHY** otherwise (`HEALTH_*` settings). Extra columns Worst_Crash_Pct, Worst_Crash_Years_Ago, Run_Up_From_3Y_Low_X. **Stretched** (owner's STLTECH case 2026-10-10, ~100 → ~1,000): Run_Up_1Y_X = price ÷ lowest monthly low of the last 12 months; ≥ 5x → POOR ("parabolic"), ≥ 3x → WEAK + column Stretched = Yes (6 Oct: 72 of 2,658 stocks ≥ 3x, 9 ≥ 5x). On 3 Oct data: Healthy 1,812 → 1,293 (customer Strong 1,405 → 1,088); HAL/BEL/SBIN/LT/TITAN stay Healthy; old crashes alone only give WEAK (unadjusted demergers, e.g. ADANIENT 2015). Thresholds chosen with the owner's example — tune in the scanner settings. |
 | Technicals | per stock: Price + `{TF}_RSI/_ADX/_BB_Upper/_BB_Lower/_MACD/_Supertrend/_CCI` (raw values; only written when the technicals scrape worked) |
 | Zone_Retest | see "Zone retest" above: per stock + TF + side, previous close vs previous bar's zone, current zone + band, `Dist_To_Zone_Edge_Pct`, Health |
 | Failed_NR | NR trap: after the mother, bar(s) closed beyond one edge (failed BO/BD), no close beyond the other edge, other bodies inside, latest close back inside and near the OPPOSITE edge (same 1.9/2 rule). Failed BO → LONG at mother Low (stop Low, target High); mirror SHORT. Biggest mother per stock+TF kept. |
@@ -313,6 +313,25 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   only (weak stock, strong group) / Avoid / No edge; bidirectional downgrades Best case. `groupState`: strong = st ≥ 55
   or rank in top 25 %, weak = st < 45 and rank in bottom 50 % (absolute-only made 22/25 top stocks "weak" in a weak
   market). Thresholds chosen by Claude — owner may tune.
+- Customer **Trading mode** (2026-10-10, `MODES` / `applyMode` in app main.jsx): MERGED into the Timeframe filter (owner found two
+  controls confusing): `Balanced | Swing | Investing ‖ D W M Q Y` — a style replaces the old "Combined" button and clears single
+  TFs; picking a TF switches the style off (tooltip shows the weights). Page max-width 1440 px; filter bar one line from 1480 px. Styles: Balanced
+  (D..Y equal, default) · Swing / Positional (1:2:3:3:1 → M & Q 30 % each) · Investing (0:0.5:1.5:4:4 → Q & Y 40 %).
+  `applyMode` rewrites every Combined number on the client: stock `os` = weighted mean of `sc`; sector / industry
+  "A" rows = weighted mean of their D..Y `st` and `nb` (n / sig / adv / dec / avg kept from the server's A row),
+  re-sorted for ranks. So list, sort, tiles, bubbles, stock card and AI insights all follow the mode. Picking single
+  timeframes in the filter ignores the mode. Stored per device (localStorage `qf_mode`). NOTE: the server's own `os`
+  still uses TF_WEIGHT 1:2:3:4:5 (only used for the published top 10); the admin dashboard is unchanged.
+- Customer stock card "AI insights" (2026-10-10, owner's name for it): header renamed from "Combined view"; the long
+  verdict text is replaced by three lines from `insightsOf()` — ✓ Good (uptrend on N of 5 TFs + strongest TF, strong
+  reliability, strong industry / sector rank, top-3 in industry) · ⚠ Watch out (stretched, reliability, downtrend /
+  disagreeing TFs, average / weak sector or industry with rank, short term cooling: Daily ≥ 30 pts below Weekly) ·
+  ◎ Focus (one sentence per verdict). Rule-based text from the published numbers — NOT a language model; no buy/sell words.
+- Customer stretched handling (2026-10-10): payload `x` = 1 when Price_Health Stretched = Yes → 🔥 tag in the master
+  table and on the stock card; `combinedView` verdict "⚠ Overheated — don't chase" for any stretched uptrend (overrides
+  Best case). Default master sort is now **Best uptrend first** (`sort = "best"`): uptrends first, then tier (Strong &
+  not stretched → Moderate → Weak or stretched), then strength; "Strongest uptrend first" (pure strength) still exists.
+  On 6 Oct data the pure sort had 5 stretched stocks in its top 10 (STLTECH #2); the best sort has none. Docs + quick guide explain 🔥.
 - Customer sign-up mode (2026-10-06): Admin → Customers → "New sign-ups" switch: Admin approves each (default) |
   Approve automatically. Stored in `portal_config` (key auto_approve) which hp_portal CANNOT read; it may only call
   `portal_auto_approve()` (SECURITY DEFINER, yes/no). A BEFORE INSERT trigger `customers_auto_approve` sets status
