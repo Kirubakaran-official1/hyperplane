@@ -252,7 +252,11 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   `nrStatesFor` + `s.mtnr`) · setups | technicals (top) · trade plan (Return_Potential / Failed_NR / Zone_Retest rows)
   · price health · industry peers (click = open that stock)). Score anatomy removed (owner). 2 columns ≤ 1180 px,
   1 scrolling column ≤ 760 px; Esc / ✕ / outside click closes. Props `db` + `list` (focus model list, for peers).
-  FocusCommandTab uses the shared opener from context, so only ONE report is ever open. The
+  FocusCommandTab uses the shared opener from context, so only ONE report is ever open.
+  Original stock pinned in peers (2026-10-11, owner; replaced the Back button): `useStockTrail` + `ReportBackCtx` keep
+  only the first stock opened from a page. Peer lists show the top 5 (customer) / top 6 (admin), then — with their
+  real rank — the current stock and that original stock (plain row, no tag) when outside the top;
+  clicking it goes back. Customer: Home `trail` = [origin] → StockCard `origin` prop; opening from the list starts fresh. The
   Control Tower provides its own `setOpenSym` so the report uses its filtered, multi-file model. Always render
   tickers with `SymCell` (or `FocusSym` inside Focus Command) so they stay clickable.
 - Control Tower sector panel is selectable (bubble or list row): the industry panel then shows only that sector's

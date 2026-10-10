@@ -558,7 +558,7 @@ function IndustryPanel({ rows, tfLabel, sectors, selected, onPick }) {
 }
 
 // ─── stock card ──────────────────────────────────────────────────────────────
-function StockCard({ s, data, onOpen, onClose }) {
+function StockCard({ s, data, onOpen, onClose, origin = null }) {
   useEffect(() => { const k = e => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
   const asOf = data && data.as_of;
   const rows = TFS.map(([k, l, hint], i) => ({ k, l, hint, v:s.sc[i], d:dirTf(s, i) }));
@@ -571,7 +571,10 @@ function StockCard({ s, data, onOpen, onClose }) {
   const ctx = (tf, ind) => { const list = ((ind ? data.industries : data.sectors) || {})[tf] || [];
     const i = list.findIndex(r => ind ? r.k === s.ind && r.sec === s.sec : r.k === s.sec);
     return i < 0 ? null : { ...list[i], rank:i + 1, of:list.length }; };
+  // top 5, then (with their real rank) this stock and the stock first opened from the list when they are outside the top 5
   const top = indPeers.slice(0, 5), showSelf = indRank > 5;
+  const originRank = origin && origin.s !== s.s ? indPeers.findIndex(x => x.s === origin.s) + 1 : 0;
+  const extraRows = [...(showSelf ? [[s, indRank]] : []), ...(originRank > 5 ? [[indPeers[originRank - 1], originRank]] : [])].sort((a, b) => a[1] - b[1]);
   const secA = data ? ctx("A", false) : null, indA = data ? ctx("A", true) : null;
   const view = combinedView(od, bi, secA, indA, s.os, !!s.x);
   const ai = s.os != null ? insightsOf(s, od, bi, secA, indA, view, indRank, indPeers.length) : null;
@@ -647,8 +650,9 @@ function StockCard({ s, data, onOpen, onClose }) {
         {indPeers.length > 1 && <div className="blk blk-peers">
           <div className="m-sec-t">Top {top.length} strongest in {s.ind} <span className="tcopy"><span className="lbl">Ticker copy · {top.length}</span><CopyBtns syms={top.map(x => x.s)} compact/></span></div>
           <div className="peers">
-            {[...top.map((p, i) => [p, i + 1]), ...(showSelf ? [[s, indRank]] : [])].map(([p, rk]) => (
-              <button key={p.s} type="button" className={`peer ${p.s === s.s ? "me" : ""} ${showSelf && p.s === s.s ? "gap" : ""}`} onClick={() => p.s !== s.s && onOpen(p)} title={p.s === s.s ? "This stock" : `Open ${p.n}`}>
+            {[...top.map((p, i) => [p, i + 1]), ...extraRows].map(([p, rk], i) => (
+              <button key={p.s} type="button" className={`peer ${p.s === s.s ? "me" : ""} ${i === top.length ? "gap" : ""}`} onClick={() => p.s !== s.s && onOpen(p)}
+                title={p.s === s.s ? "This stock" : `Open ${p.n}`}>
                 <span className="mono dim">#{rk}</span><span className="sym">{p.s}</span><span className="sub pn">{p.n}</span><Meter v={p.os} d={dirVal(p.os)} label="Combined"/>
               </button>))}
           </div>
@@ -674,7 +678,10 @@ function Home({ me, onOut }) {
   const data = useMemo(() => rawData && applyMode(rawData, mode), [rawData, mode]);
   const [f, setF] = useState(EMPTY); const [tfs, setTfs] = useState([]);
   const [q, setQ] = useState(""); const [sort, setSort] = useState("best"); const [page, setPage] = useState(0);
-  const [open, setOpen] = useState(null);
+  const [open, setOpenRaw] = useState(null); const [trail, setTrail] = useState([]);
+  const setOpen = st => { setTrail([]); setOpenRaw(st); };                       // from the list / close
+  // a peer inside the card: keep only the ORIGINAL stock to go back to (owner: back = the one I picked first)
+  const openFromCard = st => { const origin = trail[0] || open; setTrail(origin && origin.s !== st.s ? [origin] : []); setOpenRaw(st); };
   const [view, setView] = useState("tower"); const [hdReq, setHdReq] = useState(null);
   const hdApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); throw e; }), []);
   const unread = useHelpdeskUnread(hdApi, "/app/api/helpdesk");
@@ -822,7 +829,7 @@ function Home({ me, onOut }) {
       </>}
 
       <footer><p className="fine">{DISCLAIMER}</p><p className="fine">© {new Date().getFullYear()} QuantFriday · Hyperplane</p></footer>
-      {open && <StockCard key={open.s} s={(data && data.stocks.find(x => x.s === open.s)) || open} data={data} onOpen={setOpen} onClose={() => setOpen(null)}/>}
+      {open && <StockCard key={open.s} s={(data && data.stocks.find(x => x.s === open.s)) || open} data={data} onOpen={openFromCard} onClose={() => setOpen(null)} origin={trail[0] || null}/>}
     </div>
   );
 }
@@ -1018,6 +1025,7 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 .m-rows{display:flex;flex-direction:column;border:1px solid var(--b1);border-radius:10px;overflow:hidden;background:var(--s1)}
 .m-row{display:grid;grid-template-columns:110px minmax(0,1fr) 112px 86px;gap:12px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--b1)}.m-row:last-child{border-bottom:0}.m-l{display:flex;flex-direction:column}
 .m-copy{margin-top:8px}
+
 /* stock card: one screen on desktop (two columns), single column + scroll on phones */
 @media (min-width:1000px){
   .modal.stock{max-width:1240px;width:min(1240px,96vw);max-height:95vh;padding:16px 22px 12px}

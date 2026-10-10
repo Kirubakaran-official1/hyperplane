@@ -3505,6 +3505,23 @@ function ReportShell({ onClose, head, children }) {
     </div>
   );
 }
+// Opening a stock while a report is open remembers the ORIGINAL stock (the first one opened); the peers list keeps
+// it pinned with its real rank, so one click goes back to it
+const ReportBackCtx = React.createContext(null);
+function useStockTrail() {
+  const [st, setSt] = useState({ cur:null, trail:[] });
+  return {
+    sym: st.cur,
+    prev: st.trail[0] || null,
+    open: sym => setSt(p => {
+      if (sym == null) return { cur:null, trail:[] };
+      if (!p.cur) return { cur:sym, trail:[] };                       // opened from a page → fresh start
+      const origin = p.trail[0] || p.cur;
+      return { cur:sym, trail: origin !== sym ? [origin] : [] };      // from inside a report → keep the original only
+    }),
+    back: () => setSt(p => p.trail.length ? { cur:p.trail[0], trail:[] } : p),
+  };
+}
 const RCol = ({ children }) => <div className="rpt-col tower-scroll">{children}</div>;
 const RBlock = ({ icon, title, right, children }) => (
   <div className="rpt-b"><div className="rpt-bt"><span>{icon} {title}</span>{right}</div>{children}</div>
@@ -3692,20 +3709,24 @@ function RHealthBlock({ db, sym }) {
   );
 }
 
-// Strongest stocks of the same industry (click one to open its report)
+// Strongest stocks of the same industry (click one to open its report). Below the top 6, with their real rank:
+// this stock and the stock first opened from the page (when you moved on to a peer).
 function RPeersBlock({ list, sym, sector, industry }) {
+  const nav = React.useContext(ReportBackCtx);
   if (!list || !list.length) return null;
   const peers = list.filter(x=>x.sector===sector&&x.industry===industry).sort((a,b)=>b.score-a.score);
   if (peers.length < 2) return null;
-  const me = peers.findIndex(x=>x.symbol===sym), show = peers.slice(0,6);
-  if (me >= 6) show.push(peers[me]);
+  const origin = nav && nav.prev && nav.prev !== sym ? nav.prev : null;
+  const me = peers.findIndex(x=>x.symbol===sym), oi = origin ? peers.findIndex(x=>x.symbol===origin) : -1, show = peers.slice(0,6);
+  [me, oi].filter(i=>i>=6).sort((a,b)=>a-b).forEach(i=>show.push(peers[i]));
   return (
     <RBlock icon="👥" title={`Industry peers · ${me>=0?`#${me+1} of ${peers.length}`:`${peers.length} stocks`}`} right={<ListCopy symbols={peers.slice(0,6).map(x=>x.symbol)} compact/>}>
       {show.map(x=>{ const i = peers.indexOf(x);
         return (
-          <div key={x.symbol} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 4px",borderRadius:5,background:x.symbol===sym?"var(--adim)":"transparent"}}>
-            <span style={{width:22,fontSize:10,color:"var(--t3)",fontFamily:"var(--mono)"}}>#{i+1}</span>
-            <div style={{flex:1,minWidth:0}}><SymCell sym={x.symbol}/></div>
+          <div key={x.symbol} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 4px",borderRadius:5,background:x.symbol===sym?"var(--adim)":"transparent",
+            borderTop:i>=6&&show.indexOf(x)===6?"1px dashed var(--b2)":"none"}}>
+            <span style={{width:26,fontSize:10,color:"var(--t3)",fontFamily:"var(--mono)"}}>#{i+1}</span>
+            <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:6}}><SymCell sym={x.symbol}/></div>
             <span style={{fontSize:10,fontWeight:700,color:dirColor(x.dir)}}>{x.dir}</span>
             <span style={{width:28,textAlign:"right",fontFamily:"var(--mono)",fontSize:11,fontWeight:700,color:tierOf(x.score).color}}>{Math.round(x.score)}</span>
           </div>);
@@ -3836,7 +3857,7 @@ function NoSignalReport({ sym, db, list=null, onClose }) {
 
 // One report drawer shared by every tab: tickers (SymCell) inside open it
 function StockReportHost({ db, presence=null, nFiles=1, children }) {
-  const [sym, setSym] = useState(null);
+  const nav = useStockTrail(), sym = nav.sym, setSym = nav.open;
   const opened = sym != null;
   const bySym = useMemo(() => {
     if (!opened || !db) return {};
@@ -3846,7 +3867,7 @@ function StockReportHost({ db, presence=null, nFiles=1, children }) {
   return (
     <StockOpenCtx.Provider value={setSym}>
       {children}
-      {opened && db && (bySym[sym] ? <StockDeepDive s={bySym[sym]} db={db} list={Object.values(bySym)} onClose={close}/> : <NoSignalReport sym={sym} db={db} list={Object.values(bySym)} onClose={close}/>)}
+      {opened && db && <ReportBackCtx.Provider value={nav}>{bySym[sym] ? <StockDeepDive s={bySym[sym]} db={db} list={Object.values(bySym)} onClose={close}/> : <NoSignalReport sym={sym} db={db} list={Object.values(bySym)} onClose={close}/>}</ReportBackCtx.Provider>}
     </StockOpenCtx.Provider>
   );
 }
@@ -4577,7 +4598,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
     </div>) : null;
   const lock = f.dir==="ALL" ? null : f.dir;
   const lockLS = lock ? (lock==="LONG"?"L":"S") : null;
-  const [openSym, setOpenSym] = useState(null);
+  const stockNav = useStockTrail(), openSym = stockNav.sym, setOpenSym = stockNav.open;
 
   const totalN = Object.keys(attrs).length;
   const shownN = new Set([...dbDir.flat.map(r=>r.Symbol), ...(f.dir==="ALL"?(db.zoneLevels||[]).map(r=>r.Symbol):[])]).size;
@@ -4679,9 +4700,9 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
           <Anchor id="ct-watch"/>
           <WatchlistBuilder db={dbDirP}/>
         </div>
-        {openSym && (modelBySym[openSym]
+        {openSym && <ReportBackCtx.Provider value={stockNav}>{modelBySym[openSym]
           ? <StockDeepDive s={modelBySym[openSym]} db={db} list={model.list} onClose={()=>setOpenSym(null)}/>
-          : <NoSignalReport sym={openSym} db={db} list={model.list} onClose={()=>setOpenSym(null)}/>)}
+          : <NoSignalReport sym={openSym} db={db} list={model.list} onClose={()=>setOpenSym(null)}/>}</ReportBackCtx.Provider>}
       </div>
     </div>
     </TechCtx.Provider>
