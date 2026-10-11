@@ -672,7 +672,7 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
 const fmtTime = iso => new Date(iso).toLocaleTimeString("en-IN", { hour:"numeric", minute:"2-digit", timeZone:"Asia/Kolkata" });
 const fmtDay = d => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
 const PARTS = [["open", "Day open"], ["end", "Day end"]];
-function DayPicker({ days, sel, asOf, onPick }) {
+function DayPicker({ days, sel, asOf, onPick, onOpen }) {
   const [open, setOpen] = useState(false); const ref = useRef(null);
   const byDay = useMemo(() => Object.fromEntries(days.map(x => [x.d, x])), [days]);
   const min = days[0].d, max = days[days.length - 1].d;
@@ -681,7 +681,7 @@ function DayPicker({ days, sel, asOf, onPick }) {
   const day = byDay[d];
   return (
     <div className="dp" ref={ref}>
-      <button type="button" className={`dp-btn ${sel ? "hist" : ""}`} onClick={() => { setD(sel ? sel.date : max); setOpen(v => !v); }} aria-expanded={open} title="View a past day">
+      <button type="button" className={`dp-btn ${sel ? "hist" : ""}`} onClick={() => { setD(sel ? sel.date : max); if (!open && onOpen) onOpen(); setOpen(v => !v); }} aria-expanded={open} title="View a past day">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
         {sel ? "VIEWING" : "DATA AS OF"} <b>{asOf ? fmtDT(asOf) : "…"}</b>{sel && <span className="dp-part">{sel.part === "open" ? "Day open" : "Day end"}</span>}<span className="caret">▾</span>
       </button>
@@ -723,7 +723,8 @@ function Home({ me, onOut }) {
   const openHelpdesk = id => { setView("helpdesk"); setHdReq({ id, n: Date.now() }); };
   // past days: offered only when the admin has switched it on; sel = { date, part } or null for the latest published data
   const [hist, setHist] = useState(null); const [sel, setSel] = useState(null);
-  useEffect(() => { api("/app/api/history").then(setHist).catch(() => setHist(null)); }, []);
+  const loadHist = () => api("/app/api/history").then(setHist).catch(() => setHist(null));
+  useEffect(() => { loadHist(); }, []);
   useEffect(() => {
     setData(null); setErr(""); setOpen(null);
     api("/app/api/data" + (sel ? `?date=${sel.date}&part=${sel.part}` : "")).then(setData).catch(e => {
@@ -774,7 +775,7 @@ function Home({ me, onOut }) {
       <header className="top">
         <button type="button" className="brand-home" onClick={() => setView("tower")} title="Control Tower"><Brand/></button>
         {hist && hist.enabled && hist.days.length
-          ? <DayPicker days={hist.days} sel={sel} asOf={data && data.as_of} onPick={setSel}/>
+          ? <DayPicker days={hist.days} sel={sel} asOf={data && data.as_of} onPick={setSel} onOpen={loadHist}/>
           : <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>}
         <QuickGuideButton onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}/>
         <InboxBell unread={unread} onOpen={openHelpdesk}/>

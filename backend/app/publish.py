@@ -17,7 +17,7 @@ import json
 import math
 import re
 
-from .db import get_settings, pool, TECH_TF_DEFAULT
+from .db import get_meta, get_settings, pool, set_meta, TECH_TF_DEFAULT
 
 TFS = "DWMQY"
 TF_WEIGHT = {"D": 1, "W": 2, "M": 3, "Q": 4, "Y": 5}
@@ -318,13 +318,21 @@ def build_history(snapshot_id):
     return {"snapshot_id": snap["id"], "stocks": len(payload["stocks"])}
 
 
-def history_missing(limit=None):
-    """Scheduled collections that have no customer history row yet (newest first)."""
+def history_missing(limit=None, skip_failed=True):
+    """Scheduled collections that have no customer history row yet (newest first). Collections that failed to build
+    are skipped until the admin switches past days on again (that clears the list)."""
+    failed = [int(k) for k in (get_meta("history_failed", {}) or {})] if skip_failed else []
     with pool.connection() as c:
         rows = c.execute("SELECT s.id FROM snapshots s LEFT JOIN customer_history h ON h.snapshot_id = s.id "
-                         "WHERE s.source = 'scheduled' AND h.snapshot_id IS NULL ORDER BY s.taken_at DESC"
-                         + (" LIMIT %s" % int(limit) if limit else "")).fetchall()
+                         "WHERE s.source = 'scheduled' AND h.snapshot_id IS NULL AND NOT (s.id = ANY(%s)) ORDER BY s.taken_at DESC"
+                         + (" LIMIT %s" % int(limit) if limit else ""), (failed,)).fetchall()
     return [r["id"] for r in rows]
+
+
+def history_failed(snapshot_id, error):
+    failed = dict(get_meta("history_failed", {}) or {})
+    failed[str(snapshot_id)] = str(error)[:300]
+    set_meta("history_failed", failed)
 
 
 def publish(snapshot_id=None, mode="manual", by=None, dry_run=False):

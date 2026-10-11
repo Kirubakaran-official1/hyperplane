@@ -794,7 +794,8 @@ function CustomersTab({ snaps, notify }) {
           <span id="hist-status" style={{ fontSize: 11.5, color: "var(--t2)" }}>
             {hist.enabled
               ? <>{hist.days ? <><b>{hist.days}</b> days ready ({hist.collections} collections, {hist.first} → {hist.last})</> : "No days ready yet"}
-                  {hist.pending > 0 && <span style={{ color: "var(--mixed)" }}> · {hist.pending} older scheduled collections still being prepared in the background (about 4 a minute) — reload to see progress</span>}</>
+                  {hist.pending > 0 && <span style={{ color: "var(--mixed)" }}> · {hist.pending} older scheduled collections still being prepared in the background (a few seconds each) — reload to see progress</span>}
+                  {hist.failed > 0 && <span style={{ color: "var(--short)" }} title={hist.error || ""}> · {hist.failed} could not be prepared ({hist.error}) — switch off and on again to retry</span>}</>
               : <>Off — customers see only the latest published data. {hist.scheduled} scheduled collections are stored and can be offered.</>}
           </span>
         </div>

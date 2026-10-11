@@ -19,7 +19,7 @@ from datetime import timedelta
 
 from . import config
 from .db import get_history_enabled, get_settings, init_db, pool, set_meta
-from .publish import build_history, history_missing, publish
+from .publish import build_history, history_failed, history_missing, publish
 from .schedule import due_slots, now
 from .store import save_snapshot, workbook_to_sheets
 
@@ -230,9 +230,15 @@ def main():
                 last_cleanup = now().date()
             # customers' past days: build one older scheduled collection per idle tick (light on a small server)
             if get_history_enabled():
-                todo = history_missing(limit=1)
+                todo = history_missing(limit=2)
                 if todo:
-                    build_history(todo[0])
+                    try:
+                        r = build_history(todo[0])
+                        print(f"🗓 Customer past days: prepared collection #{todo[0]} ({r and r['stocks']} stocks)"
+                              + (" — more to go" if len(todo) > 1 else " — all done"), flush=True)
+                    except Exception as e:                       # noqa: BLE001 — skip it, never block the others
+                        history_failed(todo[0], e)
+                        print(f"⚠ Customer past days: collection #{todo[0]} could not be prepared ({e}) — skipped", flush=True)
                     continue
         except Exception:                                        # noqa: BLE001 — never let the loop die
             traceback.print_exc()

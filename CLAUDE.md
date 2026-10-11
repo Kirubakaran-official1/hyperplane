@@ -575,6 +575,9 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
   per idle tick, only while the switch is on. Portal role: SELECT + row-level security policy `portal_history`
   USING portal_history_enabled() → with the switch off the database returns no rows. Portal: GET /app/api/history
   (days → open/end times) and GET /app/api/data?date=YYYY-MM-DD&part=open|end (first scheduled run of the day = Day open,
-  last = Day end; a day with one run: before noon = open). Customer UI: `DayPicker` replaces "Data as of" when on —
+  last = Day end; a day with one run: before noon = open).
+  Back-fill is fault-tolerant: a collection that fails to build is recorded in meta `history_failed` {id: error},
+  skipped, and shown in Admin; switching past days on again clears the list (retry). Worker logs
+  "🗓 Customer past days: prepared collection #N". The customer picker reloads the day list each time it opens. Customer UI: `DayPicker` replaces "Data as of" when on —
   one date + Day open / Day end, no ranges; while on a past day the header button turns yellow ("VIEWING … Day end");
   "↺ Latest data" inside the picker returns (no banner — owner removed it).
