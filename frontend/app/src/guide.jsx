@@ -71,11 +71,12 @@ const SECTIONS = [
     <h3>Trend strength — how strong and clean that trend is (0–100%)</h3>
     <p>Shown as a bar meter: more bars lit = stronger trend. Green = uptrend strength, red = downtrend strength, grey = sideways.</p>
     <div className="g-defs">
-      <div><Bars v={88}/><span><b>75–100% · Very strong</b> — a clear, powerful trend.</span></div>
-      <div><Bars v={62}/><span><b>50–74% · Strong</b> — a healthy trend.</span></div>
-      <div><Bars v={35}/><span><b>24–49% · Moderate</b> — a trend, but not a convincing one yet.</span></div>
-      <div><Bars v={12} d="side"/><span><b>Below about 24% · Sideways</b> — no clear trend.</span></div>
-      <div><Bars v={81} d="down"/><span>Red = the same scale, but for a <b>down</b>trend (81% = a very strong downtrend).</span></div>
+      <div><Bars v={88}/><span><b>81–100% · Strong</b> — a clear, powerful trend.</span></div>
+      <div><Bars v={70}/><span><b>61–80% · Good</b> — a healthy trend.</span></div>
+      <div><Bars v={45}/><span><b>31–60% · Average</b> — a trend, but not a convincing one yet.</span></div>
+      <div><Bars v={27}/><span><b>24–30% · Weak</b> — only just a trend.</span></div>
+      <div><Bars v={12} d="side"/><span><b>Below 24% · Sideways</b> — no clear trend.</span></div>
+      <div><Bars v={85} d="down"/><span>Red = the same scale, but for a <b>down</b>trend (85% = a strong downtrend).</span></div>
     </div>
     <Tip kind="warn" title="Strength is NOT a price target">“84%” means the trend is very strong and clean right now. It does
       <b> not</b> mean the price will rise 84%, and it is not a probability. Price changes are shown separately, e.g. “+2.1% today”.</Tip>
@@ -187,13 +188,16 @@ const SECTIONS = [
     <ul>
       <li><b>Header</b> — name, sector › industry, size, F&amp;O, <b>stock reliability</b>, price and today's change, and
         <b> Copy &lt;symbol&gt;</b> to copy just this stock.</li>
-      <li><b>Combined trend strength</b> — the overall strength with a word (e.g. “Strong uptrend”), the <b>Direction</b>
-        (one-directional up / down, or bidirectional) and a one-line summary in plain words.</li>
+      <li><b>Overall trend</b> — the same meter as in the Simplified view: the stock (50%), its sector (25%) and its industry (25%)
+        combined into one needle, with the number below the dial (e.g. “38% · Average uptrend”) and the three inputs underneath.
+        On the downtrend side the number is red with a minus, e.g. “−24%”. Next to it: the <b>Direction</b> (one-directional up /
+        down, or bidirectional), the verdict and a one-line summary of the stock.</li>
       <li><b>AI insights</b> — the stock, its <b>sector</b> and its <b>industry</b> read together, three short lines
         (<b>Good</b> · <b>Watch out</b> · <b>Focus</b>) and a verdict:
         <b> ✓ Best case</b> (all three strong), <b>⚠ Careful</b> (strong stock, weak group), <b>◐ Okay</b> (group only average),
-        <b> 👁 Watch</b> (strong group, but the stock is weak or only moderate) or <b>✕ Avoid for buying</b>. A group counts as strong when it ranks in the
-        top quarter (or is above 55%), and weak when it is in the bottom half and under 45%.</li>
+        <b> 👁 Watch</b> (strong group, but the stock is weak or only average) or <b>✕ Avoid for buying</b>. Sector and industry use the same
+        words on their strength: <b>Weak</b> 0–30% · <b>Average</b> 31–60% · <b>Good</b> 61–80% · <b>Strong</b> 81–100%. A group backs the stock
+        when it is Good or Strong, and counts against it when it is Weak.</li>
       <li><b>Timeframe rows</b> — Daily to Yearly, each with a bar, “xx% strength” and Uptrend / Downtrend / Sideways.</li>
       <li><b>Sector &amp; industry strength</b> — how strong the stock's sector and industry are (0–100%) on every timeframe, and their
         rank: <b>#3/26</b> means 3rd strongest of 26 sectors. ▲ / ▼ = how many stocks in the group are rising / falling.</li>
@@ -250,6 +254,54 @@ const SECTIONS = [
     </ul>
   </> },
 
+  { id: "simple", t: "Simplified view (AI Mode) & the overall trend meter", body: <>
+    <p>Switch to <b>Simplified view (AI Mode)</b> at the top of the page. Type a company name or ticker, pick it from the list, and the page shows:</p>
+    <ul>
+      <li><b>Trading mode</b> — Balanced, Swing or Investing. It is the same setting as the Research view; changing it in one changes both.</li>
+      <li><b>Hyperplane AI summary</b> — one verdict and a short paragraph in plain words, then four tiles:
+        <b> Stock trend strength</b>, <b>Sector strength</b>, <b>Industry strength</b> (all in %) and <b>Historical reliability</b>{" "}
+        (High = Strong, Medium = Moderate, Low = Weak reliability).</li>
+      <li><b>Overall trend meter</b> — the stock, its sector and its industry combined into one needle (how it is worked out is below).</li>
+    </ul>
+    <Tip kind="warn" title="Percentages are trend strength, not price moves">“−49%” means a fairly strong <b>down</b>trend — it does not mean the
+      price fell 49%. Anything on the downtrend side is shown in red with a minus sign.</Tip>
+
+    <h3>How the overall trend meter is calculated</h3>
+    <p><b>Step 1 — put the three parts on one scale</b>, from −100 (strong downtrend) to +100 (strong uptrend):</p>
+    <table className="g-table"><tbody>
+      <tr><td><b>Stock</b></td><td>The stock's trend strength as it is — already on this scale (e.g. −49 for a downtrend, +62 for an uptrend).</td></tr>
+      <tr><td><b>Sector</b></td><td>Sector strength is 0–100%, where <b>50% is neutral</b>. It becomes <b>(sector − 50) × 2</b>:
+        50% → 0 · 75% → +50 · 100% → +100 · 25% → −50 · 0% → −100.</td></tr>
+      <tr><td><b>Industry</b></td><td>Same as the sector: <b>(industry − 50) × 2</b>.</td></tr>
+    </tbody></table>
+    <p><b>Step 2 — combine them with fixed weights:</b> <b>Stock 50%</b> · <b>Sector 25%</b> · <b>Industry 25%</b>.
+      In other words: overall = 0.5 × stock + 0.25 × sector + 0.25 × industry. The stock counts most because it is what you
+      trade; its groups adjust the picture. If the sector or industry has no data, its share goes to the parts that do.</p>
+    <p><b>Step 3 — read the needle</b> with the same cut-offs used everywhere in Hyperplane:</p>
+    <table className="g-table"><tbody>
+      <tr><td><b>+81 to +100</b></td><td>Strong uptrend</td></tr>
+      <tr><td><b>+61 to +80</b></td><td>Good uptrend</td></tr>
+      <tr><td><b>+31 to +60</b></td><td>Average uptrend</td></tr>
+      <tr><td><b>+24 to +30</b></td><td>Weak uptrend</td></tr>
+      <tr><td><b>−23 to +23</b></td><td>Sideways — no clear direction (the number still shows which way it leans)</td></tr>
+      <tr><td><b>−24 to −30</b></td><td>Weak downtrend</td></tr>
+      <tr><td><b>−31 to −60</b></td><td>Average downtrend</td></tr>
+      <tr><td><b>−61 to −80</b></td><td>Good downtrend</td></tr>
+      <tr><td><b>−81 to −100</b></td><td>Strong downtrend</td></tr>
+    </tbody></table>
+    <h3>Worked example — Indian Oil (IOC), Balanced mode</h3>
+    <table className="g-table"><tbody>
+      <tr><td><b>Stock</b></td><td>−49% → <b>−49</b></td></tr>
+      <tr><td><b>Sector</b> (Energy)</td><td>52% → (52 − 50) × 2 = <b>+4</b></td></tr>
+      <tr><td><b>Industry</b> (Refineries)</td><td>49% → (49 − 50) × 2 = <b>−2</b></td></tr>
+      <tr><td><b>Overall</b></td><td>0.5 × (−49) + 0.25 × (+4) + 0.25 × (−2) = −24.5 + 1 − 0.5 = <b>−24% · Weak downtrend</b> (just past the sideways line)</td></tr>
+    </tbody></table>
+    <p>The stock's average downtrend carries half the weight; its average sector and industry soften it, so the overall picture is a
+      weak downtrend. The three inputs are always listed under the meter, so you can check the sum yourself (they are shown rounded, so your own sum may differ by 1).</p>
+    <Tip title="Trading mode changes the inputs">The stock, sector and industry numbers follow your trading mode, so the needle moves when
+      you switch between Balanced, Swing and Investing.</Tip>
+  </> },
+
   { id: "helpdesk", t: "Helpdesk & notifications", body: <>
     <ol className="g-steps">
       <li>Open the menu under <b>your name</b> (top right) → <b>Helpdesk</b>, and press <b>New query</b>.</li>
@@ -267,6 +319,7 @@ const SECTIONS = [
       <dt>Why can't I find a stock?</dt><dd>Check your filters (press <b>Reset</b>). Indices and ETFs are not listed — only stocks.</dd>
       <dt>Why is a stock strong on Daily but weak on Yearly?</dt><dd>Different timeframes look at different periods. A short-term rise can happen inside a long-term fall — see golden rule 3.</dd>
       <dt>What does “—” mean?</dt><dd>Not enough data for that timeframe yet (for example a recently listed stock).</dd>
+      <dt>What is the Simplified view?</dt><dd>Switch at the top between <b>Research view</b> (this full page) and <b>Simplified view (AI Mode)</b>. In the Simplified view you type a company name, pick it from the list, and read it in plain words: an <b>overall trend meter</b> (down ← sideways → up; see <b>Simplified view &amp; the overall trend meter</b> above for how it is worked out), and a <b>Hyperplane AI summary</b>: one overall verdict plus four tiles — the stock, its sector and its industry (each as a percentage), and the stock's historical reliability (High / Medium / Low). Hyperplane AI is built on our own quant algorithms (fixed rules on the same data) — no outside AI service.</dd>
       <dt>Can I look at an earlier day?</dt><dd>When it is available, click <b>Data as of</b> at the top, pick a date, then <b>Day open</b> or <b>Day end</b>. The button turns yellow and says <b>Viewing</b> while you look at a past day — open it again and press <b>↺ Latest data</b> to return.</dd>
       <dt>Do the bubble charts follow my filters?</dt><dd>They follow the <b>Timeframe</b> and they filter the list when you click them. They always show the whole market, so you can compare every group.</dd>
       <dt>Is this a recommendation?</dt><dd>No. It is trend information for education — see below.</dd>

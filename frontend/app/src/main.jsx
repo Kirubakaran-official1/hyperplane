@@ -53,7 +53,11 @@ const DISCLAIMER = "Hyperplane shows trend information for education only. It is
 const idx = tf => "DWMQY".indexOf(tf);
 const dirTf = (s, i) => ({ G:1, W:-1, M:0 })[s.r[i]] ?? null;
 const dirVal = v => v == null ? null : v >= TREND_CUT ? 1 : v <= -TREND_CUT ? -1 : 0;
-const strengthWord = a => a >= 75 ? "Very strong" : a >= 50 ? "Strong" : a >= TREND_CUT ? "Moderate" : "Weak";
+// Level words (owner, 2026-10-11): Weak 0–30 · Average 31–60 · Good 61–80 · Strong 81–100 on the rounded |value|.
+// Stocks keep the sideways cut (|strength| < TREND_CUT); sector / industry use the same words on their 0–100% strength.
+const levelOf = v => { const a = Math.round(Math.abs(v)); return a > 80 ? "Strong" : a > 60 ? "Good" : a > 30 ? "Average" : "Weak"; };
+const strengthWord = a => levelOf(a);
+const aan = w => /^[aeiou]/i.test(w) ? "an" : "a";
 const focusOf = (s, tfs) => {                 // signed strength for the chosen timeframe(s)
   if (!tfs.length) return s.os;
   const v = tfs.map(t => s.sc[idx(t)]).filter(x => x != null);
@@ -110,15 +114,16 @@ function summaryOf(s) {
 
 // Group state on the Combined timeframe, by level AND rank (so a weak market doesn't make every group "weak"):
 // strong = strength ≥ 55% or in the top quarter of all sectors / industries; weak = under 45% and in the bottom half.
-const groupState = g => !g ? null : (g.st >= 55 || g.rank / g.of <= 0.25) ? "up" : (g.st < 45 && g.rank / g.of > 0.5) ? "down" : "side";
-const GROUP_WORD = { up:"strong", side:"average", down:"weak" };
+// A sector / industry backs the stock when it is Good or Strong (61%+) and counts against it when Weak (30% or less)
+const groupState = g => !g ? null : Math.round(g.st) > 60 ? "up" : Math.round(g.st) <= 30 ? "down" : "side";
+const groupWord = g => levelOf(g.st).toLowerCase();
 function combinedView(od, bi, sec, ind, os = null, stretched = false) {
   const gs = [sec && ["sector", groupState(sec)], ind && ["industry", groupState(ind)]].filter(Boolean);
   const weak = gs.filter(([, st]) => st === "down").map(([n]) => n), strong = gs.length > 0 && gs.every(([, st]) => st === "up");
   const which = weak.join(" and ");
   let v;
   if (od === 1 && stretched) v = ["warn", "⚠ Overheated — don't chase", "The stock has run up 3x or more in about a year. Even if the trend looks strong, prices this stretched often fall back sharply — wait for it to cool down and build a base."];
-  else if (od === 1 && strong && os != null && Math.abs(os) < 50) v = ["watch", "👁 Watch — stock still building", "Its sector and industry are strong, but the stock's own trend is only moderate. Keep it on your watch list and act when it turns strong."];
+  else if (od === 1 && strong && os != null && Math.round(Math.abs(os)) <= 60) v = ["watch", "👁 Watch — stock still building", "Its sector and industry are strong, but the stock's own trend is only average. Keep it on your watch list and act when it turns strong."];
   else if (od === 1) v = strong ? ["good", "✓ Best case — with the tide", "Strong stock in a strong industry and a strong sector. Everything points the same way."]
     : weak.length ? ["warn", "⚠ Careful — against its group", `The stock is strong, but its ${which} ${weak.length > 1 ? "are" : "is"} weak. It is moving against its own group — avoid or wait (golden rule 2).`]
     : ["mid", "◐ Okay — group is only average", "The stock is strong, but its group is only average. Candidates in stronger sectors / industries are better."];
@@ -236,7 +241,7 @@ function insightsOf(s, od, bi, sec, ind, view, indRank, indCount) {
   if (od === -1) bad.push(`in a downtrend${dns.length ? ` on ${dns.join(", ")}` : ""}`);
   else if (bi && dns.length) bad.push(`timeframes disagree — down on ${dns.join(", ")}`);
   const wk = [["sector", s.sec, sec], ["industry", s.ind, ind]].filter(([, , g]) => g && groupState(g) !== "up");
-  wk.forEach(([k, n, g]) => bad.push(`${k} ${n} is ${GROUP_WORD[groupState(g)]} (#${g.rank} of ${g.of})`));
+  wk.forEach(([k, n, g]) => bad.push(`${k} ${n} is ${groupWord(g)} (#${g.rank} of ${g.of})`));
   if (od === 1 && sc[0] != null && sc[1] != null && dirTf(s, 1) === 1 && Math.abs(sc[0]) < Math.abs(sc[1]) - 30)
     bad.push(`short term cooling — Daily ${Math.abs(sc[0])}% vs Weekly ${Math.abs(sc[1])}%`);
   const weakGroup = wk.find(([, , g]) => groupState(g) === "down") || wk[0];
@@ -581,7 +586,7 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
   const grp = (kind, name, g) => (
     <div className="cv-row cv-grp"><span className="cv-k">{kind}</span>
       <span className="cv-v"><b>{name}</b>{g
-        ? <> is <span className={`cv-st ${groupState(g)}`}>{GROUP_WORD[groupState(g)]}</span> <span className="dim mono">· {Math.round(g.st)}% · #{g.rank} of {g.of}</span></>
+        ? <> is <span className={`cv-st ${groupState(g)}`}>{groupWord(g)}</span> <span className="dim mono">· {Math.round(g.st)}% · #{g.rank} of {g.of}</span></>
         : <span className="dim"> — no data</span>}</span></div>
   );
   return (
@@ -596,12 +601,14 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
         <div className="m-grid">
         <div className="m-col">
         <div className="m-overall">
-          <div className="mo-cell"><span className="lbl">Combined trend strength</span><StrengthTag v={s.os} d={od} big/><span className="grp-w">{od === 0 ? "Sideways" : od === 1 ? `${strengthWord(Math.abs(s.os))} uptrend` : od === -1 ? `${strengthWord(Math.abs(s.os))} downtrend` : "—"}</span></div>
-          <div className="mo-cell"><span className="lbl">Direction</span><span className={`dirtag ${bi ? "bi" : od === 1 ? "up" : od === -1 ? "down" : "side"}`}>{bi ? "⇅ Bidirectional" : ups.length && !dns.length ? "▲ One-directional up" : dns.length && !ups.length ? "▼ One-directional down" : "◆ Sideways"}</span></div>
-          {view && <div className={`cv-verdict ${view.tone}`}>{view.title}</div>}
+          <OverallMeter os={s.os} secA={secA} indA={indA} size={170} className="om-card"/>
+          <div className="mo-side">
+          <div className="mo-top">
+            <span className={`dirtag ${bi ? "bi" : od === 1 ? "up" : od === -1 ? "down" : "side"}`} title={summaryOf(s)}>{bi ? "⇅ Bidirectional" : ups.length && !dns.length ? "▲ One-directional up" : dns.length && !ups.length ? "▼ One-directional down" : "◆ Sideways"}</span>
+            {view && <div className={`cv-verdict ${view.tone}`}>{view.title}</div>}
+          </div>
           <div className="mo-sum">
-            <div className="lbl ai-h"><span className="ai-spark">✦</span> AI insights <Info text="Short insights written automatically from Hyperplane's quant data for this stock, its industry and its sector (Combined timeframe) — information, not advice. A group is strong when it ranks in the top quarter or is above 55%, weak when it is in the bottom half and under 45%. The best ideas have all three pointing the same way — see Docs → golden rules."/></div>
-            <div className="cv-row"><span className="cv-k">Stock</span><span className="cv-v">{summaryOf(s)}</span></div>
+            <div className="lbl ai-h"><span className="ai-spark">✦</span> AI insights <Info text="Short insights written automatically from Hyperplane's quant data for this stock, its industry and its sector (Combined timeframe) — information, not advice. A sector or industry backs the stock when it is Good or Strong (61%+) and counts against it when Weak (30% or less). The best ideas have all three pointing the same way — see Docs → golden rules."/></div>
             {grp("Sector", s.sec, secA)}
             {grp("Industry", s.ind, indA)}
             {ai && <div className={`ai-box ${view ? view.tone : "mid"}`}>
@@ -609,6 +616,7 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
               <div className="ai-l bad"><b>⚠ Watch out</b><span>{ai.bad.length ? ai.bad.join(" · ") : "Nothing major — stock, industry and sector point the same way."}</span></div>
               <div className="ai-l focus"><b>◎ Focus</b><span>{ai.focus}</span></div>
             </div>}
+          </div>
           </div>
         </div>
         <div className="blk blk-ctx">
@@ -622,8 +630,8 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
                   <td className="ctx-n"><span className="lbl">{kind}</span><b title={name}>{name}</b>
                     {(() => { const a = ctx("A", ind); return a ? <span className="sub">{a.n} stocks · <span className="up">▲{a.adv}</span> <span className="down">▼{a.dec}</span></span> : null; })()}</td>
                   {["A", ...TFS.map(([k]) => k)].map(tf => { const r = ctx(tf, ind); return (
-                    <td key={tf} className={tf === "A" ? "ctx-a" : ""} title={r ? `${strengthLabel(r.st)} · rank #${r.rank} of ${r.of} · ${r.adv} advancing / ${r.dec} declining · avg move ${r.avg}%` : "No data"}>
-                      {r ? <><span className={`ss ${strengthCls(r.st)}`}>{Math.round(r.st)}%</span><span className="rk">#{r.rank}/{r.of}</span></> : <span className="dim">—</span>}
+                    <td key={tf} className={tf === "A" ? "ctx-a" : ""} title={r ? `${levelOf(r.st)} · rank #${r.rank} of ${r.of} · ${r.adv} advancing / ${r.dec} declining · avg move ${r.avg}%` : "No data"}>
+                      {r ? <><span className={`ss ${groupState(r)}`}>{Math.round(r.st)}%</span><span className="rk">#{r.rank}/{r.of}</span></> : <span className="dim">—</span>}
                     </td>); })}
                 </tr>
               ))}
@@ -664,6 +672,216 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
         <div className="m-foot"><span className="sub">Data as of {fmtDT(asOf)} · strength = how strong the trend is (0–100%), not a price move</span><span className="sub m-disc">For education only — not investment advice.</span></div>
         <p className="fine">{DISCLAIMER}</p>
       </div>
+    </div>
+  );
+}
+
+const signed = v => v == null ? "—" : v < 0 ? `−${Math.abs(v)}` : `${Math.abs(v)}`;   // negative side gets a minus
+// ─── trend gauge: −100 (strong downtrend) … 0 (sideways) … +100 (strong uptrend); zones use the same cuts as the labels ───
+const G_ZONES = [[-100, -80, "#ff2d45"], [-80, -60, "#ff5f6d"], [-60, -TREND_CUT, "#ff9aa3"], [-TREND_CUT, TREND_CUT, "#8b97ad"],
+                 [TREND_CUT, 60, "#86e5c4"], [60, 80, "#2fd39a"], [80, 100, "#00b884"]];
+function TrendGauge({ v, size = 180, caption = true }) {
+  const w = size, r = size * 0.4, cx = w / 2, cy = r + size * 0.08, sw = size * 0.075, h = cy + (caption ? size * 0.26 : size * 0.06);
+  const pt = (val, rad) => { const t = Math.PI * (1 - (val + 100) / 200); return [cx + rad * Math.cos(t), cy - rad * Math.sin(t)]; };
+  const arc = (a, b) => { const [x1, y1] = pt(a, r), [x2, y2] = pt(b, r); return `M ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2}`; };
+  const has = v != null, val = has ? Math.max(-100, Math.min(100, v)) : 0, d = dirVal(v), a = Math.abs(val);
+  const [nx, ny] = pt(val, r - sw * 1.2);
+  const word = !has ? "No data" : d === 0 ? "Sideways" : `${strengthWord(a)} ${d > 0 ? "uptrend" : "downtrend"}`;
+  const col = !has ? "var(--t3)" : val < 0 ? "var(--short)" : d > 0 ? "var(--long)" : "var(--t2)";
+  return (
+    <svg className="gauge" width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`Trend meter: ${word}${has ? `, ${signed(val)}%` : ""}`}>
+      {G_ZONES.map(([x, y, c]) => <path key={x} d={arc(x + 0.8, y - 0.8)} stroke={c} strokeWidth={sw} fill="none" opacity={has ? .9 : .25}/>)}
+      <text x={pt(-100, r)[0]} y={cy + size * 0.1} textAnchor="middle" className="g-end">Down</text>
+      <text x={pt(100, r)[0]} y={cy + size * 0.1} textAnchor="middle" className="g-end">Up</text>
+      {has && <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--t1)" strokeWidth={size * 0.022} strokeLinecap="round"/>}
+      <circle cx={cx} cy={cy} r={size * 0.035} fill="var(--t1)"/>
+      {caption && <>
+        <text x={cx} y={cy + size * 0.15} textAnchor="middle" className="g-val" style={{ fontSize: size * 0.11, fill: col }}>{has ? signed(val) : "—"}<tspan className="g-of" style={{ fontSize: size * 0.065, fill: col }}>{has ? "%" : ""}</tspan></text>
+        <text x={cx} y={cy + size * 0.235} textAnchor="middle" className="g-word" style={{ fontSize: size * 0.065, fill: col }}>{word}</text>
+      </>}
+    </svg>
+  );
+}
+
+// ─── Overall trend meter — the SAME component in the Simplified view and the Research stock card ───
+// Overall trend (owner, 2026-10-11): stock 50 % · sector 25 % · industry 25 %. The stock is −100…+100; sector and industry
+// strength go on the same scale (50% = neutral → (st − 50) × 2). A missing part's weight goes to the others.
+function overallOf(os, secA, indA) {
+  const mix = [[os, 0.5], [secA ? (secA.st - 50) * 2 : null, 0.25], [indA ? (indA.st - 50) * 2 : null, 0.25]].filter(([v]) => v != null);
+  const w = mix.reduce((x, [, k]) => x + k, 0);
+  return mix.length ? Math.round(mix.reduce((x, [v, k]) => x + v * k, 0) / w) : null;
+}
+const trendWordOf = v => v == null ? "No data" : dirVal(v) === 0 ? "Sideways" : `${levelOf(v)} ${v > 0 ? "uptrend" : "downtrend"}`;
+const dirToneOf = v => v == null ? "side" : v < 0 ? "bad" : dirVal(v) === 1 ? "good" : "side";   // red on the downtrend side
+function OverallMeter({ os, secA, indA, size = 250, className = "" }) {
+  const overall = overallOf(os, secA, indA);
+  return (
+    <div className={`ometer ${className}`}>
+      <div className="sx-lbl">Overall trend <Info text="A mix of three parts: the stock's own trend counts 50%, its sector's strength 25% and its industry's strength 25% (for the sector and industry 50% is neutral). Left = down, right = up. It measures how strong the trend is — not a price move."/></div>
+      <TrendGauge v={overall} size={size} caption={false}/>
+      <div className={`sx-gv ${dirToneOf(overall)}`}>{signed(overall)}<small>%</small></div>
+      <div className={`sx-gw ${dirToneOf(overall)}`}>{trendWordOf(overall)}</div>
+      <div className="sx-mix">
+        <span>Stock <b className={dirToneOf(os)}>{signed(os)}%</b><i>× 50%</i></span>
+        <span>Sector <b>{secA ? `${Math.round(secA.st)}%` : "—"}</b><i>× 25%</i></span>
+        <span>Industry <b>{indA ? `${Math.round(indA.st)}%` : "—"}</b><i>× 25%</i></span>
+      </div>
+    </div>
+  );
+}
+
+// ─── SIMPLE VIEW: pick a stock, read it in plain words (rules only — the same numbers as the research view) ───
+const LEVEL = g => { const k = groupState(g); return [k === "up" ? "good" : k === "down" ? "bad" : "mid", levelOf(g.st)]; };   // same rule as the research view
+const PERIODS = ["Days", "Weeks", "Months", "Quarters", "Years"];
+function StockSearch({ stocks, onPick, autoFocus, onClear = null }) {
+  const [q, setQ] = useState(""); const [hi, setHi] = useState(0); const [open, setOpen] = useState(false); const ref = useRef(null);
+  useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const found = useMemo(() => {
+    const t = q.trim().toLowerCase(); if (!t) return [];
+    const rank = x => x.s.toLowerCase() === t ? 0 : x.s.toLowerCase().startsWith(t) ? 1 : x.n.toLowerCase().startsWith(t) ? 2 : x.n.toLowerCase().includes(" " + t) ? 3 : 4;
+    return stocks.filter(x => x.s.toLowerCase().includes(t) || x.n.toLowerCase().includes(t)).sort((a, b) => rank(a) - rank(b) || a.n.localeCompare(b.n)).slice(0, 8);
+  }, [q, stocks]);
+  const pick = x => { onPick(x.s); setQ(""); setOpen(false); };
+  return (
+    <div className={`sv-search ${onClear ? "has-x" : ""}`} ref={ref}>
+      <span className="sv-mag" aria-hidden="true">⌕</span>
+      {onClear && <button type="button" className="sv-x" onClick={onClear} title="Clear this stock and search again" aria-label="Clear this stock">✕</button>}
+      <span className="sv-qai" title="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."><span className="ai-spark">✦</span>Hyperplane AI</span>
+      <input value={q} autoFocus={autoFocus} placeholder="Ask Hyperplane AI — type a company name or ticker (e.g. Tata, INFY)" aria-label="Search a stock"
+        onChange={e => { setQ(e.target.value); setHi(0); setOpen(true); }} onFocus={() => setOpen(true)}
+        onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setHi(i => Math.min(i + 1, found.length - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setHi(i => Math.max(i - 1, 0)); }
+          else if (e.key === "Enter" && found[hi]) { e.preventDefault(); pick(found[hi]); }
+          else if (e.key === "Escape") setOpen(false); }}/>
+      {open && q.trim() && (
+        <div className="sv-drop" role="listbox">
+          {found.length ? found.map((x, i) => (
+            <button key={x.s} type="button" role="option" aria-selected={i === hi} className={i === hi ? "on" : ""} onMouseEnter={() => setHi(i)} onClick={() => pick(x)}>
+              <b className="mono">{x.s}</b><span className="sv-dn">{x.n}</span><span className="sv-ds">{x.sec}</span>
+            </button>)) : <div className="sv-none">No stock found for “{q}”.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One stat card: tiny label → name → big number → thin bar → coloured word (or a big word + note, e.g. reliability)
+function Stat({ label, name, value, pct, tone, word, note }) {
+  return (
+    <div className={`card sx-stat ${tone}`}>
+      <div className="sx-sl">{label}</div>
+      <div className="sx-sn" title={name}>{name}</div>
+      {value != null
+        ? <><div className={`sx-sv ${tone}`}>{value}<small>%</small></div>
+            <div className="sx-sbar"><i className={tone} style={{ width: `${Math.max(2, Math.min(100, Math.abs(pct)))}%` }}/></div>
+            <span className={`sx-sw ${tone}`}>{word}</span></>
+        : <><div className={`sx-sv word ${tone}`}>{word}</div>{note && <div className="sx-snote">{note}</div>}</>}
+    </div>
+  );
+}
+
+// combinedView title → professional wording for the Simplified view (the rule itself is unchanged)
+const PRO_VERDICT = {
+  "⚠ Overheated — don't chase": ["Overextended — avoid chasing", "The price has risen three times or more in about a year. Even with a strong trend, moves this extended often retrace; a consolidation is the safer point to consider it."],
+  "👁 Watch — stock still building": ["Watchlist — trend still developing", "Its sector and industry are strong, but the stock's own trend is only average. Worth monitoring until the stock's trend strengthens."],
+  "✓ Best case — with the tide": ["Strong set-up — fully aligned", "The stock is trending up, and both its sector and industry are Good or Strong — everything points the same way."],
+  "⚠ Careful — against its group": ["Caution — weak group backing", "The stock is trending up, but its sector or industry is Weak. A stock moving against its group carries more risk."],
+  "◐ Okay — group is only average": ["Positive — average group backing", "The stock is trending up, but its sector and industry are only Average. Stocks with Good or Strong group support are generally preferable."],
+  "👁 Watch only — a laggard": ["Laggard — weak stock in a strong group", "The group is strong, but the stock is in a downtrend. It may catch up or keep lagging; it is not a buying candidate yet."],
+  "✕ Avoid for buying": ["Unfavourable — no support", "The stock is in a downtrend and its sector and industry offer no support."],
+  "◐ Good group, mixed timeframes": ["Mixed — timeframes disagree", "Its sector and industry are strong, but the stock's short- and long-term trends point in different directions. Waiting for them to align lowers the risk."],
+};
+const proVerdict = (view, groupStrong) => !view ? null : view.title === "◆ No edge yet"
+  ? ["Neutral — no clear trend", groupStrong ? "There is no clear trend in the stock yet, although its group is strong. Wait for the stock to establish a direction." : "There is no clear trend in the stock. Better candidates are available."]
+  : PRO_VERDICT[view.title] || [view.title.replace(/^[^A-Za-z]+/, ""), view.text];
+
+const PERIOD_ROWS = [["Days", "short term"], ["Weeks", ""], ["Months", ""], ["Quarters", ""], ["Years", "long term"]];
+const RELIABILITY = { S: ["High", "good", "The long-term price history is healthy."], M: ["Medium", "mid", "The long-term price history is average."],
+                      W: ["Low", "bad", "The price has fallen sharply or moved erratically in the past."] };
+
+function SimpleView({ data, mode, setMode, sym, setSym }) {
+  const stocks = data.stocks;
+  const s = sym ? stocks.find(x => x.s === sym) : null;
+  if (!s) return (
+    <div className="sv sv-empty">
+      <div className="sv-hero">
+        <div className="sv-brand"><span className="ai-spark">✦</span> Hyperplane AI <span className="sv-pow">· powered by quant algorithms</span></div>
+        <h1>Understand any stock in seconds</h1>
+        <p>Type a company name or ticker. Hyperplane AI reads our quant algorithms and explains the stock's trend, its sector and industry, and its reliability — in plain language.</p>
+        <StockSearch stocks={stocks} onPick={setSym} autoFocus/>
+        <div className="sv-feats">
+          <span><b>Trend strength</b> out of 100</span><span><b>Sector &amp; industry</b> score and rank</span><span><b>Historical reliability</b> High / Medium / Low</span>
+        </div>
+        {data.top && data.top.length > 0 && <div className="sv-try"><span className="dim">Strongest right now:</span>
+          {data.top.slice(0, 6).map(k => <button key={k} type="button" onClick={() => setSym(k)}>{k}</button>)}</div>}
+      </div>
+    </div>
+  );
+  const od = dirVal(s.os), bi = isBi(s, []);
+  const ctx = (tf, ind) => { const list = ((ind ? data.industries : data.sectors) || {})[tf] || [];
+    const i = list.findIndex(r => ind ? r.k === s.ind && r.sec === s.sec : r.k === s.sec);
+    return i < 0 ? null : { ...list[i], rank: i + 1, of: list.length }; };
+  const secA = ctx("A", false), indA = ctx("A", true);
+  const view = combinedView(od, bi, secA, indA, s.os, !!s.x);
+  const peers = stocks.filter(x => x.os != null && x.sec === s.sec && x.ind === s.ind).sort((a, b) => b.os - a.os);
+  const myRank = peers.findIndex(x => x.s === s.s) + 1;
+  const a = s.os == null ? null : Math.abs(s.os);
+  const trendWord = trendWordOf, dirTone = dirToneOf;
+  const stockWord = trendWord(s.os);
+  const [secTone, secWord] = secA ? LEVEL(secA) : ["side", "No data"];
+  const [indTone, indWord] = indA ? LEVEL(indA) : ["side", "No data"];
+  const rel = RELIABILITY[s.h] || null;
+  // summary — fixed rules, in this order: stock trend → periods disagree → reliability → stretched → verdict
+  const parts = [];
+  const lw = s.os == null ? "" : levelOf(s.os).toLowerCase();
+  parts.push(s.os == null ? `There is not enough data on ${s.n} yet.`
+    : od === 1 ? `${s.n} is in ${aan(lw)} ${lw} uptrend (${a}%).`
+    : od === -1 ? `${s.n} is in ${aan(lw)} ${lw} downtrend (${signed(s.os)}%).`
+    : `${s.n} is moving sideways, with no clear direction (${signed(s.os)}%, leaning ${s.os < 0 ? "down" : "up"}).`);
+  if (bi) parts.push("Its short- and long-term trends point in different directions.");
+  if (rel) parts.push(s.h === "S" ? "Its long-term price history is reliable." : s.h === "M" ? "Its long-term price history is average." : "Its long-term price history is unreliable, with sharp falls or wild moves in the past.");
+  if (s.x) parts.push("The price has risen three times or more in about a year, and moves this fast often reverse.");
+  const pro = proVerdict(view, secTone === "good" && indTone === "good");
+  if (pro) parts.push(pro[1]);
+  const title = pro ? pro[0] : stockWord;
+  const vt = view ? view.tone : "mid";
+  return (
+    <div className="sv sx">
+      <div className="sv-bar2">
+        <StockSearch stocks={stocks} onPick={setSym} onClear={() => setSym(null)}/>
+        <div className="sv-mode2">
+          <span className="sv-ml">Trading mode <Info wide label="Trading mode weights per timeframe" text={<ModeWeights active={mode}/>}/></span>
+          <div className="sv-pills" role="radiogroup" aria-label="Trading mode">
+            {Object.entries(MODES).map(([k, m]) => (
+              <button key={k} type="button" role="radio" aria-checked={mode === k} className={mode === k ? "on" : ""} title={`${m.label}: ${m.hint}`} onClick={() => setMode(k)}>
+                {k === "equal" ? "Balanced" : k === "swing" ? "Swing" : "Investing"}</button>))}
+          </div>
+        </div>
+      </div>
+
+      <section className="card sx-hero">
+        <div className="sx-id">
+          <div className="sx-title"><h2>{s.n}</h2><span className="sx-tick">{s.s}</span>{s.f ? <span className="sx-tag">F&amp;O</span> : null}</div>
+          <div className="sx-meta">{s.sec} <span className="dim">›</span> {s.ind} <span className="dim">·</span> {sizeOf(s)} cap</div>
+          <div className="sx-price"><b>₹{s.p}</b>{s.c != null && <span className={`sx-chg ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}% today</span>}
+            <span className="tcopy"><CopyBtns syms={[s.s]} compact/></span><span className="sx-meta2">{s.sec} › {s.ind} · {sizeOf(s)} cap</span></div>
+          <div className={`sx-verdict ${vt}`}>
+            <div className="sx-lbl"><span className="ai-spark">✦</span> Hyperplane AI summary <Info text="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."/></div>
+            <div className="sx-vtitle">{title}</div>
+            <p>{parts.join(" ")}</p>
+          </div>
+        </div>
+        <div className="sx-meter"><OverallMeter os={s.os} secA={secA} indA={indA} size={250}/></div>
+      </section>
+
+      <section className="sx-stats">
+        <Stat label="Stock trend strength" name={s.s} value={s.os == null ? null : signed(s.os)} pct={s.os} tone={dirTone(s.os)} word={stockWord}/>
+        <Stat label="Sector strength" name={s.sec} value={secA ? Math.round(secA.st) : null} pct={secA && secA.st} tone={secTone} word={secWord}/>
+        <Stat label="Industry strength" name={s.ind} value={indA ? Math.round(indA.st) : null} pct={indA && indA.st} tone={indTone} word={indWord}/>
+        <Stat label="Historical reliability" name="Long-term price history" value={null} tone={rel ? rel[1] : "side"} word={rel ? rel[0] : "No data"} note={rel ? rel[2] : "Not enough history."}/>
+      </section>
+
+      <div className="sv-foot dim">Data as of {fmtDT(data.as_of)} · For education only — not investment advice.</div>
     </div>
   );
 }
@@ -718,6 +936,9 @@ function Home({ me, onOut }) {
   // a peer inside the card: keep only the ORIGINAL stock to go back to (owner: back = the one I picked first)
   const openFromCard = st => { const origin = trail[0] || open; setTrail(origin && origin.s !== st.s ? [origin] : []); setOpenRaw(st); };
   const [view, setView] = useState("tower"); const [hdReq, setHdReq] = useState(null);
+  const [face, setFaceRaw] = useState(() => { try { return localStorage.getItem("qf_face") === "simple" ? "simple" : "research"; } catch { return "research"; } });
+  const setFace = f => { setFaceRaw(f); setView("tower"); try { localStorage.setItem("qf_face", f); } catch { /* storage blocked */ } window.scrollTo(0, 0); };
+  const [simpleSym, setSimpleSym] = useState(null);
   const hdApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); throw e; }), []);
   const unread = useHelpdeskUnread(hdApi, "/app/api/helpdesk");
   const openHelpdesk = id => { setView("helpdesk"); setHdReq({ id, n: Date.now() }); };
@@ -774,6 +995,10 @@ function Home({ me, onOut }) {
     <div className="page">
       <header className="top">
         <button type="button" className="brand-home" onClick={() => setView("tower")} title="Control Tower"><Brand/></button>
+        <div className="sg face" role="tablist" aria-label="View">
+          {[["research", "Research view"], ["simple", "Simplified view (AI Mode)"]].map(([k, l]) => (
+            <button key={k} type="button" role="tab" aria-selected={face === k} className={face === k && view === "tower" ? "on" : ""} onClick={() => setFace(k)}>{l}</button>))}
+        </div>
         {hist && hist.enabled && hist.days.length
           ? <DayPicker days={hist.days} sel={sel} asOf={data && data.as_of} onPick={setSel} onOpen={loadHist}/>
           : <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>}
@@ -792,7 +1017,9 @@ function Home({ me, onOut }) {
 
       {view === "guide" && <Guide disclaimer={DISCLAIMER}/>}
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
-      {view === "tower" && <>
+      {view === "tower" && face === "simple" && (data ? <SimpleView data={data} mode={mode} setMode={m => { setMode(m); setTfs([]); }} sym={simpleSym} setSym={setSimpleSym}/>
+        : <div className="card empty">{err || "Loading…"}</div>)}
+      {view === "tower" && face === "research" && <>
       <div className="fbar">
         {/* Trading mode and Timeframe are separate but exclusive: a mode clears the timeframes, a timeframe switches the
             mode off (with no timeframe left, the last mode is back on) */}
@@ -984,6 +1211,179 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .tab-n{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#ff4454;color:#fff;font:700 10px/18px var(--mono);text-align:center}
 .page>.hd,.page>.guide{margin-top:12px}
 .top{display:flex;align-items:stretch;gap:16px;min-height:56px;flex-wrap:wrap;border-bottom:1px solid var(--b1)}.top>*{align-self:center}.top .tabs{align-self:center;margin:0 0 0 14px;border:0;display:flex;gap:6px}.top .tabs button{margin:0;padding:0 14px;height:34px;border:1px solid var(--b2);border-radius:8px;background:var(--s2);color:var(--t2);transition:border-color .15s,background .15s,color .15s}.top .tabs button:hover{border-color:var(--accb);color:var(--t1)}.top .tabs button.on{border-color:var(--acc);background:var(--adim);color:var(--acc);box-shadow:0 0 0 1px var(--accb) inset}.asof{font:11px var(--mono);color:var(--t2);margin-left:auto;letter-spacing:.4px}.asof b{color:var(--t1)}
+.face{height:32px;margin-left:6px}.face button{padding:0 12px;font-size:12px}.face button.on{background:var(--adim);color:var(--acc)}
+.gauge{display:block;overflow:visible}.gauge .g-end{font:600 10px var(--sans);fill:var(--t3)}.gauge .g-val{font-family:var(--mono);font-weight:800}.gauge .g-of{font-weight:700}.gauge .g-word{font-family:var(--sans);font-weight:700}
+.mo-cell.mo-gauge{flex-direction:row;align-items:center;gap:10px}.modal.stock .cv-verdict{white-space:normal}.mo-gt{display:flex;flex-direction:column;gap:2px;white-space:nowrap}.mo-gt .lbl{white-space:nowrap}.mo-gv{font:800 22px var(--mono);line-height:1.1}.mo-gv small{font-size:11px;color:var(--t3);font-weight:600}.mo-gv.up{color:var(--long)}.mo-gv.down{color:var(--short)}.mo-gv.side{color:var(--t2)}
+.sv{max-width:1180px;margin:14px auto 0}.sv-empty{display:flex;justify-content:center}
+.sv-hero{width:min(760px,100%);text-align:center;padding:44px 16px 30px}.sv-hero h1{font-size:30px;margin:0 0 10px;background:linear-gradient(90deg,var(--t1),#a78bfa 55%,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sv-brand{display:inline-flex;align-items:center;gap:6px;margin-bottom:14px;padding:5px 14px;border-radius:999px;border:1px solid rgba(167,139,250,.45);background:rgba(167,139,250,.08);color:#a78bfa;font-size:13px;font-weight:800;letter-spacing:.3px}
+.sv-pow{color:var(--t2);font-weight:600}
+.sv-feats{display:flex;justify-content:center;gap:8px 18px;flex-wrap:wrap;margin-top:14px;font-size:12.5px;color:var(--t2)}.sv-feats span::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#a78bfa;margin-right:7px;vertical-align:2px}.sv-feats b{color:var(--t1);font-weight:700}.sv-hero p{color:var(--t2);margin:0 0 20px;font-size:15px;line-height:1.5}
+.sv-try{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;align-items:center;margin-top:16px;font-size:12.5px}.sv-try button{font:600 12px var(--mono);padding:5px 10px;border-radius:7px;border:1px solid var(--b2);background:var(--s2);color:var(--acc);cursor:pointer}.sv-try button:hover{border-color:var(--acc)}
+.sv-search{position:relative;flex:1;text-align:left}.sv-search input{width:100%;padding:13px 14px 13px 40px;font-size:15px;border-radius:12px}
+.sv-mag{position:absolute;left:13px;top:50%;transform:translateY(-50%);font-size:20px;color:var(--t3);pointer-events:none}
+.sv-drop{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;background:var(--s1);border:1px solid var(--b2);border-radius:12px;box-shadow:0 20px 44px -18px rgba(0,0,0,.8);padding:6px;max-height:380px;overflow:auto}
+.sv-drop button{display:grid;grid-template-columns:120px minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;padding:9px 10px;border:0;border-radius:8px;background:none;color:var(--t1);text-align:left;cursor:pointer;font-size:13px}
+.sv-drop button.on{background:var(--adim)}.sv-drop b{color:var(--acc)}.sv-dn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sv-ds{font-size:11px;color:var(--t3);white-space:nowrap}.sv-none{padding:12px;color:var(--t3);font-size:13px}
+.sv-bar{display:flex;gap:8px;align-items:center;margin-bottom:12px}.sv-clear{flex-shrink:0;min-width:70px;height:46px;padding:0 14px;border-radius:12px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font-weight:600;cursor:pointer}
+.sv-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px 16px;margin-bottom:12px}.sv-name{font-size:21px;font-weight:800}
+.sv-price{display:flex;align-items:center;gap:10px;font-size:18px}.sv-price .up{color:var(--long)}.sv-price .down{color:var(--short)}.sv-price span.mono{font-size:14px}
+.sv-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.sv-card{padding:14px 16px}.sv-t{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);font-weight:700;margin-bottom:10px}
+.sv-meter{display:flex;flex-direction:column;align-items:center;text-align:center}.sv-meter .sv-t{align-self:flex-start}
+.sv-verdict{margin-top:8px;padding:10px 12px;border-radius:10px;border:1px solid var(--b2);display:flex;flex-direction:column;gap:4px;font-size:13px;line-height:1.5;color:var(--t2);text-align:left;width:100%}
+.sv-verdict b{font-size:15px;color:var(--t1)}.sv-verdict.good{border-color:var(--long);background:var(--longd)}.sv-verdict.bad{border-color:var(--short);background:var(--shortd)}.sv-verdict.warn{border-color:var(--mixed);background:rgba(255,170,0,.08)}.sv-verdict.watch{border-color:var(--acc);background:var(--adim)}
+.sv-mode{margin-top:8px;font-size:11.5px}
+.sv-score{margin-bottom:14px}.sv-st{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:13.5px;margin-bottom:6px}.sv-st .dim{font-size:12px}
+.sv-num{font:800 18px var(--mono)}.sv-num small{font-size:11px;color:var(--t3);font-weight:600}.sv-num.good{color:var(--long)}.sv-num.mid{color:var(--mixed)}.sv-num.bad{color:var(--short)}
+.sv-track{position:relative;height:14px;border-radius:7px;background:var(--s3,var(--s2));overflow:hidden}.sv-track i{position:absolute;top:0;bottom:0;width:1px;background:var(--b2)}
+.sv-fill{height:100%;border-radius:7px}.sv-fill.good{background:var(--long)}.sv-fill.mid{background:var(--mixed)}.sv-fill.bad{background:var(--short)}
+.sv-note{font-size:11.5px;color:var(--t3);margin-top:5px}.sv-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;align-items:center}.sv-legend span:not(.dim)::before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;background:currentColor;vertical-align:0}.sv-legend .good{color:var(--long)}.sv-legend .mid{color:var(--mixed)}.sv-legend .bad{color:var(--short)}
+.sv-rule{margin-top:12px;padding-top:10px;border-top:1px solid var(--b1);font-size:12.5px;color:var(--t2)}
+.sv-axis{display:grid;grid-template-columns:92px 1fr 1fr 1fr 96px;font-size:10.5px;color:var(--t3);margin-bottom:4px}.sv-axis span:nth-child(1){grid-column:2;text-align:left}.sv-axis span:nth-child(2){text-align:center}.sv-axis span:nth-child(3){text-align:right}
+.sv-tf{display:grid;grid-template-columns:92px minmax(0,1fr) 96px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--b1)}.sv-tf:last-of-type{border-bottom:0}
+.sv-tfl{font-size:13.5px;font-weight:600;display:flex;flex-direction:column;line-height:1.2}.sv-tfl small{font-size:10.5px;color:var(--t3);font-weight:500}
+.sv-div{position:relative;height:14px;border-radius:7px;background:var(--s2)}.sv-zero{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--t3);transform:translateX(-1px)}
+.sv-df{position:absolute;top:0;bottom:0}.sv-df.up{background:var(--long);border-radius:0 7px 7px 0}.sv-df.down{background:var(--short);border-radius:7px 0 0 7px}.sv-df.side{background:#8b97ad;border-radius:7px}.sv-df.side.neg{background:#ff8a95}
+.sv-tfv{font:700 12.5px var(--mono);text-align:right;white-space:nowrap}.sv-tfv.up{color:var(--long)}.sv-tfv.down{color:var(--short)}.sv-tfv.side{color:var(--t2)}
+.sv-qai{position:absolute;right:12px;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:#a78bfa;border:1px solid rgba(167,139,250,.45);border-radius:999px;padding:2px 8px;pointer-events:auto;cursor:help;background:rgba(167,139,250,.08)}
+.sv-search input{padding-right:142px}
+.sv-summary{margin-bottom:12px}.sv-summary .sv-t{display:flex;align-items:center;gap:6px}
+.sv-overall{padding:12px 14px;border-radius:10px;border-left:4px solid var(--mixed);background:var(--s2);margin-bottom:12px}.sv-overall.good{border-left-color:var(--long)}.sv-overall.bad{border-left-color:var(--short)}.sv-overall.watch{border-left-color:var(--acc)}
+.sv-overall b{font-size:17px;display:block;margin-bottom:4px}.sv-overall p{margin:0;font-size:14.5px;line-height:1.6;color:var(--t1)}
+.sv-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.sv-tile{border:1px solid var(--b1);border-top:3px solid var(--b2);border-radius:10px;padding:10px 12px;background:var(--s1);display:flex;flex-direction:column;gap:4px;min-width:0}
+.sv-tile.good{border-top-color:var(--long)}.sv-tile.mid{border-top-color:var(--mixed)}.sv-tile.bad{border-top-color:var(--short)}
+.sv-tl{font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--t3);font-weight:700}.sv-tn{font-size:12.5px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sv-tv{font:800 24px var(--mono);line-height:1.15}.sv-tv small{font-size:16px;font-weight:700;margin-left:1px}.sv-tile.good .sv-tv{color:var(--long)}.sv-tile.mid .sv-tv{color:var(--mixed)}.sv-tile.bad .sv-tv{color:var(--short)}
+.sv-track.sm{height:7px}.sv-tw{font-size:12.5px;font-weight:700}.sv-tw.good{color:var(--long)}.sv-tw.mid{color:var(--mixed)}.sv-tw.bad{color:var(--short)}
+.sv-rank{margin-top:4px}.sv-rk{font-size:12.5px;color:var(--t2)}.sv-rk b{color:var(--t1);font-family:var(--mono)}
+.sv-rline{position:relative;height:4px;border-radius:2px;margin:6px 4px 2px;background:linear-gradient(90deg,var(--long),var(--mixed),var(--short));opacity:.85}
+.sv-rline i{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;background:var(--t1);border:2px solid var(--bg);transform:translate(-50%,-50%)}
+.sv-rends{display:flex;justify-content:space-between;font-size:10px;color:var(--t3)}.sv-tnote{font-size:12px;color:var(--t2);line-height:1.45}
+.sv-tiles-note{font-size:11.5px;margin-top:8px}
+.sv-bar{flex-wrap:wrap}.sv-bar .sv-search{min-width:320px}.sv-bar .sv-modebar{margin:0;flex-shrink:0}.sv-bar .sv-modebar .sg{height:46px;border-radius:12px}.sv-bar .sv-modebar .sg button{padding:0 14px;font-size:12.5px}
+.sv-head2{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--b1)}
+.sv-hn{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}.sv-name{font-size:19px;font-weight:800}
+@media (min-width:901px) and (max-height:860px){
+  .sv{margin-top:8px}.sv-bar{margin-bottom:8px}.sv-search input{padding-top:10px;padding-bottom:10px}.sv-bar .sv-modebar .sg,.sv-clear{height:40px}
+  .sv-summary{padding:10px 12px}.sv-head2{padding-bottom:7px;margin-bottom:7px}.sv-summary .sv-t{margin-bottom:6px}
+  .sv-sumgrid .sv-overall{padding:9px 12px}.sv-sumgrid .sv-overall b{font-size:16px}.sv-sumgrid .sv-overall p{font-size:13.5px;line-height:1.5}
+  .sv-sumgrid .sv-tile{padding:6px 10px}.sv-sumgrid .sv-tv{font-size:19px}.sv-tiles-note{margin-top:5px}
+  .sv-meter .gauge{width:210px;height:auto}.sv-top{padding:10px 14px}.sv-verdict2 p{font-size:13.5px;line-height:1.5}.sv-card{padding:10px 12px}.sv-card .sv-t{margin-bottom:6px}.sv-tf{padding:3px 0}.sv-note{margin-top:3px}
+}
+@media (min-width:901px) and (max-height:720px){
+  .sv-tiles-note,.sv-card>.sv-note,.sv-tfl small{display:none}.sv-sumgrid .sv-tn{display:none}
+  .sv-meter .gauge{width:190px}.sv-metrics .sv-tile{padding:6px 9px}.sv-metrics .sv-tv{font-size:19px}.sv-meter .sv-mode{font-size:10.5px;margin-top:2px}.sv-mix{font-size:11.5px}
+  .sv-tf{padding:1px 0}.sv-div{height:11px}.sv-axis{margin-bottom:0}.sv-foot{margin:6px 0 2px}
+}
+.sv-top{padding:12px 16px;margin-bottom:10px}.sv-top .sv-head2{margin-bottom:10px}
+.sv-verdict2{padding:10px 14px 12px;border-radius:10px;border-left:4px solid var(--mixed);background:var(--s2)}
+.sv-verdict2.good{border-left-color:var(--long)}.sv-verdict2.bad{border-left-color:var(--short)}.sv-verdict2.watch{border-left-color:var(--acc)}.sv-verdict2.warn{border-left-color:var(--mixed)}
+.sv-vt{display:flex;align-items:center;gap:6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);font-weight:700;margin-bottom:4px}
+.sv-verdict2 b{display:block;font-size:17px;margin-bottom:3px}.sv-verdict2.good b{color:var(--long)}.sv-verdict2.bad b{color:var(--short)}.sv-verdict2.warn b,.sv-verdict2.mid b{color:var(--mixed)}.sv-verdict2.watch b{color:var(--acc)}
+.sv-verdict2 p{margin:0;font-size:14px;line-height:1.6;color:var(--t1)}
+.sv-row3{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) minmax(0,1fr);gap:10px;align-items:stretch}
+.sv-row3 .sv-card{display:flex;flex-direction:column}.sv-row3 .sv-meter{justify-content:flex-start}
+.sv-metrics .sv-tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;flex:1}.sv-metrics .sv-tile{padding:8px 10px;gap:2px}.sv-metrics .sv-tv{font-size:22px}.sv-metrics .sv-tn{font-size:12px}
+.sv-periods .sv-tf{grid-template-columns:78px minmax(0,1fr) 92px;flex:1;max-height:56px}.sv-periods .sv-axis{grid-template-columns:78px 1fr 1fr 1fr 92px}
+@media (max-width:1180px){.sv-row3{grid-template-columns:repeat(2,minmax(0,1fr))}.sv-metrics{grid-column:1/-1;order:-1}}
+.sx{max-width:1260px}
+.sv-bar2{display:flex;align-items:flex-end;gap:18px;margin-bottom:12px}.sv-bar2 .sv-search{flex:1;min-width:0}
+.sv-search input{height:48px;border-radius:14px;border:1px solid var(--b2);background:var(--s1);font-size:14.5px;transition:border-color .15s,box-shadow .15s}
+.sv-search input:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--adim);outline:none}
+.sv-search.has-x input{padding-right:178px}
+.sv-x{position:absolute;right:136px;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.sv-x:hover{color:var(--short);border-color:var(--short)}
+.sv-mode2{display:flex;flex-direction:column;gap:5px;flex-shrink:0}
+.sv-ml{display:flex;align-items:center;gap:5px;font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);font-weight:700}
+.sv-pills{display:inline-flex;gap:4px;padding:4px;border-radius:999px;background:var(--s2);border:1px solid var(--b2)}
+.sv-pills button{border:0;background:none;color:var(--t2);font-size:13px;font-weight:600;padding:8px 18px;border-radius:999px;cursor:pointer;transition:background .15s,color .15s}
+.sv-pills button:hover{color:var(--t1);background:var(--s1)}.sv-pills button.on{background:var(--acc);color:var(--on-acc,#04121a)}
+@media (max-width:900px){.sv-bar2{flex-direction:column;align-items:stretch;gap:10px}.sv-pills{align-self:flex-start}.sv-search.has-x input{padding-right:52px}.sv-x{right:12px}}
+@media (min-width:901px) and (max-height:860px){.sv-search input{height:42px}.sv-pills button{padding:6px 15px}.sv-bar2{margin-bottom:8px}}
+.ometer{display:flex;flex-direction:column;align-items:center;text-align:center;min-width:0}.ometer .sx-lbl{align-self:stretch;justify-content:center}
+.ometer .gauge{margin:10px 0 16px}
+.om-card .gauge{margin:6px 0 11px}.om-card .sx-gv{font-size:26px}.om-card .sx-gv small{font-size:14px}.om-card .sx-gw{font-size:13px;margin-top:3px}
+.om-card .sx-mix{margin-top:8px;gap:4px}.om-card .sx-mix span{font-size:10.5px;padding:2px 7px}.om-card .sx-mix i{font-size:10px;margin-left:3px}.om-card .sx-mix b{margin-left:3px}
+.modal.stock .m-overall{grid-template-columns:minmax(220px,.8fr) minmax(0,1.45fr);align-items:center}
+.mo-side .ai-l{grid-template-columns:80px minmax(0,1fr);gap:6px}.mo-side .ai-box{margin-top:2px}
+@media (min-width:1000px) and (max-height:800px){.om-card .gauge{margin:3px 0 8px !important}.mo-side .mo-sum{gap:3px}.mo-side .mo-sum>.lbl{margin-bottom:0}.mo-top .cv-verdict{padding:3px 10px}.mo-top{gap:6px}.modal.stock .m-overall{padding-top:7px;padding-bottom:7px}.om-card .sx-gw{margin-top:1px}.mo-side{gap:6px}.mo-side .ai-box{gap:3px;padding:6px 9px}.modal.stock .mo-side .ai-l{line-height:1.35}.om-card .sx-mix i{display:none}.om-card .sx-mix{gap:3px}.om-card .sx-mix span{padding:2px 6px;font-size:10px}.om-card .gauge{width:150px;height:auto}.om-card .sx-gv{font-size:23px}}
+.mo-side{display:flex;flex-direction:column;gap:8px;min-width:0}.mo-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mo-side .mo-sum{border-top:0;padding-top:0;grid-column:auto}.mo-side .cv-verdict{justify-self:auto;text-align:left}
+@media (max-width:900px){.modal.stock .m-overall{grid-template-columns:1fr}}
+.sx-hero{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);padding:0;overflow:hidden;margin-bottom:12px}
+.sx-id{padding:18px 22px 20px;display:flex;flex-direction:column;gap:9px;min-width:0}
+.sx-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sx-title h2{margin:0;font-size:25px;font-weight:800;letter-spacing:-.3px;line-height:1.15}
+.sx-tick{font:700 12.5px var(--mono);color:var(--acc);padding:3px 9px;border-radius:6px;background:var(--adim);border:1px solid var(--accb)}
+.sx-tag{font-size:11px;font-weight:700;color:var(--long);padding:3px 8px;border-radius:6px;background:var(--longd)}
+.sx-meta{font-size:13.5px;color:var(--t2)}.sx-meta2{display:none;font-size:12.5px;color:var(--t2)}
+.sx-price{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.sx-price b{font:700 27px var(--mono);letter-spacing:-.5px}
+.sx-chg{font:700 13.5px var(--mono);padding:4px 9px;border-radius:7px}.sx-chg.up{color:var(--long);background:var(--longd)}.sx-chg.down{color:var(--short);background:var(--shortd)}
+.sx-verdict{margin-top:6px;padding:14px 16px 15px;border-radius:12px;background:var(--s2);border:1px solid var(--b1);border-left:4px solid var(--mixed)}
+.sx-verdict.good{border-left-color:var(--long)}.sx-verdict.bad{border-left-color:var(--short)}.sx-verdict.watch{border-left-color:var(--acc)}
+.sx-lbl{display:flex;align-items:center;gap:6px;font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);font-weight:700}
+.sx-vtitle{font-size:19px;font-weight:800;margin:7px 0 6px;color:var(--mixed)}.sx-verdict.good .sx-vtitle{color:var(--long)}.sx-verdict.bad .sx-vtitle{color:var(--short)}.sx-verdict.watch .sx-vtitle{color:var(--acc)}
+.sx-verdict p{margin:0;font-size:14.5px;line-height:1.65;color:var(--t1)}
+.sx-meter{border-left:1px solid var(--b1);background:var(--s2);padding:18px 18px 20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.sx-meter .sx-lbl{align-self:stretch;justify-content:center}.sx-meter .gauge{margin:10px 0 16px}
+.sx-gv{font:800 40px/1 var(--mono);letter-spacing:-1px}.sx-gv small{font-size:20px;margin-left:2px;letter-spacing:0}
+.sx-gw{font-size:15.5px;font-weight:700;margin-top:6px}
+.sx-gv.good,.sx-gw.good{color:var(--long)}.sx-gv.bad,.sx-gw.bad{color:var(--short)}.sx-gv.side,.sx-gw.side{color:var(--t2)}
+.sx-mix{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:14px}
+.sx-mix span{font-size:12px;color:var(--t2);padding:4px 10px;border-radius:999px;background:var(--s1);border:1px solid var(--b1);white-space:nowrap}
+.sx-mix b{font-family:var(--mono);color:var(--t1);margin-left:5px}.sx-mix b.good{color:var(--long)}.sx-mix b.bad{color:var(--short)}.sx-mix i{font-style:normal;color:var(--t3);margin-left:5px;font-size:11px}
+.sx-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.sx-stat{position:relative;overflow:hidden;padding:14px 16px 15px 18px;display:flex;flex-direction:column;gap:5px;min-width:0}
+.sx-stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--b2)}
+.sx-stat.good::before{background:var(--long)}.sx-stat.mid::before{background:var(--mixed)}.sx-stat.bad::before{background:var(--short)}.sx-stat.side::before{background:#8b97ad}
+.sx-sl{font-size:10.5px;text-transform:uppercase;letter-spacing:.9px;color:var(--t3);font-weight:700}
+.sx-sn{font-size:13.5px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx-sv{font:800 34px/1.05 var(--mono);letter-spacing:-1px;margin-top:4px}.sx-sv small{font-size:17px;margin-left:2px;letter-spacing:0}.sx-sv.word{font-family:var(--sans);letter-spacing:-.3px;font-size:30px}
+.sx-sv.good{color:var(--long)}.sx-sv.mid{color:var(--mixed)}.sx-sv.bad{color:var(--short)}.sx-sv.side{color:var(--t2)}
+.sx-sbar{height:6px;border-radius:3px;background:var(--s2);overflow:hidden;margin-top:4px}.sx-sbar i{display:block;height:100%;border-radius:3px;background:#8b97ad}
+.sx-sbar i.good{background:var(--long)}.sx-sbar i.mid{background:var(--mixed)}.sx-sbar i.bad{background:var(--short)}
+.sx-sw{align-self:flex-start;margin-top:4px;font-size:12.5px;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--s2);color:var(--t2)}
+.sx-sw.good{color:var(--long);background:var(--longd)}.sx-sw.mid{color:var(--mixed);background:rgba(255,170,0,.12)}.sx-sw.bad{color:var(--short);background:var(--shortd)}
+.sx-snote{font-size:13px;color:var(--t2);line-height:1.5;margin-top:4px}
+.sx-periods{padding:14px 18px 16px}.sx-phead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}.sx-hint{font-size:11.5px;color:var(--t3)}
+.sx-pgrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:10px}
+.sx-pc{padding:10px 12px 11px;border-radius:10px;background:var(--s2);border:1px solid var(--b1);display:flex;flex-direction:column;gap:6px;min-width:0}
+.sx-pl{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-size:13.5px;font-weight:700}.sx-pl small{font-size:10.5px;color:var(--t3);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.sx-pv{font:800 22px var(--mono);letter-spacing:-.5px}.sx-pv small{font-size:13px;margin-left:1px}.sx-pv.good{color:var(--long)}.sx-pv.bad{color:var(--short)}.sx-pv.side{color:var(--t2)}
+.sx-pbar{position:relative;height:8px;border-radius:4px;background:var(--s1)}.sx-pbar i{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--t3);transform:translateX(-1px)}
+.sx-pbar span{position:absolute;top:0;bottom:0;background:#8b97ad}.sx-pbar span.good{background:var(--long);border-radius:0 4px 4px 0}.sx-pbar span.bad{background:var(--short);border-radius:4px 0 0 4px}.sx-pbar span.side{border-radius:4px}
+.sx-pw{font-size:12.5px;font-weight:600;color:var(--t2)}
+@media (max-width:1100px){.sx-hero{grid-template-columns:1fr}.sx-meter{border-left:0;border-top:1px solid var(--b1)}.sx-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.sx-pgrid{grid-template-columns:repeat(5,minmax(120px,1fr));overflow-x:auto}}
+@media (max-width:640px){.sx-id{padding:14px 14px 16px}.sx-title h2{font-size:21px}.sx-pgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.sx-sv{font-size:28px}.sx-sv.word{font-size:24px}}
+@media (min-width:1101px) and (max-height:860px){
+  .sx-id{padding:14px 18px 15px;gap:7px}.sx-title h2{font-size:22px}.sx-price b{font-size:23px}.sx-verdict{padding:11px 14px 12px;margin-top:3px}
+  .sx-vtitle{font-size:17px;margin:5px 0 4px}.sx-verdict p{font-size:13.5px;line-height:1.55}
+  .sx-meter{padding:12px 16px 14px}.sx-meter .gauge{width:210px;height:auto;margin:6px 0 12px}.sx-gv{font-size:34px}.sx-gw{font-size:14px;margin-top:4px}.sx-mix{margin-top:10px}
+  .sx-stat{padding:10px 14px 11px 16px;gap:3px}.sx-sv{font-size:28px}.sx-sv.word{font-size:25px}.sx-stats{margin-bottom:10px;gap:10px}.sx-hero{margin-bottom:10px}
+  .sx-periods{padding:10px 14px 12px}.sx-pc{padding:8px 10px;gap:4px}.sx-pv{font-size:19px}
+}
+@media (min-width:1101px) and (max-height:720px){
+  .sx-meter .gauge{width:180px;margin:4px 0 10px}.sx-gv{font-size:30px}.sx-mix span{padding:3px 8px;font-size:11.5px}
+  .sx-sn{display:none}.sx-snote{font-size:12px}.sx-hint{display:none}.sx-pw{display:none}
+  .sx-meta{display:none}.sx-meta2{display:inline}.sx-id{gap:6px;padding:12px 16px 13px}.sx-price b{font-size:21px}.sx-chg{font-size:12.5px;padding:3px 8px}
+  .sx-verdict p{font-size:13px;line-height:1.48}.sx-vtitle{font-size:16px;margin:4px 0 3px}.sx-verdict{padding:9px 12px 10px}
+  .sx-stat{padding:8px 12px 9px 15px}.sx-sv{font-size:25px;margin-top:2px}.sx-sv.word{font-size:22px}.sx-sw{padding:2px 9px;font-size:12px}
+  .sx-stats,.sx-hero{margin-bottom:8px}.sx-periods{padding:9px 14px 10px}.sx-pgrid{margin-top:6px}.sx-pc{padding:7px 10px;gap:5px}.sx-pv{font-size:18px}
+  .sv-bar{margin-bottom:6px}.sv.sx{margin-top:6px}
+}
+.sv-sumgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:12px;align-items:stretch}
+.sv-sumgrid .sv-overall{margin:0;display:flex;flex-direction:column;justify-content:center}.sv-sumgrid .sv-overall b{font-size:18px}.sv-sumgrid .sv-overall p{font-size:14.5px}
+.sv-sumgrid .sv-tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.sv-sumgrid .sv-tile{padding:8px 11px;gap:2px}.sv-sumgrid .sv-tv{font-size:22px}.sv-sumgrid .sv-tn{font-size:12px}
+.sv-summary{padding:12px 14px;margin-bottom:10px}.sv-summary .sv-t{margin-bottom:8px}
+.sv-card{padding:12px 14px}.sv-grid{gap:10px}.sv-tf{padding:5px 0}.sv-meter .sv-mix{margin-top:0}.sv-foot{margin:10px 0 4px}
+.sv-modebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-4px 0 12px}.sv-modebar .sg{height:30px}.sv-modebar .sg button{padding:0 12px;font-size:12px}
+.sv-mix{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;font-size:12.5px;color:var(--t2);margin-top:2px}.sv-mix b{font-family:var(--mono);color:var(--t1)}.sv-mix b.down{color:var(--short)}.sv-mix b.up{color:var(--long)}
+.sv-sum dl{margin:0;display:flex;flex-direction:column}.sv-row{display:grid;grid-template-columns:132px minmax(0,1fr);gap:12px;padding:9px 0 9px 12px;border-bottom:1px solid var(--b1);position:relative}
+.sv-row::before{content:"";position:absolute;left:0;top:13px;width:6px;height:6px;border-radius:50%;background:var(--b2)}.sv-row.good::before{background:var(--long)}.sv-row.bad::before{background:var(--short)}.sv-row.mid::before{background:var(--mixed)}
+.sv-row dt{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--t3);padding-top:2px}.sv-row dd{margin:0;font-size:14px;line-height:1.55;color:var(--t1)}
+.sv-foot{text-align:center;font-size:11.5px;margin:14px 0 6px}
+@media (max-width:900px){.sv-row3{grid-template-columns:1fr}.sv-metrics{grid-column:auto}.sv-sumgrid{grid-template-columns:1fr}.sv-bar .sv-search{min-width:0;flex-basis:100%}.sv-bar .sv-modebar .sg{height:36px}.sv-grid{grid-template-columns:1fr}.sv-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.sv-qai{display:none}.sv-search input{padding-right:14px}.sv-row{grid-template-columns:1fr;gap:2px}.sv-tf{grid-template-columns:70px minmax(0,1fr) 84px}.sv-axis{grid-template-columns:70px 1fr 1fr 1fr 84px}.sv-drop button{grid-template-columns:96px minmax(0,1fr)}.sv-ds{display:none}.face{order:5;width:100%;margin:0}.face button{flex:1}.sv-head{flex-direction:column;align-items:flex-start}}
 .dp{position:relative;margin-left:auto}.dp-btn{display:inline-flex;align-items:center;gap:7px;font:11px var(--mono);letter-spacing:.4px;color:var(--t2);background:var(--s2);border:1px solid var(--b2);border-radius:8px;padding:6px 10px;cursor:pointer}
 .dp-btn b{color:var(--t1)}.dp-btn:hover{border-color:var(--accb)}.dp-btn.hist{border-color:var(--mixed);color:var(--mixed)}.dp-btn.hist b{color:var(--mixed)}.dp-part{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--mixed)}
 .dp-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:40;width:290px;background:var(--s1);border:1px solid var(--b2);border-radius:12px;box-shadow:0 20px 44px -18px rgba(0,0,0,.8);padding:12px}
@@ -1103,6 +1503,7 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
   .m-grid{margin-top:8px}
 }
 @media (min-width:1000px) and (max-height:800px){
+  .modal.stock .mo-gauge .gauge{width:108px;height:auto}
   .modal.stock{max-height:98vh;padding:12px 20px 8px}.modal.stock .m-name{font-size:17px}
   .modal.stock .m-row{padding:4px 12px}.modal.stock .peer{padding:3px 12px}.modal.stock .ctx td{padding:3px 5px}
   .modal.stock .m-overall{padding:9px 12px;gap:8px 12px}.modal.stock .ai-box{padding:7px 10px}.modal.stock .ai-l{font-size:11.5px;line-height:1.4}

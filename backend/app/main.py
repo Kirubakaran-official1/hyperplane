@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from . import config
 from . import helpdesk as hd
 from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
-                 init_db, pool, put_settings, set_auto_approve, set_history_enabled, set_meta)
+                 init_db, pool, put_settings, set_auto_approve, set_history_enabled, set_meta, get_history_changed)
 from .schedule import TZ, next_runs, now, parse_hhmm
 from .publish import publish
 from .security import hash_password
@@ -424,7 +424,7 @@ def _history_status():
         sched = c.execute("SELECT count(*) AS n FROM snapshots WHERE source = 'scheduled'").fetchone()["n"]
     failed = get_meta("history_failed", {}) or {}
     return {"enabled": get_history_enabled(), "collections": h["n"], "days": h["days"], "scheduled": sched,
-            "pending": max(0, sched - h["n"] - len(failed)), "failed": len(failed),
+            "pending": max(0, sched - h["n"] - len(failed)), "failed": len(failed), "changed": get_history_changed(),
             "error": next(iter(failed.values()), None),
             "first": h["first"].isoformat() if h["first"] else None, "last": h["last"].isoformat() if h["last"] else None}
 
@@ -438,7 +438,7 @@ def customer_history_status(user=Depends(admin_user)):
 def set_customer_history(body: HistoryIn, user=Depends(admin_user)):
     if body.enabled:
         set_meta("history_failed", {})                     # switching on (again) retries anything that failed before
-    set_history_enabled(body.enabled)
+    set_history_enabled(body.enabled, by=user["name"])
     return _history_status()
 
 

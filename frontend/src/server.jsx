@@ -797,6 +797,7 @@ function CustomersTab({ snaps, notify }) {
                   {hist.pending > 0 && <span style={{ color: "var(--mixed)" }}> · {hist.pending} older scheduled collections still being prepared in the background (a few seconds each) — reload to see progress</span>}
                   {hist.failed > 0 && <span style={{ color: "var(--short)" }} title={hist.error || ""}> · {hist.failed} could not be prepared ({hist.error}) — switch off and on again to retry</span>}</>
               : <>Off — customers see only the latest published data. {hist.scheduled} scheduled collections are stored and can be offered.</>}
+            {hist.changed && <span style={{ color: "var(--t3)" }}> · switched {hist.changed.on ? "on" : "off"}{hist.changed.by ? ` by ${hist.changed.by}` : ""} on {fmtDT(hist.changed.at)}</span>}
           </span>
         </div>
       </FocusCard>

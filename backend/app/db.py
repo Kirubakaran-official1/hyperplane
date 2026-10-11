@@ -1,5 +1,6 @@
 """PostgreSQL connection pool, schema and settings."""
 import json
+from datetime import datetime, timezone
 import os
 
 from psycopg.rows import dict_row
@@ -300,10 +301,19 @@ def get_history_enabled():
         return bool(c.execute("SELECT portal_history_enabled() AS v").fetchone()["v"])
 
 
-def set_history_enabled(on: bool):
+def set_history_enabled(on: bool, by=None):
     with pool.connection() as c:
         c.execute("INSERT INTO portal_config(key, value) VALUES ('history', %s::jsonb) "
                   "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (json.dumps(bool(on)),))
+        c.execute("INSERT INTO portal_config(key, value) VALUES ('history_changed', %s::jsonb) "
+                  "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                  (json.dumps({"on": bool(on), "by": by, "at": datetime.now(timezone.utc).isoformat()}),))
+
+
+def get_history_changed():
+    with pool.connection() as c:
+        r = c.execute("SELECT value FROM portal_config WHERE key = 'history_changed'").fetchone()
+    return r["value"] if r else None
 
 
 def get_meta(key, default=None):

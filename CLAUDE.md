@@ -581,3 +581,64 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
   "🗓 Customer past days: prepared collection #N". The customer picker reloads the day list each time it opens. Customer UI: `DayPicker` replaces "Data as of" when on —
   one date + Day open / Day end, no ranges; while on a past day the header button turns yellow ("VIEWING … Day end");
   "↺ Latest data" inside the picker returns (no banner — owner removed it).
+
+- Customer Trend gauge + Simple view (owner, 2026-10-11; v2 same day — owner found v1 "childish"): `TrendGauge` (SVG
+  semicircle −100…+100, zones at ±TREND_CUT and ±50, needle = combined `os`) in the stock card (dial only, value + word
+  beside it — keeps the one-screen fit at 1366×768) and in the Simple view. Header switch `.face` "Research view |
+  Simple view" (no emojis; localStorage `qf_face`). `SimpleView` — professional wording, NO emojis, NO peers section:
+  `StockSearch` (ticker / name typeahead, ↑↓ Enter) → name/price → gauge + `combinedView` verdict → "Scores out of 100"
+  (stock |os|, sector / industry `st` + rank; tones from `groupState`) → "Trend by period" (diverging horizontal bar per
+  period Days…Years: right = up, left = down, "Up 59 / Down 24 / Sideways 14") → "Summary" (fixed order: Trend · Periods
+  · Sector · Industry · Rank in industry · Risk · Price change · Conclusion). Uses the current trading mode + past day.
+  v3 (owner, same day): page = header → "Quant AI summary" card (overall verdict title + one paragraph built by fixed
+  rules: trend → periods disagree → sector & industry → reliability → stretched → `combinedView` text; then 4
+  `MetricTile`s: Stock |os| + rank among industry peers, Sector st + rank of N, Industry st + rank of N (Best→Worst
+  position line), Historical reliability High/Medium/Low from `h` S/M/W) → Trend meter | Trend by period. "Scores out
+  of 100" card and the detail list were dropped (tiles replace them). "Hyperplane AI" branding (renamed from Quant AI, owner): badge on the search, "Hyperplane AI summary",
+  landing hero "Understand any stock in seconds · powered by quant algorithms"; info text: our own quant algorithms,
+  no outside AI service.
+- Past-days switch audit: `portal_config.history_changed` {on, by, at} shown in Admin ("switched on by X on …").
+  Verified locally that the switch survives `docker compose up -d --build --force-recreate`.
+- Negative side (owner, 2026-10-11): any value below 0 (downtrend side, incl. sideways leaning down) is shown with a
+  minus sign and in red — gauge value (stock card + Simple view), Stock tile, Trend-by-period words (`signed()`);
+  the summary says "leaning down / up" for sideways stocks.
+- Simple view tiles (owner, 2026-10-11): percentage only — no rank, no Best/Worst line, no note under the tiles; the
+  gauge, summary text and period rows also use % (e.g. "−49%").
+- Simple view, later the same day (owner): "Overall trend meter" = STOCK 50 · SECTOR 25 · INDUSTRY 25 (owner changed it
+  from equal thirds) of stock `os`
+  (−100…+100) and sector / industry `st` mapped to the same scale ((st − 50) × 2, 50% = neutral); a missing part's
+  weight goes to the others; the three inputs are listed under the gauge. Tiles labelled "Stock trend strength / Sector strength / Industry
+  strength" + note "trend strength, not how much the price moved". Trading-mode Seg (Balanced / Swing · weeks to
+  months / Investing · long term) in the Simple view = the same `mode` as the research filter (also clears TFs).
+  Gauge "%" uses the value colour, smaller.
+- Docs section 11 "Simple view & the overall trend meter" (owner, 2026-10-11): what the page shows, the meter maths
+  (stock as is; sector / industry (x − 50) × 2; weights 50 / 25 / 25; cut-offs ±24 / ±50 / ±75) and the IOC worked
+  example (−49, +4, −2 → −24% Moderate downtrend). Gold "must read" sections stay 9 and 10.
+- Simple view one-screen layout (owner, 2026-10-11): search + trading mode + Clear on one row; name / price folded into
+  the top of the summary card; summary = verdict (left) | 4 tiles 2 × 2 (right); compact rules at max-height 860 px and
+  720 px (smaller gauge, slimmer rows, hide the two helper notes). Measured: no scrolling at 1920×1080, 1536×864,
+  1440×900, 1366×768; phones stack and scroll.
+- Simple view v4 layout (owner, 2026-10-11): search + mode + Clear row → top card (name/price line + "Hyperplane AI
+  summary" verdict box full width: professional title + paragraph) → three columns: Overall trend meter (gauge 240,
+  210/190 on short screens) | Key metrics (4 tiles 2 × 2) | Trend by period (rows fill the card). Verdict wording via
+  `PRO_VERDICT` (maps each `combinedView` title to a professional title + text; the rule is unchanged), e.g.
+  "Positive — average group backing", "Strong set-up — fully aligned", "Neutral — no clear trend". Group levels kept at
+  55 / 45 + rank (owner: keep as it is). Fits without scrolling at 1920×1080 … 1366×768.
+- LEVEL SCALE (owner, 2026-10-11, customer app, both views): `levelOf` on the rounded |value| → Weak 0–30 · Average
+  31–60 · Good 61–80 · Strong 81–100 (mirrored for downtrends). Stock words = `${level} uptrend/downtrend`, sideways cut
+  (|v| < 24) unchanged. Sector / industry words = levelOf(st). `groupState` (verdicts): Good/Strong (> 60) = backs the
+  stock, Weak (≤ 30) = against, else average (old 55 / 45 + rank rule removed). combinedView "Watch — stock still
+  building" now = stock ≤ 60 ("only average"). Gauge colour bands ±24 / ±60 / ±80. The Research sector bubble chart
+  widget (SectorPanel tooltip + list badges, `strengthLabel` / `strengthCls`) is deliberately UNCHANGED (owner).
+- Simple view v5 design: `sx-*` classes — hero card (left: name + ticker chip, sector › industry, price + change pill,
+  AI-summary box with professional verdict; right: overall gauge dial with the % BELOW the dial, word, input chips
+  "× 50% / × 25% / × 25%") → 4 `Stat` cards in a row (label → name → big % → bar → word pill; reliability = big word +
+  note) → "Trend by period" as 5 cells (value with ▲/▼, mini diverging bar, word). Compact rules at max-height 860 / 720.
+  Fits without scrolling at 1920×1080, 1536×864, 1440×900, 1366×768.
+- Same Overall-trend meter everywhere (owner, 2026-10-11): `OverallMeter` (+ `overallOf`, `trendWordOf`, `dirToneOf`) is
+  used by the Simplified view AND the Research stock card (`.om-card`, smaller): dial, % below it, word, input chips.
+  The stock card's top: meter (left) | Direction tag (stock summary as its tooltip) + verdict + AI insights (right) — keeps
+  the one-screen fit at 1920×1080 and 1366×768. "Trend by period" removed from the Simplified view.
+- Naming: header switch "Research view | Simplified view (AI Mode)"; Docs section 11 "Simplified view (AI Mode) & the
+  overall trend meter". Simplified-view top bar `.sv-bar2`: search (✕ inside clears ONLY the stock) | "Trading mode"
+  pill group (`.sv-pills`) — the old "Clear" button next to the mode was removed (owner: people mistook it for a mode reset).

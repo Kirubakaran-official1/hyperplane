@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 
 const Chip = ({ k, children }) => <span className={`qg-chip ${k}`}>{children}</span>;
-const LEVEL = { S: ["Strong", "s"], M: ["Moderate", "m"], W: ["Weak", "w"] };
+const LEVEL = { S: ["Strong", "s"], M: ["Average", "m"], W: ["Weak", "w"] };
 
 const EXAMPLES = [
   { stock: "S", ind: "W", sec: "W", tone: "bad", verdict: "✕ Avoid",
@@ -53,7 +53,7 @@ export function QuickGuideButton({ onDocs }) {
 
             <section>
               <h3><span>3</span>Check the strength of all three — then decide</h3>
-              <p>Strength is shown from 0 to 100%: <Chip k="s">Strong</Chip> <Chip k="m">Moderate</Chip> <Chip k="w">Weak</Chip>.
+              <p>Strength is shown from 0 to 100%: <Chip k="s">Strong 81+</Chip> <Chip k="s">Good 61–80</Chip> <Chip k="m">Average 31–60</Chip> <Chip k="w">Weak 0–30</Chip>.
                 It tells you how strong the trend is — <b>not</b> how much the price will move.</p>
               <div className="qg-ex">
                 <div className="qg-ex-h"><span>#</span><span>Stock</span><span>Industry</span><span>Sector</span><span>Decision</span></div>
