@@ -267,6 +267,7 @@ const SECTIONS = [
       <dt>Why can't I find a stock?</dt><dd>Check your filters (press <b>Reset</b>). Indices and ETFs are not listed — only stocks.</dd>
       <dt>Why is a stock strong on Daily but weak on Yearly?</dt><dd>Different timeframes look at different periods. A short-term rise can happen inside a long-term fall — see golden rule 3.</dd>
       <dt>What does “—” mean?</dt><dd>Not enough data for that timeframe yet (for example a recently listed stock).</dd>
+      <dt>Can I look at an earlier day?</dt><dd>When it is available, click <b>Data as of</b> at the top, pick a date, then <b>Day open</b> or <b>Day end</b>. The button turns yellow and says <b>Viewing</b> while you look at a past day — open it again and press <b>↺ Latest data</b> to return.</dd>
       <dt>Do the bubble charts follow my filters?</dt><dd>They follow the <b>Timeframe</b> and they filter the list when you click them. They always show the whole market, so you can compare every group.</dd>
       <dt>Is this a recommendation?</dt><dd>No. It is trend information for education — see below.</dd>
     </dl>

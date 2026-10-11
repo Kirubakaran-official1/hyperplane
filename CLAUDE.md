@@ -479,8 +479,9 @@ failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSO
 schedule_times ["09:45","14:30"] · weekdays_only true · skip_dates [] (NSE holidays) · catch_up_minutes 180 ·
 retention_days 0 (forever) · manual_keep all|latest · telegram_enabled true · nr_mother_body_pct 60 ·
 index_add [] · index_keep [] (symbols the dashboard also hides / never hides as index-ETF) · tech_enabled true ·
-tech_weight 1.0 · tech {D..Y: rsi_bull 70, rsi_bear 30, adx_mode below, adx_value 40, macd_bull 0, macd_bear 0,
-cci_bull 150, cci_bear −150} (`TECH_TF_DEFAULT`) · algos null (Technical Quant algorithms; null = ready-made).
+tech_weight 1.0 · tech {D..Y: rsi_bull 70, rsi_bear 30, rsi70_bull 70, rsi70_bear 40, adx_mode below, adx_value 40,
+atr_mode below, atr_value 70, macd_bull 0, macd_bear 0, cci_bull 150, cci_bear −150} (`TECH_TF_DEFAULT`; `get_settings` fills
+levels missing from older saved settings) · algos null (Technical Quant algorithms; null = ready-made).
 
 ### Worker
 Polls every 15 s: queue due slots → claim next queued job → `run_scanner()` in `data/runs/job_N` (chdir, stdout
@@ -553,3 +554,27 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
 - Open questions to ask the owner (don't guess): virgin **breakout** scan screenshot; a trend/flag scan screenshot;
   a "Near_and_abv_Overlap" scan screenshot; the exact **trend** definition (zones rising vs closes
   rising — see §5).
+
+- RSI-70 + ATR (owner, 2026-10-11): technical-data screener now has `d_rsi_70`… (RSI, 70-bar look-back) and ATR columns.
+  Scanner `_TECH_KEYS` maps rsi_70 → `rsi70` (tested BEFORE rsi) and atr → `atr`; Technicals sheet adds `X_RSI70`, `X_ATR`.
+  Owner rules: RSI-70 bullish ≥ 70 · bearish ≤ 40; ATR works like ADX (no direction; rule "below 70" by default, when met
+  it confirms the Supertrend side). ATR is in RUPEES (ChartInk/TradingView standard; ATRP is the % version) — the
+  report tooltip also shows ATR as % of price. Tech score divides by the indicators the stock HAS (6 old, 8 new) in
+  both `_tech_net` (publish.py) and `buildTechIndex`/`withTechSignals` (`techCount`). Algo builder: fields `rsi70`, `atr`
+  (also in main.py `ALGO_FIELDS`); ready-made algos include both; a rule on a TIMEFRAME + indicator no stock has data for
+  (e.g. Yearly RSI-70 — needs 70 yearly candles) is skipped (counts as met) with a ⚠ note.
+  Real screener header 2026-10-11 (owner's full paste): d..y_rsi_70, d..y_cci, d..y_atr all present → 45 indicator
+  columns recognised (verified with the scanner's own reader). Real ATR is in RUPEES (scales with price: RSYSTEMS ₹274 →
+  D 19.4, Q 104.7, Y 143.6) — so "ATR below 70" passes for almost every cheap stock and fails for costly ones on M/Q/Y.
+
+- Customer PAST DAYS (owner, 2026-10-11): admin switch in Admin → Customers → "Past days for customers"
+  (`portal_config.history`, SECURITY DEFINER `portal_history_enabled()`, routes GET/PUT /api/admin/customer-history).
+  Table `customer_history` (snapshot_id PK → snapshots ON DELETE CASCADE, trade_date, taken_at, slot, stocks, data_gz) =
+  the same labels-only payload as `published` (`build_history` in publish.py), ONLY for source='scheduled' collections
+  (never manual Sync now / imports). Worker: builds right after each scheduled run and back-fills one older collection
+  per idle tick, only while the switch is on. Portal role: SELECT + row-level security policy `portal_history`
+  USING portal_history_enabled() → with the switch off the database returns no rows. Portal: GET /app/api/history
+  (days → open/end times) and GET /app/api/data?date=YYYY-MM-DD&part=open|end (first scheduled run of the day = Day open,
+  last = Day end; a day with one run: before noon = open). Customer UI: `DayPicker` replaces "Data as of" when on —
+  one date + Day open / Day end, no ranges; while on a past day the header button turns yellow ("VIEWING … Day end");
+  "↺ Latest data" inside the picker returns (no banner — owner removed it).

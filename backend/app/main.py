@@ -30,8 +30,8 @@ from pydantic import BaseModel
 
 from . import config
 from . import helpdesk as hd
-from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_meta, get_settings, init_db, pool,
-                 put_settings, set_auto_approve)
+from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
+                 init_db, pool, put_settings, set_auto_approve, set_history_enabled)
 from .schedule import TZ, next_runs, now, parse_hhmm
 from .publish import publish
 from .security import hash_password
@@ -295,7 +295,7 @@ def _tech_levels(raw):
         given, cfg = (raw or {}).get(tf) or {}, {}
         for k, d in TECH_TF_DEFAULT.items():
             v = given.get(k, d)
-            if k == "adx_mode":
+            if k in ("adx_mode", "atr_mode"):
                 cfg[k] = v if v in ("below", "above") else d
             else:
                 try:
@@ -307,7 +307,7 @@ def _tech_levels(raw):
 
 
 ALGO_TFS = set("DWMQY")
-ALGO_FIELDS = {"close", "prev", "rsi", "adx", "cci", "macd", "st", "bbu", "bbl", "tz", "tn", "bn", "bz"}
+ALGO_FIELDS = {"close", "prev", "rsi", "rsi70", "adx", "atr", "cci", "macd", "st", "bbu", "bbl", "tz", "tn", "bn", "bz"}
 ALGO_OPS = {">", ">=", "<", "<=", "=", "!="}
 
 
@@ -411,6 +411,31 @@ def signup_mode(user=Depends(admin_user)):
 def set_signup_mode(body: SignupModeIn, user=Depends(admin_user)):
     set_auto_approve(body.auto_approve)
     return {"auto_approve": get_auto_approve()}
+
+
+class HistoryIn(BaseModel):
+    enabled: bool
+
+
+def _history_status():
+    with pool.connection() as c:
+        h = c.execute("SELECT count(*) AS n, count(DISTINCT trade_date) AS days, min(trade_date) AS first, max(trade_date) AS last "
+                      "FROM customer_history").fetchone()
+        sched = c.execute("SELECT count(*) AS n FROM snapshots WHERE source = 'scheduled'").fetchone()["n"]
+    return {"enabled": get_history_enabled(), "collections": h["n"], "days": h["days"], "scheduled": sched,
+            "pending": max(0, sched - h["n"]),
+            "first": h["first"].isoformat() if h["first"] else None, "last": h["last"].isoformat() if h["last"] else None}
+
+
+@app.get("/api/admin/customer-history")
+def customer_history_status(user=Depends(admin_user)):
+    return _history_status()
+
+
+@app.put("/api/admin/customer-history")
+def set_customer_history(body: HistoryIn, user=Depends(admin_user)):
+    set_history_enabled(body.enabled)
+    return _history_status()
 
 
 @app.get("/api/admin/customers")

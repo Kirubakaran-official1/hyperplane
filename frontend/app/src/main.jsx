@@ -668,6 +668,41 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
   );
 }
 
+// ─── past days (only when the admin allows it): ONE scheduled collection — a date, then Day open or Day end ───
+const fmtTime = iso => new Date(iso).toLocaleTimeString("en-IN", { hour:"numeric", minute:"2-digit", timeZone:"Asia/Kolkata" });
+const fmtDay = d => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
+const PARTS = [["open", "Day open"], ["end", "Day end"]];
+function DayPicker({ days, sel, asOf, onPick }) {
+  const [open, setOpen] = useState(false); const ref = useRef(null);
+  const byDay = useMemo(() => Object.fromEntries(days.map(x => [x.d, x])), [days]);
+  const min = days[0].d, max = days[days.length - 1].d;
+  const [d, setD] = useState(sel ? sel.date : max);
+  useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const day = byDay[d];
+  return (
+    <div className="dp" ref={ref}>
+      <button type="button" className={`dp-btn ${sel ? "hist" : ""}`} onClick={() => { setD(sel ? sel.date : max); setOpen(v => !v); }} aria-expanded={open} title="View a past day">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+        {sel ? "VIEWING" : "DATA AS OF"} <b>{asOf ? fmtDT(asOf) : "…"}</b>{sel && <span className="dp-part">{sel.part === "open" ? "Day open" : "Day end"}</span>}<span className="caret">▾</span>
+      </button>
+      {open && (
+        <div className="dp-pop" role="dialog" aria-label="View a past day">
+          <div className="dp-t">View a past day</div>
+          <input className="dp-in" type="date" value={d || ""} min={min} max={max} onChange={e => setD(e.target.value)}/>
+          {!day ? <div className="dp-none">No data for {d ? fmtDay(d) : "this day"} — the market may have been closed. Pick another date.</div>
+            : <div className="sg dp-parts">{PARTS.map(([k, l]) => (
+                <button key={k} type="button" disabled={!day[k]} className={sel && sel.date === d && sel.part === k ? "on" : ""}
+                  onClick={() => { onPick({ date: d, part: k }); setOpen(false); }} title={day[k] ? `Data as of ${fmtDT(day[k])}` : "Not collected that day"}>
+                  {l}<small>{day[k] ? fmtTime(day[k]) : "—"}</small>
+                </button>))}</div>}
+          <div className="dp-f"><span>{days.length} days · {fmtDay(min)} – {fmtDay(max)}</span>
+            {sel && <button type="button" onClick={() => { onPick(null); setOpen(false); }}>↺ Latest data</button>}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── main page ───────────────────────────────────────────────────────────────
 const EMPTY = { sectors:[], industries:[], sizes:[], bg:[], fno:false, trend:"all" };
 
@@ -686,7 +721,16 @@ function Home({ me, onOut }) {
   const hdApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); throw e; }), []);
   const unread = useHelpdeskUnread(hdApi, "/app/api/helpdesk");
   const openHelpdesk = id => { setView("helpdesk"); setHdReq({ id, n: Date.now() }); };
-  useEffect(() => { api("/app/api/data").then(setData).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); else setErr(e.message); }); }, []);
+  // past days: offered only when the admin has switched it on; sel = { date, part } or null for the latest published data
+  const [hist, setHist] = useState(null); const [sel, setSel] = useState(null);
+  useEffect(() => { api("/app/api/history").then(setHist).catch(() => setHist(null)); }, []);
+  useEffect(() => {
+    setData(null); setErr(""); setOpen(null);
+    api("/app/api/data" + (sel ? `?date=${sel.date}&part=${sel.part}` : "")).then(setData).catch(e => {
+      if (sel && e.status !== 401) { setSel(null); setErr(""); return; }      // not available (any more) → back to the latest
+      if (e.status === 401 || e.status === 403) onOut(e.message); else setErr(e.message);
+    });
+  }, [sel]);
   useEffect(() => setPage(0), [f, tfs, q, sort]);
   const stocks = data ? data.stocks : [];
   const sectorOpts = useMemo(() => [...new Set(stocks.map(s => s.sec))].sort(), [stocks]);
@@ -729,7 +773,9 @@ function Home({ me, onOut }) {
     <div className="page">
       <header className="top">
         <button type="button" className="brand-home" onClick={() => setView("tower")} title="Control Tower"><Brand/></button>
-        <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>
+        {hist && hist.enabled && hist.days.length
+          ? <DayPicker days={hist.days} sel={sel} asOf={data && data.as_of} onPick={setSel}/>
+          : <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>}
         <QuickGuideButton onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}/>
         <InboxBell unread={unread} onOpen={openHelpdesk}/>
         <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}
@@ -768,7 +814,7 @@ function Home({ me, onOut }) {
       </div>
 
       {err && <div className="card empty">{err}</div>}
-      {!data && !err && <div className="card empty">Loading the latest data…</div>}
+      {!data && !err && <div className="card empty">{sel ? "Loading that day…" : "Loading the latest data…"}</div>}
       {data && <>
         <div className="kpis">
           <div className="card kpi"><span className="lbl">Stocks in view <Info text={`Stocks that match the market-cap, segment, sector and industry filters (${scope}).`}/></span><b className="mono">{base.length.toLocaleString()}</b></div>
@@ -937,6 +983,17 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .tab-n{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#ff4454;color:#fff;font:700 10px/18px var(--mono);text-align:center}
 .page>.hd,.page>.guide{margin-top:12px}
 .top{display:flex;align-items:stretch;gap:16px;min-height:56px;flex-wrap:wrap;border-bottom:1px solid var(--b1)}.top>*{align-self:center}.top .tabs{align-self:center;margin:0 0 0 14px;border:0;display:flex;gap:6px}.top .tabs button{margin:0;padding:0 14px;height:34px;border:1px solid var(--b2);border-radius:8px;background:var(--s2);color:var(--t2);transition:border-color .15s,background .15s,color .15s}.top .tabs button:hover{border-color:var(--accb);color:var(--t1)}.top .tabs button.on{border-color:var(--acc);background:var(--adim);color:var(--acc);box-shadow:0 0 0 1px var(--accb) inset}.asof{font:11px var(--mono);color:var(--t2);margin-left:auto;letter-spacing:.4px}.asof b{color:var(--t1)}
+.dp{position:relative;margin-left:auto}.dp-btn{display:inline-flex;align-items:center;gap:7px;font:11px var(--mono);letter-spacing:.4px;color:var(--t2);background:var(--s2);border:1px solid var(--b2);border-radius:8px;padding:6px 10px;cursor:pointer}
+.dp-btn b{color:var(--t1)}.dp-btn:hover{border-color:var(--accb)}.dp-btn.hist{border-color:var(--mixed);color:var(--mixed)}.dp-btn.hist b{color:var(--mixed)}.dp-part{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--mixed)}
+.dp-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:40;width:290px;background:var(--s1);border:1px solid var(--b2);border-radius:12px;box-shadow:0 20px 44px -18px rgba(0,0,0,.8);padding:12px}
+.dp-t{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;font-weight:700;margin-bottom:8px}
+.dp-in{width:100%;padding:7px 9px;font:13px var(--mono);color-scheme:dark}[data-theme="light"] .dp-in{color-scheme:light}
+.dp-none{margin-top:10px;font-size:12px;color:var(--t2);line-height:1.5}
+.sg.dp-parts{display:flex;width:100%;margin-top:10px;height:auto}.sg.dp-parts button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 4px;height:auto;min-height:44px;line-height:1.2}
+.sg.dp-parts button small{font:10px var(--mono);opacity:.75}.sg.dp-parts button:disabled{opacity:.35;cursor:not-allowed}
+.dp-f{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;font-size:10.5px;color:var(--t3)}
+.dp-f button{background:none;border:0;color:var(--acc);font-size:11.5px;font-weight:600;cursor:pointer;padding:0}
+
 .who{display:flex;align-items:center;gap:10px;font-size:12.5px}.avatar{width:28px;height:28px;border-radius:50%;background:var(--adim);border:1px solid var(--accb);color:var(--acc);display:flex;align-items:center;justify-content:center;font:700 12px var(--mono)}
 .fbar{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 14px;padding:9px 12px;margin:12px 0 12px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--b1);border-radius:10px}
 .fg{display:flex;flex-direction:column;gap:5px}.fl{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--t2);text-transform:uppercase;letter-spacing:.9px;font-weight:700;height:13px}
@@ -1059,7 +1116,7 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 @media (min-width:1380px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
 @media (max-width:900px){.top .tabs{order:5;width:100%;margin:0 0 8px}.top .tabs button{flex:1;justify-content:center}.auth-page{grid-template-columns:1fr}.hero{padding:30px 22px;border-right:0;border-bottom:1px solid var(--b1)}.hero-h{font-size:28px}.hero-demo{display:none}.panels{grid-template-columns:1fr}.m-overall{grid-template-columns:auto auto}.cv-verdict{grid-column:1/-1;justify-self:start;white-space:normal}}
-@media (max-width:640px){.auth-page .feats,.auth-page .hero-fine{display:none}.hero-p{font-size:13.5px}.hero{gap:10px}.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
+@media (max-width:640px){.auth-page .feats,.auth-page .hero-fine{display:none}.hero-p{font-size:13.5px}.hero{gap:10px}.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.dp{order:4;margin-left:0;width:100%}.dp-btn{width:100%;justify-content:center}.dp-pop{left:0;right:auto;width:100%}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
 `;
 
 document.documentElement.dataset.theme = getTheme();

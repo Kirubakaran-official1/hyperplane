@@ -18,8 +18,8 @@ import traceback
 from datetime import timedelta
 
 from . import config
-from .db import get_settings, init_db, pool, set_meta
-from .publish import publish
+from .db import get_history_enabled, get_settings, init_db, pool, set_meta
+from .publish import build_history, history_missing, publish
 from .schedule import due_slots, now
 from .store import save_snapshot, workbook_to_sheets
 
@@ -156,6 +156,12 @@ def run_job(job, bg):
                 print(f"📣 Published to customers ({pub['stocks']} stocks)")
             except Exception as e:                               # noqa: BLE001 — never fail the collection for this
                 print(f"⚠ Could not publish to customers: {e}")
+        if job["kind"] == "scheduled" and get_history_enabled():
+            try:
+                build_history(sid)
+                print("🗓 Added to the customers' past-days picker")
+            except Exception as e:                               # noqa: BLE001 — never fail the collection for this
+                print(f"⚠ Could not add it to the customers' past days: {e}")
         _append_log(job_id, tee.take())
         with pool.connection() as c:
             c.execute("UPDATE jobs SET status='done', finished_at=now(), snapshot_id=%s WHERE id=%s", (sid, job_id))
@@ -222,6 +228,12 @@ def main():
             if last_cleanup != now().date():
                 cleanup()
                 last_cleanup = now().date()
+            # customers' past days: build one older scheduled collection per idle tick (light on a small server)
+            if get_history_enabled():
+                todo = history_missing(limit=1)
+                if todo:
+                    build_history(todo[0])
+                    continue
         except Exception:                                        # noqa: BLE001 — never let the loop die
             traceback.print_exc()
         time.sleep(POLL_SECONDS)

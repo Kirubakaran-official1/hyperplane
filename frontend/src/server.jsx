@@ -337,7 +337,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ borderCollapse: "collapse", fontSize: 11.5, opacity: form.tech_enabled ? 1 : .55 }}>
-            <thead><tr>{["TF", "RSI bullish ≥", "RSI bearish ≤", "ADX", "ADX value", "MACD bullish >", "MACD bearish <", "CCI bullish ≥", "CCI bearish ≤"].map(h => <th key={h} style={{ ...TH, position: "static" }}>{h}</th>)}</tr></thead>
+            <thead><tr>{["TF", "RSI bullish ≥", "RSI bearish ≤", "RSI-70 bullish ≥", "RSI-70 bearish ≤", "ADX", "ADX value", "ATR", "ATR value", "MACD bullish >", "MACD bearish <", "CCI bullish ≥", "CCI bearish ≤"].map(h => <th key={h} style={{ ...TH, position: "static" }}>{h}</th>)}</tr></thead>
             <tbody>
               {["D", "W", "M", "Q", "Y"].map(tf => {
                 const c = (form.tech || {})[tf] || {};
@@ -347,12 +347,19 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
                   <tr key={tf} style={{ borderBottom: "1px solid var(--b1)" }}>
                     <td style={{ ...TD, fontWeight: 700 }}>{{ D: "Daily", W: "Weekly", M: "Monthly", Q: "Quarterly", Y: "Yearly" }[tf]}</td>
                     <td style={TD}>{num("rsi_bull")}</td><td style={TD}>{num("rsi_bear")}</td>
+                    <td style={TD}>{num("rsi70_bull")}</td><td style={TD}>{num("rsi70_bear")}</td>
                     <td style={TD}>
                       <select id={`tech-${tf}-adx_mode`} value={c.adx_mode || "below"} onChange={e => set("adx_mode", e.target.value)} style={input} title="below = trend recently started · above = strong, established trend">
                         <option value="below">below (fresh trend)</option><option value="above">above (strong trend)</option>
                       </select>
                     </td>
                     <td style={TD}>{num("adx_value")}</td>
+                    <td style={TD}>
+                      <select id={`tech-${tf}-atr_mode`} value={c.atr_mode || "below"} onChange={e => set("atr_mode", e.target.value)} style={input} title="ATR = average daily range in rupees · below = calmer stock · above = wider swings">
+                        <option value="below">below</option><option value="above">above</option>
+                      </select>
+                    </td>
+                    <td style={TD}>{num("atr_value")}</td>
                     <td style={TD}>{num("macd_bull")}</td><td style={TD}>{num("macd_bear")}</td>
                     <td style={TD}>{num("cci_bull")}</td><td style={TD}>{num("cci_bear")}</td>
                   </tr>
@@ -361,7 +368,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
             </tbody>
           </table>
         </div>
-        <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 6, lineHeight: 1.5 }}>ADX has no direction of its own: when it meets your rule it confirms the trend in the direction of that timeframe's Supertrend.</div>
+        <div style={{ fontSize: 10.5, color: "var(--t3)", marginTop: 6, lineHeight: 1.5 }}>ADX and ATR have no direction of their own: when one meets your rule it confirms the trend in the direction of that timeframe's Supertrend. RSI-70 = RSI with a 70-bar look-back. ATR is in rupees (the stock's average range), so the same value means more for a cheap stock than for a costly one — the stock report also shows it as % of price.</div>
         <div style={{ marginTop: 8 }}><button onClick={save} disabled={saving} style={btn(true)}>{saving ? "Saving…" : "Save settings"}</button></div>
       </FocusCard>
 
@@ -698,20 +705,23 @@ function CustomersTab({ snaps, notify }) {
   const [pwFor, setPwFor] = useState(null); const [pw, setPw] = useState("");
   const [confirmDel, setConfirmDel] = useState(null);
   const [signup, setSignup] = useState(null);
+  const [hist, setHist] = useState(null);
   const load = useCallback(async () => {
-    const [l, p, m] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish"), api("/api/admin/signup-mode")]);
-    setList(l); setPub(p); setSignup(m);
+    const [l, p, m, h] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish"), api("/api/admin/signup-mode"), api("/api/admin/customer-history")]);
+    setList(l); setPub(p); setSignup(m); setHist(h);
   }, []);
   useEffect(() => { load().catch(e => notify(e.message, "err")); }, [load]);
   const act = async (fn, okMsg) => { try { await fn(); if (okMsg) notify(okMsg); await load(); } catch (e) { notify(e.message, "err"); } };
   const patch = (id, body, msg) => act(() => api(`/api/admin/customers/${id}`, { method: "PATCH", json: body }), msg);
   const setSignupMode = on => act(() => api("/api/admin/signup-mode", { method: "PUT", json: { auto_approve: on } }),
     on ? "New sign-ups are now approved automatically and signed in straight away" : "New sign-ups now wait for your approval");
+  const setHistory = on => act(() => api("/api/admin/customer-history", { method: "PUT", json: { enabled: on } }),
+    on ? "Customers can now pick a past day (Day open / Day end)" : "Customers now see only the latest published data");
   const setMode = mode => act(() => api("/api/admin/publish/mode", { method: "PUT", json: { mode } }), mode === "auto" ? "Customers now get every new collection automatically" : "Publishing is now manual");
   const publishNow = async () => { setBusy(true); await act(() => api("/api/admin/publish", { method: "POST" }), "Published to customers"); setBusy(false); };
   const loadPreview = async () => { setBusy(true); try { setPreview(await api("/api/admin/publish/preview")); } catch (e) { notify(e.message, "err"); } setBusy(false); };
 
-  if (!list || !pub || !signup) return <div style={{ padding: 30, color: "var(--t3)" }}>Loading customers…</div>;
+  if (!list || !pub || !signup || !hist) return <div style={{ padding: 30, color: "var(--t3)" }}>Loading customers…</div>;
   const counts = { all: list.length, pending: 0, approved: 0, blocked: 0 }; list.forEach(c => { counts[c.status]++; });
   const today = new Date().toISOString().slice(0, 10);
   const shown = list.filter(c => (statusF === "all" || c.status === statusF) && (!q || `${c.name} ${c.email} ${c.phone} ${c.state} ${c.country} ${c.city}`.toLowerCase().includes(q.toLowerCase())));
@@ -768,6 +778,26 @@ function CustomersTab({ snaps, notify }) {
             {fmtDT(h.published_at)} · data {fmtDT(h.as_of)} · {h.stocks} stocks · {h.mode === "auto" ? "automatic" : `by ${h.by}`}
           </div>
         )) : <div style={{ fontSize: 11, color: "var(--t3)" }}>Nothing published yet — customers see "no data yet" until you publish.</div>}
+      </FocusCard>
+
+      <FocusCard icon="🗓" title="Past days for customers" style={{ marginBottom: 12 }}
+        sub="When on, customers get a date picker next to “Data as of”: they pick one date, then Day open (first scheduled run of that day) or Day end (last run). One collection at a time — no ranges. Only scheduled collections (system sync) are offered; manual Sync now and imported files never are.">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div role="radiogroup" aria-label="Past days for customers" style={{ display: "inline-flex", border: "1px solid var(--b2)", borderRadius: 999, padding: 3, background: "var(--s2)", gap: 3 }}>
+            {[[false, "🔒 Latest data only"], [true, "🗓 Customers can pick a past day"]].map(([on, label]) => (
+              <button key={label} id={`hist-${on ? "on" : "off"}`} role="radio" aria-checked={hist.enabled === on} onClick={() => hist.enabled !== on && setHistory(on)}
+                style={{ padding: "6px 14px", borderRadius: 999, border: 0, cursor: "pointer", fontSize: 12, fontWeight: 700,
+                  background: hist.enabled === on ? (on ? "var(--long)" : "var(--acc)") : "transparent",
+                  color: hist.enabled === on ? "#04121a" : "var(--t2)" }}>{label}</button>
+            ))}
+          </div>
+          <span id="hist-status" style={{ fontSize: 11.5, color: "var(--t2)" }}>
+            {hist.enabled
+              ? <>{hist.days ? <><b>{hist.days}</b> days ready ({hist.collections} collections, {hist.first} → {hist.last})</> : "No days ready yet"}
+                  {hist.pending > 0 && <span style={{ color: "var(--mixed)" }}> · {hist.pending} older scheduled collections still being prepared in the background (about 4 a minute) — reload to see progress</span>}</>
+              : <>Off — customers see only the latest published data. {hist.scheduled} scheduled collections are stored and can be offered.</>}
+          </span>
+        </div>
       </FocusCard>
 
       <FocusCard icon="🚪" title="New sign-ups" style={{ marginBottom: 12 }}

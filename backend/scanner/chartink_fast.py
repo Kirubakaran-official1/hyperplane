@@ -1550,10 +1550,11 @@ def normalize_virgin_frame(df):
     return df[keep].rename(columns=rename)
 
 
-# technical-data columns -> tech_<tf>_<rsi|adx|bbu|bbl|macd|st|cci>
+# technical-data columns -> tech_<tf>_<rsi|rsi70|adx|atr|bbu|bbl|macd|st|cci>   (d_rsi_70 = RSI with a 70 look-back)
 _TECH_HDR = re.compile(r'^(d|w|m|q|y|daily|weekly|monthly|quaterly|yearly)_(.+)$')
-_TECH_KEYS = (('upper', 'bbu'), ('lower', 'bbl'), ('macd', 'macd'), ('super', 'st'), ('cci', 'cci'), ('rsi', 'rsi'), ('adx', 'adx'))
-TECH_INDICATORS = ('rsi', 'adx', 'bbu', 'bbl', 'macd', 'st', 'cci')
+_TECH_KEYS = (('upper', 'bbu'), ('lower', 'bbl'), ('macd', 'macd'), ('super', 'st'), ('cci', 'cci'),
+              ('rsi_70', 'rsi70'), ('rsi70', 'rsi70'), ('rsi', 'rsi'), ('adx', 'adx'), ('atr', 'atr'))
+TECH_INDICATORS = ('rsi', 'rsi70', 'adx', 'atr', 'bbu', 'bbl', 'macd', 'st', 'cci')
 
 
 def normalize_technical_frame(df):
@@ -3322,7 +3323,7 @@ def generate_telegram_insights(combined_stock_map, stock_zone_signal_map, stock_
 #     Price_Health      long-term price quality (POOR / WEAK / HEALTHY) from the yearly candles
 #     Failed_NR         failed NR breakout / breakdown, price back at the opposite mother edge (trap)
 #     Zone_Retest       last bar closed beyond its own zone, price now back at the current zone's other band
-#     Technicals        RSI / ADX / BB / MACD / Supertrend / CCI per timeframe (only when the technical-data scrape worked)
+#     Technicals        RSI / RSI(70) / ADX / ATR / BB / MACD / Supertrend / CCI per timeframe (only when the technical-data scrape worked)
 # ============================================================================
 
 _TF_LABEL = {'d': 'D', 'w': 'W', 'm': 'M', 'q': 'Q', 'y': 'Y'}
@@ -3649,14 +3650,15 @@ def build_zone_retest_rows(frame, zone_rows, health_rows=None):
 
 
 def build_technical_rows(frame, zone_rows):
-    """One row per stock: price + RSI / ADX / BB upper / BB lower / MACD / Supertrend / CCI for D W M Q Y
+    """One row per stock: price + RSI / RSI(70) / ADX / ATR / BB upper / BB lower / MACD / Supertrend / CCI for D W M Q Y
     (raw values from the technical-data screener; bullish / bearish levels are set in the dashboard's Admin tab)."""
     cols = [f"tech_{tf}_{ind}" for tf in 'dwmqy' for ind in TECH_INDICATORS]
     if not any(c in frame.columns for c in cols):
         return []
     x = _Ctx(frame)
     zinfo = {z['Symbol']: z for z in zone_rows}
-    label = {'rsi': 'RSI', 'adx': 'ADX', 'bbu': 'BB_Upper', 'bbl': 'BB_Lower', 'macd': 'MACD', 'st': 'Supertrend', 'cci': 'CCI'}
+    label = {'rsi': 'RSI', 'rsi70': 'RSI70', 'adx': 'ADX', 'atr': 'ATR', 'bbu': 'BB_Upper', 'bbl': 'BB_Lower', 'macd': 'MACD',
+             'st': 'Supertrend', 'cci': 'CCI'}
     rows = []
     for i, sym in enumerate(frame['symbol'].tolist()):
         if sym not in zinfo:

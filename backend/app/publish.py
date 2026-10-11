@@ -17,7 +17,7 @@ import json
 import math
 import re
 
-from .db import get_settings, pool
+from .db import get_settings, pool, TECH_TF_DEFAULT
 
 TFS = "DWMQY"
 TF_WEIGHT = {"D": 1, "W": 2, "M": 3, "Q": 4, "Y": 5}
@@ -78,12 +78,15 @@ def classify(row):
 
 
 def _tech_net(row, tf, price, c):
-    """(bullish − bearish) / 6 for one timeframe's indicators, with the Admin levels."""
+    """(bullish − bearish) / number of indicators for one timeframe, with the Admin levels (missing levels = defaults)."""
+    c = {**TECH_TF_DEFAULT, **(c or {})}
     g = lambda k: _num(row.get(f"{tf}_{k}"))
-    rsi, macd, cci, st, bbu, bbl, adx = (g(k) for k in ("RSI", "MACD", "CCI", "Supertrend", "BB_Upper", "BB_Lower", "ADX"))
+    rsi, rsi70, macd, cci, st, bbu, bbl, adx, atr = (g(k) for k in ("RSI", "RSI70", "MACD", "CCI", "Supertrend", "BB_Upper", "BB_Lower", "ADX", "ATR"))
     dirs = []
     if rsi is not None:
         dirs.append(1 if rsi >= c["rsi_bull"] else -1 if rsi <= c["rsi_bear"] else 0)
+    if rsi70 is not None:
+        dirs.append(1 if rsi70 >= c["rsi70_bull"] else -1 if rsi70 <= c["rsi70_bear"] else 0)
     if macd is not None:
         dirs.append(1 if macd > c["macd_bull"] else -1 if macd < c["macd_bear"] else 0)
     if cci is not None:
@@ -95,7 +98,10 @@ def _tech_net(row, tf, price, c):
     if adx is not None and st_dir:
         ok = adx > c["adx_value"] if c.get("adx_mode") == "above" else adx < c["adx_value"]
         dirs.append(st_dir if ok else 0)
-    return sum(dirs) / 6
+    if atr is not None and st_dir:          # ATR, like ADX: no direction — when its rule is met it confirms the Supertrend side
+        ok = atr > c["atr_value"] if c.get("atr_mode") == "above" else atr < c["atr_value"]
+        dirs.append(st_dir if ok else 0)
+    return sum(dirs) / (6 + (rsi70 is not None) + (atr is not None))
 
 
 def build_public(sheets, settings, as_of):
@@ -292,6 +298,33 @@ def sector_stats(sheets, flat, master, zl, types, tech, tech_cfg, tech_w, tech_o
         for row in sectors[tf] + industries[tf]:
             row.pop("ad", None)
     return sectors, industries
+
+
+def build_history(snapshot_id):
+    """Store the customer-safe view of one SCHEDULED collection for the customers' date picker."""
+    with pool.connection() as c:
+        snap = c.execute("SELECT id, taken_at, trade_date, slot, data_gz FROM snapshots WHERE id = %s AND source = 'scheduled'",
+                         (snapshot_id,)).fetchone()
+    if not snap:
+        return None
+    sheets = json.loads(gzip.decompress(bytes(snap["data_gz"])))
+    payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat())
+    gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
+    with pool.connection() as c:
+        c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz) "
+                  "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET data_gz = EXCLUDED.data_gz, "
+                  "stocks = EXCLUDED.stocks, built_at = now()",
+                  (snap["id"], snap["trade_date"], snap["taken_at"], snap["slot"], len(payload["stocks"]), gz))
+    return {"snapshot_id": snap["id"], "stocks": len(payload["stocks"])}
+
+
+def history_missing(limit=None):
+    """Scheduled collections that have no customer history row yet (newest first)."""
+    with pool.connection() as c:
+        rows = c.execute("SELECT s.id FROM snapshots s LEFT JOIN customer_history h ON h.snapshot_id = s.id "
+                         "WHERE s.source = 'scheduled' AND h.snapshot_id IS NULL ORDER BY s.taken_at DESC"
+                         + (" LIMIT %s" % int(limit) if limit else "")).fetchall()
+    return [r["id"] for r in rows]
 
 
 def publish(snapshot_id=None, mode="manual", by=None, dry_run=False):

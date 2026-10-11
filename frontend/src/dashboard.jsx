@@ -658,7 +658,7 @@ function mapDB(rawDB) {
   }).filter(r => r.Symbol && r.Trade);
 
   // Technicals (RSI / ADX / BB / MACD / Supertrend / CCI per timeframe, raw values)
-  const TECH_COLS = { rsi:"RSI", adx:"ADX", bbu:"BB_Upper", bbl:"BB_Lower", macd:"MACD", st:"Supertrend", cci:"CCI" };
+  const TECH_COLS = { rsi:"RSI", rsi70:"RSI70", adx:"ADX", atr:"ATR", bbu:"BB_Upper", bbl:"BB_Lower", macd:"MACD", st:"Supertrend", cci:"CCI" };
   const technicals = find("Technicals").map(r => {
     const o = { Symbol: cleanSym(r.Symbol), Price: numOrNull(r.Price) };
     ["D","W","M","Q","Y"].forEach(t => { o[t] = {}; Object.entries(TECH_COLS).forEach(([k,col]) => { o[t][k] = numOrNull(r[`${t}_${col}`]); }); });
@@ -4383,13 +4383,17 @@ function CTSideNav({ open, setOpen, f, setF, sectors, industries=[], health, onS
 // ─── TECHNICALS ENGINE (Control Tower only) ────────────────────────────────────
 // Per timeframe, each indicator reads bullish (+1), bearish (−1) or neutral with the Admin levels.
 // BB / Supertrend: price above / below. ADX has no direction: when it meets its rule it confirms the Supertrend side.
-const TECH_COLS = [["RSI","RSI"],["MACD","MACD"],["CCI","CCI"],["Supertrend","Supertrend"],["BB","Bollinger"],["ADX","ADX"]];
+const TECH_COLS = [["RSI","RSI"],["RSI70","RSI-70"],["MACD","MACD"],["CCI","CCI"],["Supertrend","Supertrend"],["BB","Bollinger"],["ADX","ADX"],["ATR","ATR"]];
+// indicators a timeframe really has data for (collections before RSI-70 / ATR were added have 6)
+const techCount = v => 6 + (v && v.rsi70 != null ? 1 : 0) + (v && v.atr != null ? 1 : 0);
 
 // One timeframe: every indicator's value and whether it reads bullish (1), bearish (−1) or neutral (0) by the Admin levels.
 function techCells(v, price, c) {
   const out = {};
   const stDir = price != null && v.st != null ? (price > v.st ? 1 : price < v.st ? -1 : 0) : 0;
   if (v.rsi != null) out.RSI = { val:v.rsi, dir:v.rsi >= +c.rsi_bull ? 1 : v.rsi <= +c.rsi_bear ? -1 : 0, note:`bullish ≥ ${c.rsi_bull} · bearish ≤ ${c.rsi_bear}` };
+  if (v.rsi70 != null) { const b = c.rsi70_bull ?? 70, r = c.rsi70_bear ?? 40;
+    out.RSI70 = { val:v.rsi70, dir:v.rsi70 >= +b ? 1 : v.rsi70 <= +r ? -1 : 0, note:`RSI 70-bar look-back · bullish ≥ ${b} · bearish ≤ ${r}` }; }
   if (v.macd != null) out.MACD = { val:v.macd, dir:v.macd > +c.macd_bull ? 1 : v.macd < +c.macd_bear ? -1 : 0, note:`bullish > ${c.macd_bull} · bearish < ${c.macd_bear}` };
   if (v.cci != null) out.CCI = { val:v.cci, dir:v.cci >= +c.cci_bull ? 1 : v.cci <= +c.cci_bear ? -1 : 0, note:`bullish ≥ ${c.cci_bull} · bearish ≤ ${c.cci_bear}` };
   if (v.st != null && price != null) out.Supertrend = { val:v.st, dir:stDir, note:`price ${price} is ${stDir>0?"above":stDir<0?"below":"at"} the Supertrend` };
@@ -4400,6 +4404,11 @@ function techCells(v, price, c) {
   if (v.adx != null) {
     const ok = c.adx_mode === "above" ? v.adx > +c.adx_value : v.adx < +c.adx_value;
     out.ADX = { val:v.adx, dir:ok ? stDir : 0, note:`rule: ${c.adx_mode} ${c.adx_value} → ${ok ? "met, confirms the Supertrend side" : "not met"}` };
+  }
+  if (v.atr != null) {   // ATR, like ADX: no direction of its own
+    const mode = c.atr_mode || "below", lim = c.atr_value ?? 70, ok = mode === "above" ? v.atr > +lim : v.atr < +lim;
+    const pctP = price ? ` (${(v.atr / price * 100).toFixed(1)}% of price)` : "";
+    out.ATR = { val:v.atr, dir:ok ? stDir : 0, note:`ATR ₹${v.atr}${pctP} · rule: ${mode} ${lim} → ${ok ? "met, confirms the Supertrend side" : "not met"}` };
   }
   return out;
 }
@@ -4456,8 +4465,9 @@ function buildTechIndex(db, tech) {
     const price = t.Price ?? (zl[t.Symbol] && zl[t.Symbol].Price);
     const tfs = techReadings(t, price, tech.cfg || {});
     let bull = 0, bear = 0, wnet = 0;
-    FOCUS_TFS.forEach(tf => { const b = tfs[tf].filter(x=>x.dir>0).length, r = tfs[tf].filter(x=>x.dir<0).length; bull += b; bear += r; wnet += (b-r)/6*TF_WEIGHT[tf]; });
-    idx[t.Symbol] = { tfs, bull, bear, wnet, raw:t, price };
+    const nInd = {}; FOCUS_TFS.forEach(tf => { nInd[tf] = techCount(t[tf]); });
+    FOCUS_TFS.forEach(tf => { const b = tfs[tf].filter(x=>x.dir>0).length, r = tfs[tf].filter(x=>x.dir<0).length; bull += b; bear += r; wnet += (b-r)/nInd[tf]*TF_WEIGHT[tf]; });
+    idx[t.Symbol] = { tfs, bull, bear, wnet, raw:t, price, nInd };
   });
   return idx;
 }
@@ -4474,7 +4484,7 @@ function withTechSignals(db, idx, weight) {
       const l = t.tfs[tf], b = l.filter(x=>x.dir>0).length, r = l.filter(x=>x.dir<0).length, net = b - r;
       if (!net) return;
       rows.push({ ...base, Signal_Name:`TECH_${tf}_${net>0?"BULL":"BEAR"}`, Signal_Category:"TECH", Signal_Type:net>0?"LONG":"SHORT",
-        Timeframe:TF_NAME[tf], Tech_TF:tf, Tech_Dir:net>0?1:-1, Tech_W:weight*Math.abs(net)/6,
+        Timeframe:TF_NAME[tf], Tech_TF:tf, Tech_Dir:net>0?1:-1, Tech_W:weight*Math.abs(net)/((t.nInd||{})[tf]||6),
         Tech_Text:`${TF_NAME[tf]} technicals ▲${b} ▼${r}: ${l.map(x=>`${x.dir>0?"▲":"▼"} ${x.text}`).join(" · ")}` });
     });
   });
@@ -6679,7 +6689,7 @@ function TrendPullbackSection({ db, lockDir=null }) {
 }
 
 // ─── TECHNICAL QUANT — algo builder (Control Tower, technicals on) ─────────────
-const QF = [["close","Close"],["prev","Prev close"],["rsi","RSI"],["adx","ADX"],["cci","CCI"],["macd","MACD"],["st","Supertrend"],
+const QF = [["close","Close"],["prev","Prev close"],["rsi","RSI"],["rsi70","RSI-70"],["adx","ADX"],["atr","ATR"],["cci","CCI"],["macd","MACD"],["st","Supertrend"],
             ["bbu","BB upper"],["bbl","BB lower"],["tz","Zone top"],["tn","Zone top-near"],["bn","Zone bottom-near"],["bz","Zone bottom"]];
 const QF_LABEL = Object.fromEntries(QF);
 const Q_OPS = { ">":(a,b)=>a>b, ">=":(a,b)=>a>=b, "<":(a,b)=>a<b, "<=":(a,b)=>a<=b, "=":(a,b)=>Math.abs(a-b)<1e-9, "!=":(a,b)=>Math.abs(a-b)>=1e-9 };
@@ -6693,12 +6703,12 @@ const exprText = a => (a.rules||[]).map(itemText).join(`  ${a.join||"AND"}  `);
 function prebuiltAlgos(cfg) {
   const out = [];
   FOCUS_TFS.forEach(tf => {
-    const c = cfg[tf] || {}, adxOp = c.adx_mode === "above" ? ">" : "<";
+    const c = cfg[tf] || {}, adxOp = c.adx_mode === "above" ? ">" : "<", atrOp = (c.atr_mode || "below") === "above" ? ">" : "<";
     const F = (f, op, rf) => ({ tf, f, op, rhs:"field", rf, rtf:tf }), N = (f, op, v) => ({ tf, f, op, rhs:"num", v:+v });
     out.push({ id:`pre-${tf}-L`, pre:true, dir:1, name:`${TF_NAME[tf]} bullish breakout`,
-      rules:[F("close",">","tz"), N("rsi",">=",c.rsi_bull), N("cci",">=",c.cci_bull), N("macd",">",c.macd_bull), F("close",">","st"), F("close",">","bbu"), N("adx",adxOp,c.adx_value)] });
+      rules:[F("close",">","tz"), N("rsi",">=",c.rsi_bull), N("rsi70",">=",c.rsi70_bull ?? 70), N("cci",">=",c.cci_bull), N("macd",">",c.macd_bull), F("close",">","st"), F("close",">","bbu"), N("adx",adxOp,c.adx_value), N("atr",atrOp,c.atr_value ?? 70)] });
     out.push({ id:`pre-${tf}-S`, pre:true, dir:-1, name:`${TF_NAME[tf]} bearish breakdown`,
-      rules:[F("close","<","bz"), N("rsi","<=",c.rsi_bear), N("cci","<=",c.cci_bear), N("macd","<",c.macd_bear), F("close","<","st"), F("close","<","bbl"), N("adx",adxOp,c.adx_value)] });
+      rules:[F("close","<","bz"), N("rsi","<=",c.rsi_bear), N("rsi70","<=",c.rsi70_bear ?? 40), N("cci","<=",c.cci_bear), N("macd","<",c.macd_bear), F("close","<","st"), F("close","<","bbl"), N("adx",adxOp,c.adx_value), N("atr",atrOp,c.atr_value ?? 70)] });
   });
   return out;
 }
@@ -6799,7 +6809,11 @@ function TechQuantSection({ db, tech }) {
   }, [db.technicals, db.zoneLevels, db.flat]);
 
   const val = (r, tf, f) => { const v = r[tf] && r[tf][f]; return v == null ? null : +v; };
+  // timeframe + indicator pairs that have data for at least one stock (e.g. Yearly RSI-70 needs 70 yearly candles → none)
+  const present = useMemo(() => { const p = new Set(); rows.forEach(r => FOCUS_TFS.forEach(tf => Object.entries(r[tf]||{}).forEach(([k,v]) => { if (v != null) p.add(`${tf}|${k}`); }))); return p; }, [rows]);
+  const missing = q => !q.group && (!present.has(`${q.tf}|${q.f}`) || (q.rhs !== "num" && !present.has(`${q.rtf||q.tf}|${q.rf}`)));
   const evalRule = (r, q) => {
+    if (missing(q)) return true;
     const a = val(r, q.tf, q.f), b = q.rhs === "num" ? (q.v === "" || q.v == null ? null : +q.v) : val(r, q.rtf || q.tf, q.rf);
     return a != null && b != null && !isNaN(b) && Q_OPS[q.op](a, b);
   };
@@ -6814,7 +6828,7 @@ function TechQuantSection({ db, tech }) {
   const vis = showAll ? results : results.slice(0, 50);
   const sel = { background:"var(--s2)", border:"1px solid var(--b2)", color:"var(--t1)", borderRadius:5, fontSize:11, padding:"3px 5px" };
   const TH = {position:"sticky",top:0,background:"var(--s2)",borderBottom:"1px solid var(--b1)",padding:"6px 8px",fontSize:8.5,fontWeight:700,textTransform:"uppercase",color:"var(--t3)",textAlign:"left",whiteSpace:"nowrap",zIndex:1};
-  const IND = ["RSI","MACD","CCI","Supertrend","BB","ADX"];
+  const skipped = [...new Set((algo.rules||[]).flatMap(function walk(q){ return q.group ? (q.rules||[]).flatMap(walk) : missing(q) ? [`${TF_NAME[q.tf]} ${QF_LABEL[q.f] || q.f}`] : []; }))];
   const pick = id => { setSelId(id); setMinMatch(0); setShowAll(false); };
 
   return (
@@ -6852,6 +6866,7 @@ function TechQuantSection({ db, tech }) {
                 <span style={{fontSize:10.5,fontFamily:"var(--mono)",padding:"2px 7px",borderRadius:4,border:`1px solid ${q.group?"var(--mixed)":"var(--b2)"}`,color:"var(--t1)",background:"var(--s2)"}}>{i+1}. {itemText(q)}</span>
               </React.Fragment>)}
             </div>
+            {skipped.length > 0 && <div style={{fontSize:10.5,color:"var(--mixed)",marginTop:4}}>⚠ No stock has {skipped.join(" / ")} data in this collection — those conditions are skipped (they count as met). Yearly RSI-70 needs 70 yearly candles, so it is usually empty.</div>}
 
             <div style={{display:"flex",alignItems:"center",gap:8,margin:"12px 0 6px"}}>
               <div style={{fontSize:12.5,fontWeight:700,color:"var(--t1)"}}>{results.length} stocks</div>

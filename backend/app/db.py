@@ -161,6 +161,22 @@ END $$;
 DROP TRIGGER IF EXISTS customers_auto_approve ON customers;
 CREATE TRIGGER customers_auto_approve BEFORE INSERT ON customers FOR EACH ROW EXECUTE FUNCTION customers_auto_approve();
 REVOKE ALL ON FUNCTION portal_auto_approve() FROM PUBLIC;
+-- Past days for customers (admin switch 'history' in portal_config): the customer-safe view (same labels-only payload
+-- as `published`) of every SCHEDULED collection — never manual syncs or imports. Rows go with their collection.
+CREATE TABLE IF NOT EXISTS customer_history (
+    snapshot_id  BIGINT PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+    trade_date   DATE        NOT NULL,
+    taken_at     TIMESTAMPTZ NOT NULL,
+    slot         TEXT,
+    stocks       INT,
+    data_gz      BYTEA       NOT NULL,
+    built_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS customer_history_day ON customer_history (trade_date, taken_at);
+CREATE OR REPLACE FUNCTION portal_history_enabled() RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'history'), false) $$;
+REVOKE ALL ON FUNCTION portal_history_enabled() FROM PUBLIC;
 REVOKE ALL ON FUNCTION customers_auto_approve() FROM PUBLIC;
 CREATE INDEX IF NOT EXISTS hd_images_uploader ON hd_images (uploader, created_at);
 """
@@ -169,7 +185,8 @@ CREATE INDEX IF NOT EXISTS hd_images_uploader ON hd_images (uploader, created_at
 PORTAL_ROLE = "hp_portal"
 
 # Bullish / bearish levels per timeframe (Admin). BB and Supertrend need none: above = bullish, below = bearish.
-TECH_TF_DEFAULT = {"rsi_bull": 70, "rsi_bear": 30, "adx_mode": "below", "adx_value": 40,
+TECH_TF_DEFAULT = {"rsi_bull": 70, "rsi_bear": 30, "rsi70_bull": 70, "rsi70_bear": 40, "adx_mode": "below", "adx_value": 40,
+                   "atr_mode": "below", "atr_value": 70,
                    "macd_bull": 0, "macd_bear": 0, "cci_bull": 150, "cci_bear": -150}
 
 DEFAULT_SETTINGS = {
@@ -219,6 +236,12 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("GRANT UPDATE (failed_logins, locked_until, last_login, login_count) ON customers TO {}").format(role))
     c.execute(sql.SQL("GRANT USAGE ON SEQUENCE customers_id_seq TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION portal_auto_approve() TO {}").format(role))   # yes / no only
+    # past days: readable only while the admin switch is on — the database itself enforces it (row-level security)
+    c.execute(sql.SQL("GRANT SELECT ON customer_history TO {}").format(role))
+    c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION portal_history_enabled() TO {}").format(role))
+    c.execute("ALTER TABLE customer_history ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_history ON customer_history")
+    c.execute(sql.SQL("CREATE POLICY portal_history ON customer_history FOR SELECT TO {} USING (portal_history_enabled())").format(role))
     # Helpdesk: only the columns a customer needs, and row-level security on top — the service sets
     # hp.cid (the signed-in customer) per transaction, and the database itself hides every other row.
     for stmt in (
@@ -248,6 +271,9 @@ def get_settings():
         rows = c.execute("SELECT key, value FROM settings").fetchall()
     s = dict(DEFAULT_SETTINGS)
     s.update({r["key"]: r["value"] for r in rows if r["key"] in DEFAULT_SETTINGS})
+    # levels saved before a new indicator existed (e.g. RSI-70, ATR) get that indicator's default
+    tech = s.get("tech") if isinstance(s.get("tech"), dict) else {}
+    s["tech"] = {tf: {**TECH_TF_DEFAULT, **(tech.get(tf) or {})} for tf in "DWMQY"}
     return s
 
 
@@ -266,6 +292,17 @@ def get_auto_approve():
 def set_auto_approve(on: bool):
     with pool.connection() as c:
         c.execute("INSERT INTO portal_config(key, value) VALUES ('auto_approve', %s::jsonb) "
+                  "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (json.dumps(bool(on)),))
+
+
+def get_history_enabled():
+    with pool.connection() as c:
+        return bool(c.execute("SELECT portal_history_enabled() AS v").fetchone()["v"])
+
+
+def set_history_enabled(on: bool):
+    with pool.connection() as c:
+        c.execute("INSERT INTO portal_config(key, value) VALUES ('history', %s::jsonb) "
                   "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", (json.dumps(bool(on)),))
 
 

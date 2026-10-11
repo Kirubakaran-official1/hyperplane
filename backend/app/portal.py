@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from . import helpdesk as hd
 from .security import DUMMY_HASH, hash_password, verify_password
 
+IST = timezone(timedelta(hours=5, minutes=30))          # day open / day end are judged on Indian time
+
 DB_URL = os.environ.get("PORTAL_DATABASE_URL", "")
 SECRET = os.environ.get("PORTAL_SECRET_KEY", "")
 COOKIE, SESSION_SECONDS = "qf_session", 7 * 24 * 3600
@@ -225,8 +227,49 @@ def me(c=Depends(customer)):
     return {"name": c["name"], "email": c["email"], "expires_on": c["expires_on"].isoformat() if c["expires_on"] else None}
 
 
+def _history_days(conn):
+    """{date: {"open": row, "end": row}} — first scheduled run of the day = Day open, last = Day end
+    (a day with one run: before noon = open, otherwise end)."""
+    days = {}
+    for r in conn.execute("SELECT snapshot_id, trade_date, taken_at FROM customer_history ORDER BY taken_at").fetchall():
+        days.setdefault(r["trade_date"].isoformat(), []).append(r)
+    out = {}
+    for d, rows in days.items():
+        if len(rows) == 1:
+            local = rows[0]["taken_at"].astimezone(IST)
+            out[d] = {"open" if local.hour < 12 else "end": rows[0]}
+        else:
+            out[d] = {"open": rows[0], "end": rows[-1]}
+    return out
+
+
+@app.get("/app/api/history")
+def history(request: Request, c=Depends(customer)):
+    """Past days the customer may pick (only when the admin has switched it on)."""
+    _rate("history", _ip(request), 60, 60)
+    with pool.connection() as conn:
+        if not conn.execute("SELECT portal_history_enabled() AS v").fetchone()["v"]:
+            return {"enabled": False, "days": []}
+        days = _history_days(conn)
+    return {"enabled": True, "days": [{"d": d, **{k: r["taken_at"].astimezone(IST).isoformat() for k, r in parts.items()}}
+                                      for d, parts in sorted(days.items())]}
+
+
 @app.get("/app/api/data")
-def data(c=Depends(customer)):
+def data(request: Request, date: str | None = None, part: str | None = None, c=Depends(customer)):
+    if date or part:                                       # a past day, chosen in the date picker
+        _rate("data-history", _ip(request), 60, 60)
+        if part not in ("open", "end") or not date or len(date) != 10:
+            raise HTTPException(422, "Pick a date and Day open or Day end")
+        with pool.connection() as conn:
+            if not conn.execute("SELECT portal_history_enabled() AS v").fetchone()["v"]:
+                raise HTTPException(403, "Past days are not available right now.")
+            row = _history_days(conn).get(date, {}).get(part)
+            r = row and conn.execute("SELECT data_gz FROM customer_history WHERE snapshot_id = %s", (row["snapshot_id"],)).fetchone()
+        if not r:
+            raise HTTPException(404, "No data for that day — markets may have been closed.")
+        return Response(content=bytes(r["data_gz"]), media_type="application/json",
+                        headers={"Content-Encoding": "gzip", "Cache-Control": "private, no-store"})
     with pool.connection() as conn:
         r = conn.execute("SELECT data_gz, published_at FROM published ORDER BY id DESC LIMIT 1").fetchone()
     if not r:
