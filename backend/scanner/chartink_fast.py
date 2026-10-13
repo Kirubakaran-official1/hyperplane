@@ -127,27 +127,33 @@ NR_NEAR_RATIO = 1.9 / 2         # near-high: close >= high * 0.95   |   near-low
 #   Return_5Y_Pct          = current price vs the yearly close 5 years ago
 #   Worst_Crash_Pct        = deepest fall at any time in that history (a year's low vs the highest high before it)
 #   Run_Up_From_3Y_Low_X   = current price ÷ lowest low of the last 3 years (+ this year)
-#   POOR    : price is more than HEALTH_POOR_DRAWDOWN_PCT % below its peak, OR
-#             crashed HEALTH_CRASH_POOR_PCT %+ with the bottom in the last HEALTH_CRASH_RECENT_YEARS years, OR
-#             a round trip: crashed HEALTH_CRASH_WEAK_PCT %+ AND now HEALTH_ROUNDTRIP_X x+ its 3-year low
-#             (e.g. MBECL: ~380 → ~3 → 494, a 98% crash then 170x — the owner's example, 2026-10-04)
-#   WEAK    : more than HEALTH_WEAK_DRAWDOWN_PCT % below its peak, OR lower than HEALTH_WEAK_YEARS years ago, OR
-#             crashed HEALTH_CRASH_WEAK_PCT %+ at any time, OR now HEALTH_RUNUP_WEAK_X x+ its 3-year low
+#   POOR    : price is more than HEALTH_POOR_DRAWDOWN_PCT % below its peak            (e.g. IDEA / VI, YESBANK)
+#   WEAK    : more than HEALTH_WEAK_DRAWDOWN_PCT % below its peak, OR lower than HEALTH_WEAK_YEARS years ago
 #   HEALTHY : everything else
-# (an old crash alone only makes WEAK: unadjusted demergers can look like crashes in old yearly data, e.g. ADANIENT 2015)
+# This is the ORIGINAL rule again (owner, 2026-10-13: the stricter crash / round-trip / run-up / stretched rules of
+# 2026-10-04 put too many stocks in Moderate). Worst crash, run-ups and Stretched are still written as information;
+# Stretched still drives the separate 🔥 "stretched" flag, but none of them changes the Health level any more.
+# `health_status` is also used by the worker to re-rate collections stored with the older rules.
 HEALTH_POOR_DRAWDOWN_PCT = 70
 HEALTH_WEAK_DRAWDOWN_PCT = 50
 HEALTH_WEAK_YEARS = 5
-HEALTH_CRASH_POOR_PCT = 90
-HEALTH_CRASH_RECENT_YEARS = 5
-HEALTH_CRASH_WEAK_PCT = 80
-HEALTH_ROUNDTRIP_X = 10
-HEALTH_RUNUP_WEAK_X = 8
-# Stretched / parabolic: price ÷ lowest monthly low of the last 12 months (owner's STLTECH example 2026-10-10:
-# ~100 → ~1,000 in a year — "anytime it will come down, not proper growth"). On 6 Oct data 72 of 2,658 stocks were
-# ≥ 3x and 9 were ≥ 5x their 1-year low.
-HEALTH_STRETCH_WEAK_X = 3        # ≥ 3x in a year  → WEAK ("stretched")
-HEALTH_STRETCH_POOR_X = 5        # ≥ 5x in a year  → POOR ("parabolic")
+# Stretched: price ÷ lowest monthly low of the last 12 months (owner's STLTECH example 2026-10-10: ~100 → ~1,000 in a
+# year). Only the Stretched flag (customer 🔥 tag / "Overextended" verdict) — it no longer lowers the Health level.
+HEALTH_STRETCH_WEAK_X = 3        # ≥ 3x in a year  → Stretched = Yes
+
+
+def health_status(dd, r_old, peak=None, peak_bar=None):
+    """Price health from the drawdown from the peak (%) and the return vs HEALTH_WEAK_YEARS years ago (%)."""
+    if dd is not None and dd <= -HEALTH_POOR_DRAWDOWN_PCT:
+        pb = int(peak_bar) if peak_bar is not None else 0
+        pk = f" of {peak:,.2f}" if peak is not None else ""
+        return 'POOR', [f"{-dd:.0f}% below its {pb}-year-ago peak{pk}" if pb else f"{-dd:.0f}% below this year's peak{pk}"]
+    reasons = []
+    if dd is not None and dd <= -HEALTH_WEAK_DRAWDOWN_PCT:
+        reasons.append(f"{-dd:.0f}% below its peak" + (f" of {peak:,.2f}" if peak is not None else ""))
+    if r_old is not None and r_old < 0:
+        reasons.append(f"lower than {HEALTH_WEAK_YEARS} years ago ({r_old:.0f}%)")
+    return ('WEAK' if reasons else 'HEALTHY'), reasons
 
 # ---------------------------------------------------------------- FAILED NR / TRAP (Failed_NR sheet) --
 #   Same mother candle as NR (NR_MOTHER_BODY_PCT), then:
@@ -3501,30 +3507,7 @@ def build_price_health_rows(frame, zone_rows):
         crash_txt = (f"crashed {-crash:.0f}% ({crash_from:,.2f} → {crash_to:,.2f}, "
                      f"{'this year' if crash_bar == 0 else f'{crash_bar} year' + ('s' if crash_bar > 1 else '') + ' ago'})") if crash_bar is not None else ""
 
-        reasons, poor = [], []
-        if dd is not None and dd <= -HEALTH_POOR_DRAWDOWN_PCT:
-            poor.append(f"{-dd:.0f}% below its {peak_bar}-year-ago peak of {peak:,.2f}" if peak_bar
-                        else f"{-dd:.0f}% below this year's peak of {peak:,.2f}")
-        if crash <= -HEALTH_CRASH_POOR_PCT and crash_bar is not None and crash_bar <= HEALTH_CRASH_RECENT_YEARS:
-            poor.append(crash_txt)
-        elif crash <= -HEALTH_CRASH_WEAK_PCT and run_up is not None and run_up >= HEALTH_ROUNDTRIP_X:
-            poor.append(f"{crash_txt}, then {run_up:.0f}x from its 3-year low")
-        if run_1y is not None and run_1y >= HEALTH_STRETCH_POOR_X:
-            poor.append(f"parabolic: {run_1y:.1f}x its 1-year low — very stretched, sharp falls are common")
-        if poor:
-            status, reasons = 'POOR', poor
-        else:
-            if dd is not None and dd <= -HEALTH_WEAK_DRAWDOWN_PCT:
-                reasons.append(f"{-dd:.0f}% below its peak of {peak:,.2f}")
-            if r_old is not None and r_old < 0:
-                reasons.append(f"lower than {HEALTH_WEAK_YEARS} years ago ({r_old:.0f}%)")
-            if crash <= -HEALTH_CRASH_WEAK_PCT:
-                reasons.append(crash_txt)
-            if run_up is not None and run_up >= HEALTH_RUNUP_WEAK_X:
-                reasons.append(f"{run_up:.0f}x its 3-year low — a very fast run-up")
-            if run_1y is not None and run_1y >= HEALTH_STRETCH_WEAK_X:
-                reasons.append(f"stretched: {run_1y:.1f}x its 1-year low")
-            status = 'WEAK' if reasons else 'HEALTHY'
+        status, reasons = health_status(dd, r_old, peak, peak_bar)
         out.append({
             'Symbol': z['Symbol'], 'Stock_Name': z['Stock_Name'], 'Sector': z['Sector'], 'Industry': z['Industry'],
             'Price': c, 'Health': status,

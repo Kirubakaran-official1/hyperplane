@@ -8,6 +8,8 @@ Every 15 seconds it:
 Once a day it removes collections older than the retention setting.
 """
 import glob
+import gzip
+import json
 import io
 import os
 import shutil
@@ -18,7 +20,7 @@ import traceback
 from datetime import timedelta
 
 from . import config
-from .db import get_history_enabled, get_settings, init_db, pool, set_meta
+from .db import get_history_enabled, get_meta, get_settings, init_db, pool, set_meta
 from .publish import build_history, history_failed, history_missing, publish
 from .schedule import due_slots, now
 from .store import save_snapshot, workbook_to_sheets
@@ -185,6 +187,56 @@ def _drop_older_manual(day, keep_id):
             os.remove(r["excel_path"])
 
 
+HEALTH_RULES = "original-70-50"     # bump when the Price_Health rule changes → stored collections are re-rated once
+
+
+def rerate_stored_health():
+    """Re-rate Price_Health in every stored collection with the scanner's current rule (from the numbers each collection
+    already holds), so admin and customer views change at once; then rebuild the customers' past days and re-publish."""
+    if get_meta("health_rules") == HEALTH_RULES:
+        return
+    from scanner.chartink_fast import health_status                  # imported late: heavy module
+    num = lambda v: None if v in (None, "", "None") else float(v)
+    with pool.connection() as c:
+        ids = [r["id"] for r in c.execute("SELECT id FROM snapshots ORDER BY id").fetchall()]
+    touched = 0
+    for sid in ids:
+        with pool.connection() as c:
+            r = c.execute("SELECT data_gz FROM snapshots WHERE id = %s", (sid,)).fetchone()
+        if not r:
+            continue
+        sheets = json.loads(gzip.decompress(bytes(r["data_gz"])))
+        changed = []
+        for row in sheets.get("Price_Health") or []:
+            st, reasons = health_status(num(row.get("Drawdown_From_Peak_Pct")), num(row.get("Return_5Y_Pct")),
+                                        num(row.get("Peak_High")), num(row.get("Peak_Years_Ago")))
+            why = "; ".join(reasons) if reasons else "price holds up well against its history"
+            if row.get("Health") != st or row.get("Reason") != why:
+                row["Health"], row["Reason"] = st, why
+                changed.append((st, sid, row.get("Symbol")))
+        if not changed:
+            continue
+        raw = json.dumps(sheets, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        gz = gzip.compress(raw, compresslevel=6)
+        with pool.connection() as c:
+            c.execute("UPDATE snapshots SET data_gz = %s, size_bytes = %s WHERE id = %s", (gz, len(gz), sid))
+            with c.cursor() as cur:
+                cur.executemany("UPDATE snapshot_stocks SET health = %s WHERE snapshot_id = %s AND symbol = %s", changed)
+        touched += 1
+        print(f"🩺 Reliability re-rated in collection #{sid} ({len(changed)} stocks changed)", flush=True)
+    with pool.connection() as c:
+        c.execute("DELETE FROM customer_history")                    # past days are rebuilt with the new labels
+        pub = c.execute("SELECT snapshot_id FROM published ORDER BY id DESC LIMIT 1").fetchone()
+    if pub and pub["snapshot_id"] and touched:
+        try:
+            publish(pub["snapshot_id"], mode="manual", by="system · reliability update")
+            print("📣 Customer view re-published with the new reliability labels", flush=True)
+        except Exception as e:                                       # noqa: BLE001 — admin can press Publish
+            print(f"⚠ Could not re-publish the customer view: {e}", flush=True)
+    set_meta("health_rules", HEALTH_RULES)
+    print(f"🩺 Reliability rule '{HEALTH_RULES}' applied to {touched} stored collection(s)", flush=True)
+
+
 def cleanup():
     s = get_settings()
     days = int(s.get("retention_days") or 0)
@@ -213,6 +265,10 @@ def main():
     with pool.connection() as c:
         c.execute("UPDATE jobs SET status='failed', finished_at=now(), error='worker restarted during the run' "
                   "WHERE status='running'")
+    try:
+        rerate_stored_health()
+    except Exception:                                                # noqa: BLE001 — never block the worker
+        traceback.print_exc()
     bg = Background()
     bg.start()
     print(f"Hyperplane worker ready — {now().strftime('%d %b %Y %H:%M:%S %Z')}"

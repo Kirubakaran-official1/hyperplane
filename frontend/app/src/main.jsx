@@ -288,7 +288,20 @@ function Meter({ v, d, label = "" }) {                     // ▂▃▅▆█ 84
 }
 const StrengthTag = ({ v, d, big }) => v == null ? <span className="stag none">No data</span>
   : <span className={`stag ${dirKey(d)} ${big ? "big" : ""}`} title={`Trend strength ${Math.abs(v)}% (${dirWord(d)}) — not a price move`}><b>{Math.abs(v)}%</b> strength</span>;
-const StrengthBar = ({ v, d }) => <div className="sbar"><div className={`sbar-f ${d === 1 ? "up" : d === -1 ? "down" : "side"}`} style={{ width:`${v == null ? 0 : Math.abs(v)}%` }}/></div>;
+// Diverging bar from −100 to +100 with a 0 mark in the middle (owner, 2026-10-13): an uptrend fills to the right of 0,
+// a downtrend to the left (anything below 0 is red). `scale` adds "−100 · 0 · +100" under it.
+function DivBar({ v, d, scale = false, className = "" }) {
+  const w = v == null ? 0 : Math.min(100, Math.abs(v)) / 2;
+  const cls = v == null ? "" : v < 0 ? "down" : d === 1 ? "up" : "side";
+  return (
+    <div className={`dbar ${className}`} title={v == null ? "No data" : `${v < 0 ? "−" : "+"}${Math.abs(v)} on a scale from −100 (strong downtrend) to +100 (strong uptrend)`}>
+      <div className="dbar-t"><i className="dbar-0" aria-hidden="true"/>
+        {v != null && v !== 0 && <span className={`dbar-f ${cls}`} style={v > 0 ? { left: "50%", width: `${w}%` } : { right: "50%", width: `${w}%` }}/>}</div>
+      {scale && <div className="dbar-s" aria-hidden="true"><span>−100</span><span className="z">0</span><span>+100</span></div>}
+    </div>
+  );
+}
+const StrengthBar = ({ v, d }) => <DivBar v={v} d={d}/>;
 
 function CopyBtns({ syms, compact }) {
   const [done, setDone] = useState("");
@@ -766,14 +779,17 @@ function StockSearch({ stocks, onPick, autoFocus, onClear = null }) {
 }
 
 // One stat card: tiny label → name → big number → thin bar → coloured word (or a big word + note, e.g. reliability)
-function Stat({ label, name, value, pct, tone, word, note }) {
+function Stat({ label, name, sub, value, pct, d, signedBar = false, tone, word, note }) {
   return (
     <div className={`card sx-stat ${tone}`}>
       <div className="sx-sl">{label}</div>
-      <div className="sx-sn" title={name}>{name}</div>
+      <div className="sx-sn" title={name}>{name}{sub && <span className="sx-ssub">{sub}</span>}</div>
       {value != null
         ? <><div className={`sx-sv ${tone}`}>{value}<small>%</small></div>
-            <div className="sx-sbar"><i className={tone} style={{ width: `${Math.max(2, Math.min(100, Math.abs(pct)))}%` }}/></div>
+            {signedBar
+              ? <DivBar v={pct} d={d} scale className="sx-dbar"/>
+              : <div className="sx-gbar"><div className="sx-sbar"><i className={tone} style={{ width: `${Math.max(2, Math.min(100, Math.abs(pct)))}%` }}/></div>
+                  <div className="dbar-s" aria-hidden="true"><span>0</span><span>100</span></div></div>}
             <span className={`sx-sw ${tone}`}>{word}</span></>
         : <><div className={`sx-sv word ${tone}`}>{word}</div>{note && <div className="sx-snote">{note}</div>}</>}
     </div>
@@ -794,6 +810,13 @@ const PRO_VERDICT = {
 const proVerdict = (view, groupStrong) => !view ? null : view.title === "◆ No edge yet"
   ? ["Neutral — no clear trend", groupStrong ? "There is no clear trend in the stock yet, although its group is strong. Wait for the stock to establish a direction." : "There is no clear trend in the stock. Better candidates are available."]
   : PRO_VERDICT[view.title] || [view.title.replace(/^[^A-Za-z]+/, ""), view.text];
+
+// Sector / industry on −100 … +100 (owner, 2026-10-13): the number is the group's strength (0–100%), the sign is its
+// direction — net bias > 0 = bullish (right side of the bubble chart), < 0 = bearish (left side)
+const grpSigned = g => !g ? null : (g.nb < 0 ? -1 : 1) * Math.round(g.st);
+const grpDir = g => !g ? 0 : g.nb > 0 ? 1 : g.nb < 0 ? -1 : 0;
+const grpTone = g => !g ? "side" : g.nb > 0 ? "good" : g.nb < 0 ? "bad" : "side";
+const grpWord = g => !g ? "No data" : `${levelOf(g.st)} · ${g.nb > 0 ? "bullish" : g.nb < 0 ? "bearish" : "neutral"}`;
 
 const PERIOD_ROWS = [["Days", "short term"], ["Weeks", ""], ["Months", ""], ["Quarters", ""], ["Years", "long term"]];
 const RELIABILITY = { S: ["High", "good", "The long-term price history is healthy."], M: ["Medium", "mid", "The long-term price history is average."],
@@ -875,9 +898,9 @@ function SimpleView({ data, mode, setMode, sym, setSym }) {
       </section>
 
       <section className="sx-stats">
-        <Stat label="Stock trend strength" name={s.s} value={s.os == null ? null : signed(s.os)} pct={s.os} tone={dirTone(s.os)} word={stockWord}/>
-        <Stat label="Sector strength" name={s.sec} value={secA ? Math.round(secA.st) : null} pct={secA && secA.st} tone={secTone} word={secWord}/>
-        <Stat label="Industry strength" name={s.ind} value={indA ? Math.round(indA.st) : null} pct={indA && indA.st} tone={indTone} word={indWord}/>
+        <Stat label="Stock trend strength" name={s.n} sub={s.s} value={s.os == null ? null : signed(s.os)} pct={s.os} d={od} signedBar tone={dirTone(s.os)} word={stockWord}/>
+        <Stat label="Sector strength" name={s.sec} sub="sector" signedBar value={secA ? signed(grpSigned(secA)) : null} pct={grpSigned(secA)} d={grpDir(secA)} tone={grpTone(secA)} word={grpWord(secA)}/>
+        <Stat label="Industry strength" name={s.ind} sub="industry" signedBar value={indA ? signed(grpSigned(indA)) : null} pct={grpSigned(indA)} d={grpDir(indA)} tone={grpTone(indA)} word={grpWord(indA)}/>
         <Stat label="Historical reliability" name="Long-term price history" value={null} tone={rel ? rel[1] : "side"} word={rel ? rel[0] : "No data"} note={rel ? rel[2] : "Not enough history."}/>
       </section>
 
@@ -1288,6 +1311,15 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .sv-periods .sv-tf{grid-template-columns:78px minmax(0,1fr) 92px;flex:1;max-height:56px}.sv-periods .sv-axis{grid-template-columns:78px 1fr 1fr 1fr 92px}
 @media (max-width:1180px){.sv-row3{grid-template-columns:repeat(2,minmax(0,1fr))}.sv-metrics{grid-column:1/-1;order:-1}}
 .sx{max-width:1260px}
+.dbar{min-width:60px}.dbar-t{position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,rgba(255,68,84,.13) 0 50%,rgba(0,200,150,.13) 50% 100%),var(--s3)}
+.dbar-0{position:absolute;left:50%;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--t1);opacity:.75;z-index:1}
+.dbar-f{position:absolute;top:0;bottom:0}.dbar-f.up{background:var(--long);border-radius:0 3px 3px 0}.dbar-f.down{background:var(--short);border-radius:3px 0 0 3px}.dbar-f.side{background:#8b97ad;border-radius:0 3px 3px 0}
+.dbar-s{display:flex;justify-content:space-between;font:600 10px var(--mono);color:var(--t3);margin-top:5px}.dbar-s .z{color:var(--t2)}
+.sx-dbar{margin-top:6px}.sx-dbar .dbar-t{height:9px;border-radius:5px}.sx-dbar .dbar-0{top:-5px;bottom:-5px;width:3px;margin-left:-1.5px}
+.sx-dbar .dbar-f.up{border-radius:0 5px 5px 0}.sx-dbar .dbar-f.down{border-radius:5px 0 0 5px}
+.sx-gbar{margin-top:6px}.sx-gbar .sx-sbar{height:9px;border-radius:5px;margin-top:0}.sx-gbar .sx-sbar i{border-radius:5px}
+.sx-sn{font-size:14.5px;font-weight:600;color:var(--t1)}.sx-ssub{margin-left:7px;font:600 11px var(--mono);color:var(--t3)}
+td.cur .dbar{margin-top:7px}.m-row .dbar{min-width:80px}
 .sv-bar2{display:flex;align-items:flex-end;gap:18px;margin-bottom:12px}.sv-bar2 .sv-search{flex:1;min-width:0}
 .sv-search input{height:48px;border-radius:14px;border:1px solid var(--b2);background:var(--s1);font-size:14.5px;transition:border-color .15s,box-shadow .15s}
 .sv-search input:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--adim);outline:none}
@@ -1364,7 +1396,7 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 }
 @media (min-width:1101px) and (max-height:720px){
   .sx-meter .gauge{width:180px;margin:4px 0 10px}.sx-gv{font-size:30px}.sx-mix span{padding:3px 8px;font-size:11.5px}
-  .sx-sn{display:none}.sx-snote{font-size:12px}.sx-hint{display:none}.sx-pw{display:none}
+  .sx-snote{font-size:12px}.sx-hint{display:none}.sx-pw{display:none}
   .sx-meta{display:none}.sx-meta2{display:inline}.sx-id{gap:6px;padding:12px 16px 13px}.sx-price b{font-size:21px}.sx-chg{font-size:12.5px;padding:3px 8px}
   .sx-verdict p{font-size:13px;line-height:1.48}.sx-vtitle{font-size:16px;margin:4px 0 3px}.sx-verdict{padding:9px 12px 10px}
   .sx-stat{padding:8px 12px 9px 15px}.sx-sv{font-size:25px;margin-top:2px}.sx-sv.word{font-size:22px}.sx-sw{padding:2px 9px;font-size:12px}

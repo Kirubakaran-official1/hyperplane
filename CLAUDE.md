@@ -642,3 +642,21 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
 - Naming: header switch "Research view | Simplified view (AI Mode)"; Docs section 11 "Simplified view (AI Mode) & the
   overall trend meter". Simplified-view top bar `.sv-bar2`: search (✕ inside clears ONLY the stock) | "Trading mode"
   pill group (`.sv-pills`) — the old "Clear" button next to the mode was removed (owner: people mistook it for a mode reset).
+- RELIABILITY BACK TO THE ORIGINAL RULE (owner, 2026-10-13: "most stocks are Moderate — only huge-drop stocks like VI"):
+  `health_status()` in chartink_fast.py — POOR > 70% below peak; WEAK > 50% below peak OR lower than 5 years ago;
+  else HEALTHY. The 2026-10-04 crash / round-trip / 3-year run-up / stretched rules no longer change Health (columns are
+  still written; `Stretched` still drives the customer 🔥 flag and the "Overextended" verdict). Worker start-up runs
+  `rerate_stored_health()` once per `HEALTH_RULES` version (meta `health_rules`): re-rates Price_Health + snapshot_stocks
+  in every stored collection from their saved columns, clears customer_history (rebuilt by the back-fill) and
+  re-publishes the current customer view. 13 Oct data: Strong 1,458 · Moderate 656 · Weak 335 (was 1,120 / 955 / 374);
+  admin "Healthy only" hides 981 (was 1,312). MBECL / STLTECH are Healthy again but Stretched. Stored Excel downloads
+  keep the labels they were written with.
+- Customer bars (owner, 2026-10-13): `DivBar` — −100 … 0 … +100 with a 0 notch, red-tinted left half / green-tinted
+  right half; uptrend fills right of 0, anything below 0 fills left in red. Used by `StrengthBar` (master table Trend
+  strength, stock card timeframe rows) and the AI-mode stock stat card (with a "−100 · 0 · +100" scale). Sector /
+  industry stat cards keep a 0–100 bar with a "0 · 100" scale. AI-mode stat cards always show the company name (+ ticker),
+  the sector and the industry name.
+- AI-mode sector / industry cards on −100 … +100 (owner, 2026-10-13, option B): value = the group's strength `st` (same
+  number as before) signed by its net bias `nb` (> 0 bullish = right side of the bubble chart, < 0 bearish, 0 neutral);
+  `DivBar` like the stock card; word "<Level> · bullish / bearish / neutral" (`grpSigned`, `grpDir`, `grpTone`,
+  `grpWord`). Verdict rules and the overall gauge maths ((st − 50) × 2) are unchanged; the gauge chips still show `st`.

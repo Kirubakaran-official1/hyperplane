@@ -70,6 +70,7 @@ const SECTIONS = [
     </div>
     <h3>Trend strength — how strong and clean that trend is (0–100%)</h3>
     <p>Shown as a bar meter: more bars lit = stronger trend. Green = uptrend strength, red = downtrend strength, grey = sideways.</p>
+    <p>Long bars run from <b>−100 to +100</b> with a <b>0 mark in the middle</b>: a bar to the <b>right</b> of 0 is an uptrend, to the <b>left</b> a downtrend; the longer the bar, the stronger the trend.</p>
     <div className="g-defs">
       <div><Bars v={88}/><span><b>81–100% · Strong</b> — a clear, powerful trend.</span></div>
       <div><Bars v={70}/><span><b>61–80% · Good</b> — a healthy trend.</span></div>
@@ -91,13 +92,12 @@ const SECTIONS = [
         Swing: Monthly &amp; Quarterly count most (D 10 · W 20 · M 30 · Q 30 · Y 10 %) · Investing: Quarterly &amp; Yearly count most (D 0 · W 5 · M 15 · Q 40 · Y 40 %).</td></tr>
     </tbody></table>
     <h3>Stock reliability</h3>
-    <p>How healthy and steady the stock's longer-term price history is. <b>Strong</b> = healthy and steady,
-      <b> Moderate</b> = average, <b>Weak</b> = poor or erratic (big gaps, unstable). Prefer <b>Strong</b>.
-      A stock that <b>crashed 80–90% or more</b> in the past, or that has <b>shot up many times from its lows</b> in the last
-      few years, is marked Moderate or Weak — even if its price looks fine today. Such stocks can swing wildly.</p>
+    <p>How healthy the stock's longer-term price history is. <b>Strong</b> = healthy, <b>Moderate</b> = the price is more than
+      50% below its highest level, or lower than 5 years ago, <b>Weak</b> = more than 70% below its highest level (a huge fall,
+      e.g. Vodafone Idea). Prefer <b>Strong</b>.</p>
     <p><b>🔥 Stretched</b> — the stock has run up <b>3× or more in about a year</b> (for example ₹100 → ₹1,000). A big winner,
-      but prices this stretched often fall back sharply. It is shown with a 🔥, its reliability is lowered, and it is
-      never called a “best case” — <b>don't chase it</b>; wait for it to cool down.</p>
+      but prices this stretched often fall back sharply. It is shown with a 🔥 and is never called a “best case” —
+      <b>don't chase it</b>; wait for it to cool down.</p>
     <h3>Sector and industry</h3>
     <p>A <b>sector</b> is a big group (for example Bank, IT, Healthcare). An <b>industry</b> is a smaller group inside it
       (for example Pharmaceuticals inside Healthcare). Stocks in the same group usually move together.</p>
@@ -259,7 +259,7 @@ const SECTIONS = [
     <ul>
       <li><b>Trading mode</b> — Balanced, Swing or Investing. It is the same setting as the Research view; changing it in one changes both.</li>
       <li><b>Hyperplane AI summary</b> — one verdict and a short paragraph in plain words, then four tiles:
-        <b> Stock trend strength</b>, <b>Sector strength</b>, <b>Industry strength</b> (all in %) and <b>Historical reliability</b>{" "}
+        <b> Stock trend strength</b>, <b>Sector strength</b>, <b>Industry strength</b> (all in %, on a bar from −100 to +100: right of 0 = uptrend / bullish, left of 0 = downtrend / bearish — for the sector and industry the side is the same as in the bubble chart) and <b>Historical reliability</b>{" "}
         (High = Strong, Medium = Moderate, Low = Weak reliability).</li>
       <li><b>Overall trend meter</b> — the stock, its sector and its industry combined into one needle (how it is worked out is below).</li>
     </ul>
