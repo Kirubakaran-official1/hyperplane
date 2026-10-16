@@ -1025,6 +1025,7 @@ function HoldingCard({ r, flash }) {
         <span className={`pf-tag ${tone}`}>{label}</span>
         {r.improving && <span className="pf-tag good soft">▲ Improving</span>}
         {r.s.h && r.cat !== "new" && <span className={`pf-gc ${RELIABILITY[r.s.h][1]}`}>Reliability: {RELIABILITY[r.s.h][0]}</span>}
+        {r.s.cap && <span className="pf-gc cap">{r.s.cap} cap</span>}
         {r.s.x ? <span className="pf-gc bad">Stretched</span> : null}
       </div>
       {r.cat !== "new" ? <>
@@ -1039,6 +1040,64 @@ function HoldingCard({ r, flash }) {
       </> : <div className="pf-newbox">{r.why.map((w, i) => <span key={i}>{w}</span>)}</div>}
       {r.cat !== "new" ? <ul className="pf-why pf-scroll">{r.why.map((w, i) => <li key={i}>{w}</li>)}</ul> : <div className="pf-why"/>}
       <div className="pf-ref">{grp(r.g.sec, "Sector")}{grp(r.g.ind, "Industry")}<Info above right text="Sector and industry strength are shown for reference only. They are not used to calculate the stock strength or the colour."/></div>
+    </div>
+  );
+}
+
+// ─── AI Portfolio: protection insights (owner, 2026-10-17: "my goal is to protect them"). Only the Trend map stays (owner
+// removed Protection check, Strength at a glance and How your portfolio is spread the same day). Built from the card numbers.
+const PF_COL = { bad: "var(--short)", mid: "var(--mixed)", good: "var(--long)", side: "#8b97ad" };
+
+function TrendMap({ rows, onPick }) {
+  const box = useRef(null);
+  const [size, setSize] = useState([700, 380]);       // drawn at the box's real size, so text keeps its normal size
+  useEffect(() => { const el = box.current; if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([e]) => setSize([Math.round(e.contentRect.width), Math.round(e.contentRect.height)]));
+    ro.observe(el); return () => ro.disconnect(); }, []);
+  const pts = rows.filter(r => r.cat !== "new" && r.tf.Q.v != null && r.tf.Y.v != null);
+  const hidden = rows.length - pts.length;
+  const W = Math.max(280, size[0]), H = Math.max(260, size[1]), L = 30, R = 12, T = 22, B = 40;
+  const x = v => L + (v + 100) / 200 * (W - L - R), y = v => T + (100 - v) / 200 * (H - T - B);
+  const quads = [["Rising", "good", 1, 1], ["Cooling off", "mid", -1, 1], ["Recovering", "mid", 1, -1], ["Falling", "bad", -1, -1]];
+  // ticker labels: right, left, above or below the dot, whichever overlaps nothing (red first); else hover only
+  const boxes = [], tags = {};
+  const dots = pts.map(r => ({ r, cx: x(r.tf.Q.v), cy: y(r.tf.Y.v) }));
+  dots.forEach(d => boxes.push([d.cx - 8, d.cy - 8, d.cx + 8, d.cy + 8]));
+  const inside = b => b[0] >= x(-100) + 2 && b[2] <= x(100) - 2 && b[1] >= y(100) && b[3] <= y(-100);
+  const free = b => !boxes.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+  [...dots].sort((a, b) => PF_ORDER[a.r.cat] - PF_ORDER[b.r.cat]).forEach(({ r, cx, cy }) => {
+    const w = r.s.s.length * 6.5 + 2;
+    const pick = [["start", cx + 10, cy + 3.5, [cx + 10, cy - 6, cx + 10 + w, cy + 6]], ["end", cx - 10, cy + 3.5, [cx - 10 - w, cy - 6, cx - 10, cy + 6]],
+                  ["middle", cx, cy - 11, [cx - w / 2, cy - 21, cx + w / 2, cy - 9]], ["middle", cx, cy + 20, [cx - w / 2, cy + 9, cx + w / 2, cy + 21]]]
+      .find(o => inside(o[3]) && free(o[3]));
+    if (pick) { boxes.push(pick[3]); tags[r.s.s] = pick; }
+  });
+  const unlabelled = pts.length - Object.keys(tags).length;
+  return (
+    <div className="card pf-ins pf-mapcard">
+      <div className="pf-ih"><b>Trend map</b></div>
+      <div className="pf-isub">One dot per stock. Further right means a stronger quarterly trend, higher up means a stronger yearly trend.</div>
+      <div ref={box} className="pf-mapw"><svg className="pf-map" width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Trend map of your stocks">
+        {quads.map(([lbl, tone, sx, sy]) => (
+          <g key={lbl}>
+            <rect x={sx > 0 ? x(0) : x(-100)} y={sy > 0 ? y(100) : y(0)} width={x(0) - x(-100)} height={y(0) - y(100)} style={{ fill: PF_COL[tone] }} opacity=".08"/>
+            <text x={sx > 0 ? x(100) : x(-100)} y={sy > 0 ? y(100) - 7 : y(-100) + 15} textAnchor={sx > 0 ? "end" : "start"} className="pf-mq" style={{ fill: PF_COL[tone] }}>{lbl}</text>
+          </g>))}
+        <line x1={x(0)} x2={x(0)} y1={y(100)} y2={y(-100)} className="pf-max"/>
+        <line x1={x(-100)} x2={x(100)} y1={y(0)} y2={y(0)} className="pf-max"/>
+        <text x={x(0)} y={y(-100) + 13} textAnchor="middle" className="pf-mt">0</text>
+        {[-100, 100].map(v => <text key={`y${v}`} x={L - 4} y={y(v) + (v > 0 ? 9 : -2)} textAnchor="end" className="pf-mt">{v > 0 ? "+100" : signed(v)}</text>)}
+        <text x={x(0)} y={H - 4} textAnchor="middle" className="pf-mt b">Quarterly trend →</text>
+        <text transform={`translate(10 ${y(0)}) rotate(-90)`} textAnchor="middle" className="pf-mt b">Yearly trend →</text>
+        {dots.map(({ r, cx, cy }) => { const t = tags[r.s.s];
+          return (
+            <g key={r.s.s} className="pf-dot" onClick={() => onPick(r.s.s)}>
+              <title>{`${r.s.n} (${r.s.s}): quarterly ${signed(r.tf.Q.v)}%, yearly ${signed(r.tf.Y.v)}%. ${PF_CAT[r.cat][1]}.`}</title>
+              <circle cx={cx} cy={cy} r="7" style={{ fill: PF_COL[PF_CAT[r.cat][2]], stroke: "var(--s1)" }} strokeWidth="2"/>
+              {t && <text x={t[1]} y={t[2]} textAnchor={t[0]} className="pf-ml">{r.s.s}</text>}
+            </g>); })}
+      </svg></div>
+      <div className="pf-inote">{hidden > 0 ? `${hidden} not shown: recently listed or no yearly data yet. ` : ""}{unlabelled > 0 ? "Point at a dot to see its name. " : ""}Dot colours match the boxes on the left.</div>
     </div>
   );
 }
@@ -1067,7 +1126,7 @@ function PortfolioView({ data, symbols, setSymbols, status }) {
   const brand = <div className="sv-brand"><span className="ai-spark">✦</span> Hyperplane AI <span className="sv-pow">· Portfolio Analyser by QuantFriday</span></div>;
   const search = <StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Type a stock name or ticker to add it"/>;
   const privacy = <div className="pf-priv"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
-    <span><b>Private to you.</b> Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin. We take the privacy of your investments seriously.</span></div>;
+    <span><b>Private to you.</b> Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin, as per SEBI norms. We take the privacy of your investments seriously.</span></div>;
 
   if (stage === "build" || !symbols.length) return (
     <div className="pf">
@@ -1153,7 +1212,10 @@ function PortfolioView({ data, symbols, setSymbols, status }) {
           </div>
         </section>
 
-        <section className="pf-widgets">{PF_CATS.map(c => widget(c[0]))}</section>
+        <section className="pf-mid">
+          <div className="pf-widgets">{PF_CATS.map(c => widget(c[0]))}</div>
+          <TrendMap rows={rows} onPick={jump}/>
+        </section>
 
         <section className="pf-holdings">
           <div className="pf-tools">
@@ -1649,8 +1711,9 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .pf-legend{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin-top:10px;font-size:12px;color:var(--t2)}
 .pf-legend div{display:flex;align-items:center;gap:7px}.pf-legend div.zero{opacity:.45}.pf-legend b{margin-left:auto;font-family:var(--mono);color:var(--t1)}
 .pf-legend i{width:10px;height:10px;border-radius:3px;flex-shrink:0}.pf-legend i.good{background:var(--long)}.pf-legend i.mid{background:var(--mixed)}.pf-legend i.bad{background:var(--short)}.pf-legend i.side{background:#8b97ad}
-.pf-widgets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.pf-w{padding:14px 14px 10px;border-top:4px solid #8b97ad;display:flex;flex-direction:column;gap:6px;min-width:0;height:300px;background:linear-gradient(180deg,rgba(139,151,173,.08),transparent 60%),var(--s1)}
+.pf-mid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:12px;align-items:stretch}
+.pf-widgets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.pf-w{padding:14px 14px 10px;border-top:4px solid #8b97ad;display:flex;flex-direction:column;gap:6px;min-width:0;height:250px;background:linear-gradient(180deg,rgba(139,151,173,.08),transparent 60%),var(--s1)}
 .pf-w.bad{border-top-color:var(--short);background:linear-gradient(180deg,rgba(255,68,84,.08),transparent 60%),var(--s1)}
 .pf-w.mid{border-top-color:var(--mixed);background:linear-gradient(180deg,rgba(255,170,0,.08),transparent 60%),var(--s1)}
 .pf-w.good{border-top-color:var(--long);background:linear-gradient(180deg,rgba(0,200,150,.08),transparent 60%),var(--s1)}
@@ -1664,6 +1727,18 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .pf-wl b.good{color:var(--long)}.pf-wl b.bad{color:var(--short)}.pf-wl b.side{color:var(--t2)}
 .pf-wnone{font-size:13px;color:var(--t3);padding:6px 0}
 .pf-holdings{display:flex;flex-direction:column;gap:10px}
+.pf-insights{display:flex;flex-direction:column;gap:12px;margin-top:4px}
+.pf-insh{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.pf-insh h2{margin:0;font-size:19px}.pf-insh .dim{font-size:12.5px}
+.pf-ins{padding:14px 16px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.pf-ih{display:flex;align-items:center;gap:10px}.pf-ih b{font-size:15.5px}
+.pf-isub{font-size:12.5px;color:var(--t3);line-height:1.45;margin-bottom:4px}
+.pf-inote{font-size:11.5px;color:var(--t3)}
+.pf-mapw{position:relative;flex:1;width:100%;min-width:0;min-height:300px;overflow:hidden}.pf-map{position:absolute;left:0;top:0;display:block}
+.pf-mq{font:800 12.5px var(--sans);opacity:.9}.pf-max{stroke:var(--b2);stroke-width:1}
+.pf-mt{font:600 10.5px var(--mono);fill:var(--t3)}.pf-mt.b{font-family:var(--sans);font-weight:700}
+.pf-ml{font:700 10.5px var(--mono);fill:var(--t1);paint-order:stroke;stroke:var(--s1);stroke-width:3px}
+.pf-dot{cursor:pointer}.pf-dot:hover circle{stroke:var(--acc)!important}
+.pf-gc.cap{color:var(--acc);background:var(--adim)}
 .pf-tools{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .pf-filter{display:flex;gap:6px;flex-wrap:wrap}
 .pf-filter button{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:999px;border:1px solid var(--b2);background:var(--s1);color:var(--t2);font-size:13px;font-weight:600;cursor:pointer}
@@ -1702,8 +1777,7 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .pf-newbox{display:flex;flex-direction:column;gap:3px;padding:10px 12px;border-radius:10px;background:var(--s2);border:1px dashed var(--b2);font-size:13px;color:var(--t2);line-height:1.5}.pf-newbox b{color:var(--t1)}
 .pf-why{flex:1;min-height:0;margin:2px 0 0;padding:0 4px 0 17px;display:flex;flex-direction:column;gap:5px;font-size:13px;line-height:1.5;color:var(--t1)}.pf-why li{flex-shrink:0}.pf-why li::marker{color:var(--t3)}
 .pf-ref{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding-top:8px;border-top:1px dashed var(--b1)}
-@media (max-width:1250px){.pf-widgets{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:1000px){.pf-sum,.pf-start{grid-template-columns:1fr}.pf-sumvis{border-left:0;border-top:1px solid var(--b1)}.pf-sr{border-left:0;border-top:1px solid var(--b1)}.pf-topadd{grid-template-columns:1fr}}
+@media (max-width:1000px){.pf-mid{grid-template-columns:1fr}.pf-sum,.pf-start{grid-template-columns:1fr}.pf-sumvis{border-left:0;border-top:1px solid var(--b1)}.pf-sr{border-left:0;border-top:1px solid var(--b1)}.pf-topadd{grid-template-columns:1fr}}
 @media (max-width:640px){.pf-widgets{grid-template-columns:1fr}.pf-w{height:auto;max-height:320px}.pf-grid{grid-template-columns:1fr}.pf-card{height:480px}
   .pf-sl{padding:20px 16px}.pf-sl h1{font-size:25px}.pf-sr{padding:20px 16px}.pf-bi{grid-template-columns:24px 92px minmax(0,1fr) 26px}.pf-tools{flex-direction:column;align-items:stretch}}
 .dbar{min-width:60px}.dbar-t{position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,rgba(255,68,84,.13) 0 50%,rgba(0,200,150,.13) 50% 100%),var(--s3)}

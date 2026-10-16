@@ -700,8 +700,23 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
   well" (≥ 60 % green) · "Some stocks are doing well, others need watching" · "Your stocks are too new to judge".
   Privacy note (owner wording, 2026-10-16): start page = right panel under "Your privacy" (not above the list); result page =
   under "Add more stocks": "Private to you. Your stock list is visible only to you, the account holder. It is never visible
-  to other users or to the admin. We take the privacy of your investments seriously." (No SEBI claim: no known SEBI rule
-  backs it — owner agreed.) No "saving / saved" words anywhere;
+  to other users or to the admin, as per SEBI norms. We take the privacy of your investments seriously." ("as per SEBI
+  norms" added on the owner's explicit decision, 2026-10-17, after Claude flagged that no specific SEBI rule is known to
+  back it.) No "saving / saved" words anywhere;
   a status shows only when an update fails. Fact behind it: the list IS stored server-side (customer_portfolio, RLS per
   customer); no admin screen or API exposes it — keep it that way (never add an admin view of portfolios), or the note
   becomes false. Direct database access could still read it (owner informed).
+  PROTECTION INSIGHTS (owner, 2026-10-17: "my goal is to protect them") — section between the colour widgets and the cards,
+  built only from the card numbers (no new rules): `ProtectionCheck` (5 checks: low reliability · Q and Y both falling ·
+  quarter step down · stretched · one sector ≥ 40 % of ≥ 4 stocks; info rows small caps / recently listed; pill "X of 5
+  clear", red if a red check fails), `TrendMap` (SVG scatter x = Quarterly, y = Yearly, corner labels Rising / Cooling off /
+  Recovering / Falling outside the plot, dot colour = group, ticker labels placed right / left / above / below without
+  overlap, red first, else hover), `StrengthGlance` (heat table M / Q / Y + strength bar), `PortfolioSpread` (company size
+  bar, sector count + largest, price range vs last quarter bars, sector backdrop with ⓘ "reference only"). Every stock in
+  them is clickable → jumps to its card.
+  Same day the owner removed Protection check, Strength at a glance and How your portfolio is spread: only the Trend map
+  stays (full width; drawn at the card's real pixel width via ResizeObserver so text keeps its size; 380 px tall, 300 on
+  narrow screens). Cards carry a market-cap tag ("Large cap" / "Mid cap" / "Small cap", from `cap`).
+  Result page order (owner, 2026-10-17): AI summary | gauge → `.pf-mid` = colour boxes 2 × 2 (red, amber / green, grey; 250 px
+  each) | Trend map (fills the same height; svg sized from its box's width AND height via ResizeObserver, min 300 px when
+  stacked) → filter / sort + cards. No "Protection insights" heading any more. ≤ 1000 px: boxes above the map.

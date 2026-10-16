@@ -306,7 +306,7 @@ const SECTIONS = [
     <p>Open <b>AI Portfolio Analyser</b> at the top. Add the stocks you own one by one. No quantities are needed, and you can add as many as
       you like. When your list is ready, press <b>Analyse my portfolio</b>. You can add more stocks or edit the list at any time.</p>
     <p><b>Private to you:</b> your stock list is visible only to you, the account holder. It is never visible to other users or to
-      the admin. We take the privacy of your investments seriously.</p>
+      the admin, as per SEBI norms. We take the privacy of your investments seriously.</p>
     <h3>What you see</h3>
     <ul>
       <li><b>Hyperplane AI summary</b>: a few short lines about your whole portfolio.</li>
@@ -314,8 +314,10 @@ const SECTIONS = [
       <li>Four coloured boxes with your stocks: <b style={{ color: "var(--short)" }}>Look at first</b>,
         <b style={{ color: "var(--mixed)" }}> Keep an eye on</b>, <b style={{ color: "var(--long)" }}>Doing well</b> and
         <b> Recently listed</b> (less than 3 years of yearly data, so no view yet).</li>
+      <li>Next to the coloured boxes, a <b>Trend map</b> with one dot per stock (quarterly trend left to right, yearly trend bottom
+        to top). Click a dot to open that stock's card.</li>
       <li>A card for every stock, all the same size, with its monthly, quarterly and yearly strength (0% is shown as Sideways),
-        its reliability and the reasons in plain words. Long reasons scroll inside the card. Sort the cards weakest first or best
+        its reliability, its company size (large, mid or small cap) and the reasons in plain words. Long reasons scroll inside the card. Sort the cards weakest first or best
         first, or show one colour at a time. To remove a stock, use <b>Edit list</b>.</li>
     </ul>
     <h3>How the colours are decided</h3>
