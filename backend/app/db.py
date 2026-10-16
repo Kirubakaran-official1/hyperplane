@@ -178,6 +178,12 @@ CREATE OR REPLACE FUNCTION portal_history_enabled() RETURNS boolean
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
     AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'history'), false) $$;
 REVOKE ALL ON FUNCTION portal_history_enabled() FROM PUBLIC;
+-- AI Portfolio Analyser: the customer's list of stocks (symbols only — no quantities, no prices)
+CREATE TABLE IF NOT EXISTS customer_portfolio (
+    customer_id  BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+    symbols      TEXT[]      NOT NULL DEFAULT '{}',
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 REVOKE ALL ON FUNCTION customers_auto_approve() FROM PUBLIC;
 CREATE INDEX IF NOT EXISTS hd_images_uploader ON hd_images (uploader, created_at);
 """
@@ -240,6 +246,12 @@ def _setup_portal_role(c):
     # past days: readable only while the admin switch is on — the database itself enforces it (row-level security)
     c.execute(sql.SQL("GRANT SELECT ON customer_history TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION portal_history_enabled() TO {}").format(role))
+    # AI Portfolio: each customer sees and changes only their own row (hp.cid set per transaction, like the helpdesk)
+    c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, symbols, updated_at), UPDATE (symbols, updated_at) ON customer_portfolio TO {}").format(role))
+    c.execute("ALTER TABLE customer_portfolio ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON customer_portfolio")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON customer_portfolio TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
+                      "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     c.execute("ALTER TABLE customer_history ENABLE ROW LEVEL SECURITY")
     c.execute("DROP POLICY IF EXISTS portal_history ON customer_history")
     c.execute(sql.SQL("CREATE POLICY portal_history ON customer_history FOR SELECT TO {} USING (portal_history_enabled())").format(role))

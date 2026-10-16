@@ -314,8 +314,8 @@ function CopyBtns({ syms, compact }) {
   );
 }
 
-function Info({ text, right, wide, label }) {
-  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} aria-label={label || (typeof text === "string" ? text : "More info")}>i<span className={`info-pop ${right ? "r" : ""} ${wide ? "wide" : ""}`}>{text}</span></span>;
+function Info({ text, right, wide, label, above }) {
+  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} aria-label={label || (typeof text === "string" ? text : "More info")}>i<span className={`info-pop ${right ? "r" : ""} ${wide ? "wide" : ""} ${above ? "above" : ""}`}>{text}</span></span>;
 }
 
 // Trading-mode ⓘ: how much each timeframe counts in each mode (the active one highlighted, top weights in bold)
@@ -746,7 +746,7 @@ function OverallMeter({ os, secA, indA, size = 250, className = "" }) {
 // ─── SIMPLE VIEW: pick a stock, read it in plain words (rules only — the same numbers as the research view) ───
 const LEVEL = g => { const k = groupState(g); return [k === "up" ? "good" : k === "down" ? "bad" : "mid", levelOf(g.st)]; };   // same rule as the research view
 const PERIODS = ["Days", "Weeks", "Months", "Quarters", "Years"];
-function StockSearch({ stocks, onPick, autoFocus, onClear = null }) {
+function StockSearch({ stocks, onPick, autoFocus, onClear = null, placeholder = null, added = null, keepOpen = false }) {
   const [q, setQ] = useState(""); const [hi, setHi] = useState(0); const [open, setOpen] = useState(false); const ref = useRef(null);
   useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   const found = useMemo(() => {
@@ -754,13 +754,13 @@ function StockSearch({ stocks, onPick, autoFocus, onClear = null }) {
     const rank = x => x.s.toLowerCase() === t ? 0 : x.s.toLowerCase().startsWith(t) ? 1 : x.n.toLowerCase().startsWith(t) ? 2 : x.n.toLowerCase().includes(" " + t) ? 3 : 4;
     return stocks.filter(x => x.s.toLowerCase().includes(t) || x.n.toLowerCase().includes(t)).sort((a, b) => rank(a) - rank(b) || a.n.localeCompare(b.n)).slice(0, 8);
   }, [q, stocks]);
-  const pick = x => { onPick(x.s); setQ(""); setOpen(false); };
+  const pick = x => { onPick(x.s); setQ(""); if (!keepOpen) setOpen(false); };
   return (
     <div className={`sv-search ${onClear ? "has-x" : ""}`} ref={ref}>
       <span className="sv-mag" aria-hidden="true">⌕</span>
       {onClear && <button type="button" className="sv-x" onClick={onClear} title="Clear this stock and search again" aria-label="Clear this stock">✕</button>}
       <span className="sv-qai" title="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."><span className="ai-spark">✦</span>Hyperplane AI</span>
-      <input value={q} autoFocus={autoFocus} placeholder="Ask Hyperplane AI — type a company name or ticker (e.g. Tata, INFY)" aria-label="Search a stock"
+      <input value={q} autoFocus={autoFocus} placeholder={placeholder || "Ask Hyperplane AI — type a company name or ticker (e.g. Tata, INFY)"} aria-label="Search a stock"
         onChange={e => { setQ(e.target.value); setHi(0); setOpen(true); }} onFocus={() => setOpen(true)}
         onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setHi(i => Math.min(i + 1, found.length - 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setHi(i => Math.max(i - 1, 0)); }
@@ -770,7 +770,7 @@ function StockSearch({ stocks, onPick, autoFocus, onClear = null }) {
         <div className="sv-drop" role="listbox">
           {found.length ? found.map((x, i) => (
             <button key={x.s} type="button" role="option" aria-selected={i === hi} className={i === hi ? "on" : ""} onMouseEnter={() => setHi(i)} onClick={() => pick(x)}>
-              <b className="mono">{x.s}</b><span className="sv-dn">{x.n}</span><span className="sv-ds">{x.sec}</span>
+              <b className="mono">{x.s}</b><span className="sv-dn">{x.n}</span><span className="sv-ds">{added && added.has(x.s) ? <span className="pf-added">✓ added</span> : x.sec}</span>
             </button>)) : <div className="sv-none">No stock found for “{q}”.</div>}
         </div>
       )}
@@ -909,6 +909,272 @@ function SimpleView({ data, mode, setMode, sym, setSym }) {
   );
 }
 
+// ─── AI PORTFOLIO ANALYSER — Hyperplane AI by QuantFriday ───────────────────────
+// Long-term read (owner, 2026-10-16 v3): the stock's OWN strength only (sector / industry never added) on Quarterly 50 ·
+// Yearly 30 · Monthly 20; Weekly and Daily are ignored. `zs` (publish: this month's / quarter's zone vs the zone stored in
+// the previous month / quarter) moves a group one step on the quarterly step: Doing well + quarter stepped down → Keep an
+// eye on; Keep an eye on + stepped down + strength < 0 → Look at first; Look at first + stepped up → marked "Improving".
+// Customer words: plain, no long dashes, "price range" (never "zone"), never "buy / sell / hold".
+const LT_TF = [["M", 2, "Monthly", 20], ["Q", 3, "Quarterly", 50], ["Y", 4, "Yearly", 30]];   // card order M · Q · Y
+const PF_MIN_YEARS = 3;                 // fewer years of yearly price history → recently listed, no view
+// attention order: red → amber → green → grey
+const PF_CATS = [
+  ["review", "Look at first", "bad", "Weak trend or low reliability. These need your attention first."],
+  ["watch", "Keep an eye on", "mid", "Mixed signs. Check these from time to time."],
+  ["intact", "Doing well", "good", "Strong and steady trend."],
+  ["new", "Recently listed", "side", `The quant algorithm needs at least ${PF_MIN_YEARS} years of yearly data. These do not have it yet.`],
+];
+const PF_CAT = Object.fromEntries(PF_CATS.map(c => [c[0], c]));
+const PF_ORDER = { review: 0, watch: 1, intact: 2, new: 3 };
+const goingWord = d => d === 1 ? "going up" : d === -1 ? "going down" : d === 0 ? "moving sideways" : "not known";
+const andJoin = a => a.length <= 1 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`;
+function groupLongTerm(data, sec, ind) {        // average of the Quarterly and Yearly rows: strength + direction (reference only)
+  const pick = (byTf, match) => ["Q", "Y"].map(tf => ((byTf || {})[tf] || []).find(match)).filter(Boolean);
+  const avg = rows => rows.length ? { st: rows.reduce((a, r) => a + r.st, 0) / rows.length, nb: rows.reduce((a, r) => a + r.nb, 0) / rows.length } : null;
+  return { sec: avg(pick(data.sectors, r => r.k === sec)), ind: avg(pick(data.industries, r => r.k === ind && r.sec === sec)) };
+}
+function analyseHolding(s, data) {
+  const tf = {}; let a = 0, w = 0;
+  LT_TF.forEach(([k, i, , wt]) => { const v = s.sc[i]; tf[k] = { v, d: v == null ? null : dirTf(s, i) }; if (v != null) { a += wt * v; w += wt; } });
+  const lt = w ? Math.round(a / w) : null;
+  const qStep = s.zs ? s.zs[1] : null;           // the monthly step (zs[0]) is published but not used here
+  const tooNew = s.yh !== undefined ? (s.yh == null || s.yh < PF_MIN_YEARS) : (tf.Y.v == null && tf.Q.v == null);
+  const dY = tf.Y.d, dQ = tf.Q.d, dM = tf.M.d;
+  let cat, moved = null;
+  if (tooNew || lt == null) cat = "new";
+  else if (s.h === "W" || lt <= -TREND_CUT || (dY === -1 && dQ === -1)) cat = "review";   // low reliability: always red (owner, 2026-10-16)
+  else if (lt >= TREND_CUT && dY !== -1 && dQ !== -1 && s.h !== "W" && !s.x) cat = "intact";
+  else cat = "watch";
+  if (cat === "intact" && qStep === -1) { cat = "watch"; moved = "watch"; }
+  else if (cat === "watch" && qStep === -1 && lt < 0) { cat = "review"; moved = "review"; }
+  const improving = cat === "review" && qStep === 1;
+  const why = [];
+  if (cat === "new") {
+    why.push(s.yh != null ? `It has about ${s.yh} year${s.yh === 1 ? "" : "s"} of price history so far.` : "It has very little price history so far.");
+    why.push(`The quant algorithm needs at least ${PF_MIN_YEARS} years of yearly data, so there is no view yet.`);
+  } else {
+    if (dQ === 1 && dY === 1) why.push("The quarterly and yearly trends are both going up.");
+    else if (dQ === -1 && dY === -1) why.push("The quarterly and yearly trends are both going down.");
+    else if (dQ === -1 && dY === 1) why.push("The quarterly trend has turned down, but the yearly trend is still up.");
+    else if (dQ === 1 && dY === -1) why.push("The quarterly trend is going up, but the yearly trend is still down.");
+    else why.push(dY == null ? `No clear direction yet. Quarterly is ${goingWord(dQ)}, and there is no yearly trend yet.`
+                             : `No clear direction yet. Quarterly is ${goingWord(dQ)} and yearly is ${goingWord(dY)}.`);
+    if (moved === "watch") why.push("Its strength looks good, but this quarter's price range is lower than last quarter's. Worth watching.");
+    else if (moved === "review") why.push("Its strength is below zero and this quarter's price range is lower than last quarter's.");
+    else if (improving) why.push(lt < 0 ? "It is still weak, but this quarter's price range is higher than last quarter's. An early sign of improvement."
+                                        : "This quarter's price range is higher than last quarter's. An early sign of improvement.");
+    else if (qStep === 1) why.push("This quarter's price range is higher than last quarter's, a sign of a rising trend.");
+    else if (qStep === -1) why.push("This quarter's price range is lower than last quarter's, a sign of a falling trend.");
+    if (!moved && cat === "review" && !(dY === -1 && dQ === -1)) {
+      if (lt <= -TREND_CUT) why.push(`Its strength is weak (${signed(lt)}%).`);
+      else if (s.h === "W") why.push(lt < 0 ? `Its reliability is low and its strength is below zero (${signed(lt)}%).`
+                                            : `Its strength is ${signed(lt)}%, but low reliability always puts a stock in Look at first.`);
+    } else if (!moved && cat === "watch" && lt < TREND_CUT) why.push(`Its strength is not high enough yet (${signed(lt)}%). Doing well starts at +${TREND_CUT}%.`);
+    if (dM === -1 && dQ === 1) why.push("The monthly trend is dipping. So far this looks like a pause.");
+    if (s.h === "W") why.push("Reliability is low: it once fell more than 70% from its highest price. That means more risk.");
+    else if (s.h === "M") why.push("It is more than 50% below its highest price, or lower than 5 years ago.");
+    if (s.x) why.push("It went up more than 3 times in a year. Such fast gains often cool off.");
+  }
+  return { s, cat, lt, tf, g: groupLongTerm(data, s.sec, s.ind), why, moved, improving, qStep };
+}
+function portfolioSummary(rows) {
+  const live = rows.filter(r => r.cat !== "new");
+  const by = k => rows.filter(r => r.cat === k);
+  const names = (list, n = 3) => list.length > n ? `${list.slice(0, n).map(r => r.s.s).join(", ")} and ${list.length - n} more` : andJoin(list.map(r => r.s.s));
+  const cnt = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const avg = live.length ? Math.round(live.reduce((a, r) => a + r.lt, 0) / live.length) : null;
+  const intact = by("intact").sort((a, b) => b.lt - a.lt), watch = by("watch"), review = by("review").sort((a, b) => a.lt - b.lt), fresh = by("new");
+  const lines = [];
+  lines.push(["info", avg == null ? `${cnt(rows.length, "stock", "stocks")} checked.`
+    : `${cnt(rows.length, "stock", "stocks")} checked. Taken together, your portfolio is ${dirVal(avg) === 0 ? "moving sideways" : avg > 0 ? "moving up" : "moving down"} (${signed(avg)}%).`]);
+  if (review.length) lines.push(["bad", `${cnt(review.length, "stock needs", "stocks need")} your attention first: ${names(review)}.`]);
+  if (watch.length) lines.push(["mid", `${cnt(watch.length, "stock is", "stocks are")} worth keeping an eye on: ${names(watch)}.`]);
+  if (intact.length) lines.push(["good", `${cnt(intact.length, "stock is", "stocks are")} doing well: ${names(intact)}.`]);
+  if (fresh.length) lines.push(["side", `${cnt(fresh.length, "stock is", "stocks are")} recently listed, so there is no view yet: ${names(fresh)}.`]);
+  const up = live.filter(r => r.qStep === 1), down = live.filter(r => r.qStep === -1);
+  if (up.length || down.length) lines.push([up.length >= down.length ? "good" : "bad", "Compared with last quarter, " + andJoin([
+    up.length ? `${cnt(up.length, "stock", "stocks")} moved to a higher price range` : "",
+    down.length ? `${cnt(down.length, "stock", "stocks")} moved to a lower one` : ""].filter(Boolean)) + "."]);
+  const better = rows.filter(r => r.improving);
+  if (better.length) lines.push(["good", `${names(better)} ${better.length === 1 ? "is" : "are"} in Look at first, but stepping up this quarter.`]);
+  const weak = rows.filter(r => r.s.h === "W");
+  if (weak.length) lines.push(["bad", `${names(weak)} fell very sharply in the past, so ${weak.length === 1 ? "it carries" : "they carry"} more risk.`]);
+  const hot = rows.filter(r => r.s.x);
+  if (hot.length) lines.push(["mid", `${names(hot)} went up more than 3 times in a year. Such fast gains often cool off.`]);
+  const secCount = {}; rows.forEach(r => { secCount[r.s.sec] = (secCount[r.s.sec] || 0) + 1; });
+  const [topSec, topN] = Object.entries(secCount).sort((a, b) => b[1] - a[1])[0] || [];
+  if (rows.length >= 4 && topN / rows.length >= 0.4) lines.push(["mid", `${topN} of your ${rows.length} stocks are in ${topSec}. Too much in one sector adds risk.`]);
+  const share = k => rows.length ? by(k).length / rows.length : 0;
+  const title = !live.length ? "Your stocks are too new to judge" : share("review") >= 0.3 ? "Many of your stocks need attention"
+    : share("intact") >= 0.6 ? "Most of your stocks are doing well" : "Some stocks are doing well, others need watching";
+  const tone = !live.length ? "side" : share("review") >= 0.3 ? "bad" : share("intact") >= 0.6 ? "good" : "mid";
+  return { avg, title, tone, lines, counts: Object.fromEntries(PF_CATS.map(c => [c[0], by(c[0]).length])) };
+}
+
+function HoldingCard({ r, flash }) {
+  const [, label, tone] = PF_CAT[r.cat];
+  const grp = (x, kind) => !x ? <span className="pf-gc side">{kind}: no data</span>
+    : <span className={`pf-gc ${x.nb > 0 ? "good" : x.nb < 0 ? "bad" : "side"}`}>{kind} {x.nb > 0 ? "▲ strong" : x.nb < 0 ? "▼ weak" : "◆ flat"}</span>;
+  return (
+    <div id={`pf-card-${r.s.s}`} className={`card pf-card ${tone} ${flash ? "flash" : ""}`}>
+      <div className="pf-ch">
+        <div className="pf-cn"><b title={r.s.n}>{r.s.n}</b><span className="sx-tick">{r.s.s}</span></div>
+      </div>
+      <div className="pf-cm" title={`${r.s.sec} › ${r.s.ind}`}>{r.s.sec} › {r.s.ind}</div>
+      <div className="pf-tags">
+        <span className={`pf-tag ${tone}`}>{label}</span>
+        {r.improving && <span className="pf-tag good soft">▲ Improving</span>}
+        {r.s.h && r.cat !== "new" && <span className={`pf-gc ${RELIABILITY[r.s.h][1]}`}>Reliability: {RELIABILITY[r.s.h][0]}</span>}
+        {r.s.x ? <span className="pf-gc bad">Stretched</span> : null}
+      </div>
+      {r.cat !== "new" ? <>
+        <div className="pf-lt"><span className="pf-ll">Stock strength</span><b className={dirToneOf(r.lt)}>{signed(r.lt)}<small>%</small></b><span className={`pf-lw ${dirToneOf(r.lt)}`}>{trendWordOf(r.lt)}</span></div>
+        <DivBar v={r.lt} d={dirVal(r.lt)} scale className="pf-dbar"/>
+        <div className="pf-tfs">{LT_TF.map(([k, , lbl]) => { const t = r.tf[k];
+          return <span key={k} className={`pf-tf ${t.v == null ? "side" : t.v < 0 ? "bad" : t.d === 1 ? "good" : "side"}`} title={`${lbl}: ${goingWord(t.d)}`}>
+            <i>{lbl}</i><span className="pf-tv">{t.v == null ? <small className="pf-nd">No data <Info right={k === "Y"} text={k === "Y"
+                ? "Hyperplane needs 10 years of price data to calculate the yearly trend."
+                : `Not enough price data yet to calculate the ${lbl.toLowerCase()} trend.`}/></small> : t.v === 0 ? <small className="pf-sw">Sideways</small>
+              : <>{t.d === 1 ? "▲ " : t.d === -1 ? "▼ " : ""}{signed(t.v)}%</>}</span></span>; })}</div>
+      </> : <div className="pf-newbox">{r.why.map((w, i) => <span key={i}>{w}</span>)}</div>}
+      {r.cat !== "new" ? <ul className="pf-why pf-scroll">{r.why.map((w, i) => <li key={i}>{w}</li>)}</ul> : <div className="pf-why"/>}
+      <div className="pf-ref">{grp(r.g.sec, "Sector")}{grp(r.g.ind, "Industry")}<Info above right text="Sector and industry strength are shown for reference only. They are not used to calculate the stock strength or the colour."/></div>
+    </div>
+  );
+}
+
+function PortfolioView({ data, symbols, setSymbols, status }) {
+  const bySym = useMemo(() => Object.fromEntries(data.stocks.map(x => [x.s, x])), [data]);
+  const added = useMemo(() => new Set(symbols), [symbols]);
+  const rows = useMemo(() => symbols.filter(k => bySym[k]).map(k => analyseHolding(bySym[k], data)), [symbols, bySym, data]);
+  const missing = symbols.filter(k => !bySym[k]);
+  const sum = rows.length ? portfolioSummary(rows) : null;
+  const add = k => { if (!added.has(k)) setSymbols([...symbols, k]); };
+  const remove = k => setSymbols(symbols.filter(x => x !== k));
+  const [stage, setStage] = useState(symbols.length ? "result" : "build");
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [show, setShow] = useState("all");
+  const [order, setOrder] = useState("bad");            // bad = weakest first · good = best first (recently listed always last)
+  const [flash, setFlash] = useState(null);
+  const listed = rows.filter(r => show === "all" || r.cat === show).sort((a, b) => order === "bad"
+    ? PF_ORDER[a.cat] - PF_ORDER[b.cat] || (a.lt ?? 999) - (b.lt ?? 999)
+    : (a.cat === "new") - (b.cat === "new") || PF_ORDER[b.cat] - PF_ORDER[a.cat] || (b.lt ?? -999) - (a.lt ?? -999));
+  const jump = k => { setShow("all"); setFlash(k); setTimeout(() => { const el = document.getElementById(`pf-card-${k}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); }, 60); setTimeout(() => setFlash(null), 1800); };
+  const plural = n => `${n} stock${n === 1 ? "" : "s"}`;
+  const clearAll = <>{confirmClear
+    ? <span className="pf-clr">Remove all {symbols.length}? <button type="button" onClick={() => { setSymbols([]); setConfirmClear(false); setStage("build"); }}>Yes, clear</button><button type="button" onClick={() => setConfirmClear(false)}>Cancel</button></span>
+    : <button type="button" className="pf-clrbtn" onClick={() => setConfirmClear(true)}>Clear all</button>}</>;
+  const brand = <div className="sv-brand"><span className="ai-spark">✦</span> Hyperplane AI <span className="sv-pow">· Portfolio Analyser by QuantFriday</span></div>;
+  const search = <StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Type a stock name or ticker to add it"/>;
+  const privacy = <div className="pf-priv"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
+    <span><b>Private to you.</b> Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin. We take the privacy of your investments seriously.</span></div>;
+
+  if (stage === "build" || !symbols.length) return (
+    <div className="pf">
+      <section className="card pf-start">
+        <div className="pf-sl">
+          {brand}
+          <h1>Know where your portfolio <span className="pf-grad">stands today</span></h1>
+          <p className="pf-lead">Add the stocks you own. Hyperplane AI checks each one and puts it in a clear colour group,
+            with a simple reason for every stock. No quantities, no prices, no spreadsheets.</p>
+          <div className="pf-add">{search}</div>
+          <div className="pf-build">
+            <div className="pf-bhead"><b>Your list</b><span className="dim">{plural(symbols.length)}{status ? ` · ${status}` : ""}</span>{symbols.length > 0 && clearAll}</div>
+            {symbols.length ? <div className="pf-blist pf-scroll">{symbols.map((k, i) => (
+              <div key={k} className="pf-bi"><span className="pf-bn">{i + 1}</span><b className="mono">{k}</b><span className="pf-bname">{bySym[k] ? bySym[k].n : "not in today's data"}</span>
+                <button type="button" onClick={() => remove(k)} aria-label={`Remove ${k}`} title={`Remove ${k}`}>✕</button></div>))}</div>
+              : <div className="pf-bempty">Your list is empty. Type a stock name or ticker above to add your first stock.</div>}
+            <button type="button" className="pf-go" disabled={!symbols.length} onClick={() => { setStage("result"); window.scrollTo(0, 0); }}>
+              ✦ Analyse my portfolio{symbols.length ? ` (${symbols.length})` : ""}</button>
+          </div>
+        </div>
+        <aside className="pf-sr">
+          <h3>How it works</h3>
+          <div className="pf-steps">
+            <div className="pf-step"><b>1</b><span><strong>Add your stocks</strong>Type a name or ticker. Add as many as you like.</span></div>
+            <div className="pf-step"><b>2</b><span><strong>Press Analyse</strong>Hyperplane AI reads the trend of every stock in a moment.</span></div>
+            <div className="pf-step"><b>3</b><span><strong>See the full picture</strong>Every stock gets a colour and the reasons behind it.</span></div>
+          </div>
+          <h3>What the colours mean</h3>
+          <div className="pf-key">{PF_CATS.map(([k, l, t]) => <div key={k} className={t}><i/>{l}</div>)}</div>
+          <h3>Your privacy</h3>
+          {privacy}
+          <div className="pf-trust"><span className="ai-spark">✦</span><span>Built on Hyperplane's own quant algorithms.</span></div>
+        </aside>
+      </section>
+    </div>
+  );
+
+  const widget = k => { const [, label, tone, desc] = PF_CAT[k];
+    const list = rows.filter(r => r.cat === k).sort((a, b) => k === "new" ? (b.s.yh ?? 0) - (a.s.yh ?? 0) : k === "review" ? a.lt - b.lt : b.lt - a.lt);
+    return (
+      <div key={k} className={`card pf-w ${tone}`}>
+        <div className="pf-wh"><i/><b>{label}</b><span className="pf-wn">{list.length}</span></div>
+        <div className="pf-wd">{desc}</div>
+        {list.length ? <div className="pf-wl pf-scroll">{list.map(r => (
+          <button key={r.s.s} type="button" onClick={() => jump(r.s.s)} title="Show the details">
+            <span className="pf-wname">{r.s.n}</span><span className="mono pf-wt">{r.s.s}</span>
+            {k === "new" ? <b className="mono side">{r.s.yh != null ? `${r.s.yh} yr` : "new"}</b> : <b className={`mono ${dirToneOf(r.lt)}`}>{signed(r.lt)}%</b>}</button>))}</div>
+          : <div className="pf-wnone">None right now</div>}
+      </div>);
+  };
+  return (
+    <div className="pf">
+      <section className="card pf-top">
+        <div className="pf-toprow">
+          {brand}
+          <span className="pf-count dim">{plural(symbols.length)}{status ? ` · ${status}` : ""}</span>
+          <button type="button" className="pf-edit" onClick={() => { setStage("build"); window.scrollTo(0, 0); }}>Edit list</button>
+        </div>
+        <div className="pf-topadd"><span className="pf-tal">Add more stocks</span>{search}</div>
+        {privacy}
+      </section>
+
+      {missing.length > 0 && <div className="pf-miss">Not in today's data: {missing.join(", ")}. They stay in your list and are checked again when they appear.</div>}
+
+      {sum && <>
+        <section className="card pf-sum">
+          <div className={`pf-sumtxt ${sum.tone}`}>
+            <div className="sx-lbl"><span className="ai-spark">✦</span> Hyperplane AI summary <Info text="Built on Hyperplane's own quant algorithms: fixed rules on our trend data, the same numbers as the Research view. No outside AI service is used and it never makes up a number. For information only, not investment advice."/></div>
+            <div className="sx-vtitle">{sum.title}</div>
+            <ul className="pf-lines">{sum.lines.map(([t, txt], i) => <li key={i} className={`pl-${t}`}>{txt}</li>)}</ul>
+          </div>
+          <div className="pf-sumvis">
+            <div className="ometer">
+              <div className="sx-lbl">Current strength of the portfolio <Info text="The average strength of your stocks that have enough history. It uses each stock's own data only. Right of 0 means moving up, left of 0 means moving down."/></div>
+              <TrendGauge v={sum.avg} size={200} caption={false}/>
+              <div className={`sx-gv ${dirToneOf(sum.avg)}`}>{sum.avg == null ? "No data" : <>{signed(sum.avg)}<small>%</small></>}</div>
+              <div className={`sx-gw ${dirToneOf(sum.avg)}`}>{trendWordOf(sum.avg)}</div>
+            </div>
+            <div className="pf-dist">
+              <div className="pf-bar">{PF_CATS.map(([k, , tone]) => sum.counts[k] ? <span key={k} className={tone} style={{ flex: sum.counts[k] }} title={`${PF_CAT[k][1]}: ${sum.counts[k]}`}>{sum.counts[k]}</span> : null)}</div>
+              <div className="pf-legend">{PF_CATS.map(([k, label, tone]) => <div key={k} className={sum.counts[k] ? "" : "zero"}><i className={tone}/><span>{label}</span><b>{sum.counts[k]}</b></div>)}</div>
+            </div>
+          </div>
+        </section>
+
+        <section className="pf-widgets">{PF_CATS.map(c => widget(c[0]))}</section>
+
+        <section className="pf-holdings">
+          <div className="pf-tools">
+            <div className="pf-filter" role="tablist" aria-label="Show">
+              <button type="button" role="tab" aria-selected={show === "all"} className={`all ${show === "all" ? "on" : ""}`} onClick={() => setShow("all")}>All <b>{rows.length}</b></button>
+              {PF_CATS.map(([k, label, tone]) => <button key={k} type="button" role="tab" aria-selected={show === k} disabled={!sum.counts[k]} className={`${tone} ${show === k ? "on" : ""}`} onClick={() => setShow(k)}><i/>{label} <b>{sum.counts[k]}</b></button>)}
+            </div>
+            <div className="pf-sort" role="radiogroup" aria-label="Sort">
+              <span className="dim">Sort</span>
+              {[["bad", "Weakest first"], ["good", "Best first"]].map(([k, l]) => <button key={k} type="button" role="radio" aria-checked={order === k} className={order === k ? "on" : ""} onClick={() => setOrder(k)}>{l}</button>)}
+            </div>
+          </div>
+          {show !== "all" && <div className="pf-fdesc dim">{PF_CAT[show][3]}</div>}
+          <div className="pf-grid">{listed.map(r => <HoldingCard key={r.s.s} r={r} flash={flash === r.s.s}/>)}</div>
+        </section>
+        <div className="sv-foot dim">Data as of {fmtDT(data.as_of)} · Hyperplane AI by QuantFriday · For education only, not investment advice.</div>
+      </>}
+    </div>
+  );
+}
+
 // ─── past days (only when the admin allows it): ONE scheduled collection — a date, then Day open or Day end ───
 const fmtTime = iso => new Date(iso).toLocaleTimeString("en-IN", { hour:"numeric", minute:"2-digit", timeZone:"Asia/Kolkata" });
 const fmtDay = d => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" });
@@ -959,9 +1225,19 @@ function Home({ me, onOut }) {
   // a peer inside the card: keep only the ORIGINAL stock to go back to (owner: back = the one I picked first)
   const openFromCard = st => { const origin = trail[0] || open; setTrail(origin && origin.s !== st.s ? [origin] : []); setOpenRaw(st); };
   const [view, setView] = useState("tower"); const [hdReq, setHdReq] = useState(null);
-  const [face, setFaceRaw] = useState(() => { try { return localStorage.getItem("qf_face") === "simple" ? "simple" : "research"; } catch { return "research"; } });
+  const [face, setFaceRaw] = useState(() => { try { const f = localStorage.getItem("qf_face"); return f === "simple" || f === "portfolio" ? f : "research"; } catch { return "research"; } });
   const setFace = f => { setFaceRaw(f); setView("tower"); try { localStorage.setItem("qf_face", f); } catch { /* storage blocked */ } window.scrollTo(0, 0); };
   const [simpleSym, setSimpleSym] = useState(null);
+  // AI Portfolio: the customer's stock list, saved to their account (no quantities)
+  const [pf, setPfRaw] = useState(null); const [pfStatus, setPfStatus] = useState("");
+  const pfTimer = useRef(null);
+  useEffect(() => { if (face === "portfolio" && pf == null) api("/app/api/portfolio").then(r => setPfRaw(r.symbols || [])).catch(e => { if (e.status === 401) onOut(e.message); else setPfRaw([]); }); }, [face]);
+  const setPf = list => {
+    setPfRaw(list); setPfStatus("");
+    clearTimeout(pfTimer.current);
+    pfTimer.current = setTimeout(() => api("/app/api/portfolio", { method: "PUT", json: { symbols: list } })
+      .then(() => setPfStatus("")).catch(e => { if (e.status === 401) onOut(e.message); else setPfStatus(`could not update your list: ${e.message}`); }), 500);
+  };
   const hdApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); throw e; }), []);
   const unread = useHelpdeskUnread(hdApi, "/app/api/helpdesk");
   const openHelpdesk = id => { setView("helpdesk"); setHdReq({ id, n: Date.now() }); };
@@ -1019,7 +1295,7 @@ function Home({ me, onOut }) {
       <header className="top">
         <button type="button" className="brand-home" onClick={() => setView("tower")} title="Control Tower"><Brand/></button>
         <div className="sg face" role="tablist" aria-label="View">
-          {[["research", "Research view"], ["simple", "Simplified view (AI Mode)"]].map(([k, l]) => (
+          {[["research", "Research view"], ["simple", "Simplified view (AI Mode)"], ["portfolio", "AI Portfolio Analyser"]].map(([k, l]) => (
             <button key={k} type="button" role="tab" aria-selected={face === k} className={face === k && view === "tower" ? "on" : ""} onClick={() => setFace(k)}>{l}</button>))}
         </div>
         {hist && hist.enabled && hist.days.length
@@ -1040,6 +1316,8 @@ function Home({ me, onOut }) {
 
       {view === "guide" && <Guide disclaimer={DISCLAIMER}/>}
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
+      {view === "tower" && face === "portfolio" && (data && pf != null ? <PortfolioView data={data} symbols={pf} setSymbols={setPf} status={pfStatus}/>
+        : <div className="card empty">{err || "Loading…"}</div>)}
       {view === "tower" && face === "simple" && (data ? <SimpleView data={data} mode={mode} setMode={m => { setMode(m); setTfs([]); }} sym={simpleSym} setSym={setSimpleSym}/>
         : <div className="card empty">{err || "Loading…"}</div>)}
       {view === "tower" && face === "research" && <>
@@ -1311,6 +1589,123 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .sv-periods .sv-tf{grid-template-columns:78px minmax(0,1fr) 92px;flex:1;max-height:56px}.sv-periods .sv-axis{grid-template-columns:78px 1fr 1fr 1fr 92px}
 @media (max-width:1180px){.sv-row3{grid-template-columns:repeat(2,minmax(0,1fr))}.sv-metrics{grid-column:1/-1;order:-1}}
 .sx{max-width:1260px}
+.pf{max-width:1260px;margin:14px auto 0;display:flex;flex-direction:column;gap:12px}
+.pf{display:flex;flex-direction:column;gap:14px}
+/* thin scroller: slim at rest, wider and easy to grab on hover */
+.pf-scroll{overflow-y:auto;overscroll-behavior:contain}
+.pf-scroll::-webkit-scrollbar{width:10px}.pf-scroll::-webkit-scrollbar-track{background:transparent}
+.pf-scroll::-webkit-scrollbar-thumb{background-color:var(--b2);border:3px solid transparent;background-clip:padding-box;border-radius:10px}
+.pf-scroll:hover::-webkit-scrollbar-thumb{background-color:var(--t3);border-width:1px}
+.pf-scroll::-webkit-scrollbar-thumb:hover,.pf-scroll::-webkit-scrollbar-thumb:active{background-color:var(--acc)}
+@supports not selector(::-webkit-scrollbar){.pf-scroll{scrollbar-width:thin;scrollbar-color:var(--b2) transparent}}
+/* start page */
+.pf-start{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);padding:0;overflow:hidden}
+.pf-sl{padding:30px 32px 28px;background:radial-gradient(90% 120% at 0% 0%,rgba(167,139,250,.16),transparent 60%),radial-gradient(70% 90% at 100% 0%,rgba(34,211,238,.10),transparent 55%),var(--s1)}
+.pf-sl .sv-brand{margin:0 0 16px}
+.pf-sl h1{font-size:34px;line-height:1.15;margin:0 0 12px;letter-spacing:-.6px;color:var(--t1)}
+.pf-grad{background:linear-gradient(90deg,#a78bfa,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+.pf-lead{font-size:15.5px;line-height:1.65;color:var(--t2);margin:0 0 20px;max-width:640px}
+.pf-add{width:100%}
+.pf-priv{display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:9px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;color:var(--t2);background:var(--longd);border:1px solid rgba(0,200,150,.3)}
+.pf-priv svg{flex-shrink:0;margin-top:2px;color:var(--long)}.pf-priv b{color:var(--long)}.pf-top .pf-priv,.pf-sr .pf-priv{margin-top:0}
+.pf-build{margin-top:16px}
+.pf-bhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}.pf-bhead b{font-size:14px}.pf-bhead .pf-clrbtn,.pf-bhead .pf-clr{margin-left:auto}
+.pf-blist{display:flex;flex-direction:column;border:1px solid var(--b1);border-radius:12px;max-height:300px;background:var(--s1)}
+.pf-bi{display:grid;grid-template-columns:28px 120px minmax(0,1fr) 28px;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--b1);font-size:13px}
+.pf-bi:last-child{border-bottom:0}.pf-bn{color:var(--t3);font:600 11px var(--mono)}.pf-bi b{color:var(--acc)}.pf-bname{color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-bi button{border:1px solid var(--b2);background:var(--s2);color:var(--t3);border-radius:50%;width:24px;height:24px;font-size:10px;cursor:pointer}.pf-bi button:hover{color:var(--short);border-color:var(--short)}
+.pf-bempty{padding:22px 16px;border:1px dashed var(--b2);border-radius:12px;color:var(--t3);font-size:13.5px;text-align:center}
+.pf-go{display:block;width:100%;margin-top:14px;padding:14px 18px;border:0;border-radius:12px;font-size:15.5px;font-weight:800;cursor:pointer;color:#04121a;background:linear-gradient(90deg,#a78bfa,#22d3ee);box-shadow:0 10px 26px -12px rgba(34,211,238,.6)}
+.pf-go:hover{filter:brightness(1.07)}.pf-go:disabled{opacity:.4;cursor:default;box-shadow:none;filter:none}
+.pf-clrbtn,.pf-clr button{border:1px solid var(--b2);background:var(--s2);color:var(--t2);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer}
+.pf-clr{font-size:12px;color:var(--t2);display:inline-flex;gap:6px;align-items:center}.pf-clr button:first-of-type{color:var(--short);border-color:var(--short)}
+.pf-sr{padding:28px 26px;border-left:1px solid var(--b1);background:var(--s2);display:flex;flex-direction:column;gap:14px}
+.pf-sr h3{margin:0;font-size:11.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--t3)}
+.pf-steps{display:flex;flex-direction:column;gap:14px;margin-bottom:6px}
+.pf-step{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;align-items:start}
+.pf-step b{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font:800 15px var(--mono);color:#04121a;background:linear-gradient(135deg,#a78bfa,#22d3ee)}
+.pf-step strong{display:block;font-size:14.5px;color:var(--t1);margin-bottom:2px}.pf-step span{font-size:13px;color:var(--t2);line-height:1.5}
+.pf-key{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pf-key div{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;padding:9px 11px;border-radius:10px;background:var(--s1);border:1px solid var(--b1)}
+.pf-key i{width:10px;height:10px;border-radius:50%;background:#8b97ad;flex-shrink:0}.pf-key .good i{background:var(--long)}.pf-key .mid i{background:var(--mixed)}.pf-key .bad i{background:var(--short)}
+.pf-trust{margin-top:auto;display:flex;gap:8px;font-size:12px;color:var(--t3);line-height:1.5;padding-top:8px;border-top:1px solid var(--b1)}
+/* result page */
+.pf-miss{font-size:12.5px;color:var(--mixed);padding:8px 12px;border:1px dashed var(--b2);border-radius:10px}
+.pf-top{padding:14px 18px;display:flex;flex-direction:column;gap:10px}
+.pf-toprow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.pf-toprow .sv-brand{margin:0}.pf-count{font-size:12.5px;margin-left:auto}
+.pf-edit{border:1px solid var(--b2);background:var(--s2);color:var(--t1);border-radius:9px;padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer}.pf-edit:hover{border-color:var(--acc)}
+.pf-topadd{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:center}.pf-tal{font-size:12px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.6px}
+.pf-sum{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,1fr);padding:0;overflow:hidden}
+.pf-sumtxt{padding:18px 22px;border-left:4px solid var(--mixed)}.pf-sumtxt.good{border-left-color:var(--long)}.pf-sumtxt.bad{border-left-color:var(--short)}.pf-sumtxt.side{border-left-color:#8b97ad}
+.pf-sumtxt.good .sx-vtitle{color:var(--long)}.pf-sumtxt.bad .sx-vtitle{color:var(--short)}.pf-sumtxt.side .sx-vtitle{color:var(--t2)}
+.pf-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
+.pf-lines li{position:relative;padding-left:18px;font-size:14.5px;line-height:1.55;color:var(--t1)}
+.pf-lines li::before{content:"";position:absolute;left:2px;top:8px;width:8px;height:8px;border-radius:50%;background:#8b97ad}
+.pf-lines li.pl-good::before{background:var(--long)}.pf-lines li.pl-mid::before{background:var(--mixed)}.pf-lines li.pl-bad::before{background:var(--short)}.pf-lines li.pl-info::before{background:var(--acc)}
+.pf-sumvis{border-left:1px solid var(--b1);background:var(--s2);padding:16px 18px;display:flex;flex-direction:column;gap:14px;align-items:stretch}
+.pf-sumvis .gauge{margin:8px 0 14px}
+.pf-bar{display:flex;height:22px;border-radius:7px;overflow:hidden;gap:2px}.pf-bar span{display:flex;align-items:center;justify-content:center;font:700 11.5px var(--mono);color:#04121a;min-width:22px}
+.pf-bar .good{background:var(--long)}.pf-bar .mid{background:var(--mixed)}.pf-bar .bad{background:var(--short)}.pf-bar .side{background:#8b97ad}
+.pf-legend{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin-top:10px;font-size:12px;color:var(--t2)}
+.pf-legend div{display:flex;align-items:center;gap:7px}.pf-legend div.zero{opacity:.45}.pf-legend b{margin-left:auto;font-family:var(--mono);color:var(--t1)}
+.pf-legend i{width:10px;height:10px;border-radius:3px;flex-shrink:0}.pf-legend i.good{background:var(--long)}.pf-legend i.mid{background:var(--mixed)}.pf-legend i.bad{background:var(--short)}.pf-legend i.side{background:#8b97ad}
+.pf-widgets{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.pf-w{padding:14px 14px 10px;border-top:4px solid #8b97ad;display:flex;flex-direction:column;gap:6px;min-width:0;height:300px;background:linear-gradient(180deg,rgba(139,151,173,.08),transparent 60%),var(--s1)}
+.pf-w.bad{border-top-color:var(--short);background:linear-gradient(180deg,rgba(255,68,84,.08),transparent 60%),var(--s1)}
+.pf-w.mid{border-top-color:var(--mixed);background:linear-gradient(180deg,rgba(255,170,0,.08),transparent 60%),var(--s1)}
+.pf-w.good{border-top-color:var(--long);background:linear-gradient(180deg,rgba(0,200,150,.08),transparent 60%),var(--s1)}
+.pf-wh{display:flex;align-items:center;gap:8px}.pf-wh i{width:11px;height:11px;border-radius:50%;background:#8b97ad;flex-shrink:0}.pf-w.bad .pf-wh i{background:var(--short)}.pf-w.mid .pf-wh i{background:var(--mixed)}.pf-w.good .pf-wh i{background:var(--long)}
+.pf-wh b{font-size:15.5px;white-space:nowrap}.pf-wn{margin-left:auto;font:800 13px var(--mono);padding:2px 9px;border-radius:999px;background:var(--s2);border:1px solid var(--b2)}
+.pf-wd{font-size:12px;color:var(--t3);line-height:1.45;min-height:35px}
+.pf-wl{display:flex;flex-direction:column;flex:1;min-height:0;margin:0 -6px 0 0;padding-right:2px}
+.pf-wl button{display:grid;grid-template-columns:minmax(0,1fr) auto 50px;gap:8px;align-items:center;padding:7px 4px;border:0;border-bottom:1px solid var(--b1);background:none;color:var(--t1);text-align:left;cursor:pointer;font-size:13px;flex-shrink:0}
+.pf-wl button:last-child{border-bottom:0}.pf-wl button:hover{background:var(--s2)}
+.pf-wname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pf-wt{font-size:11.5px;color:var(--acc)}.pf-wl b{text-align:right;font-size:13px}
+.pf-wl b.good{color:var(--long)}.pf-wl b.bad{color:var(--short)}.pf-wl b.side{color:var(--t2)}
+.pf-wnone{font-size:13px;color:var(--t3);padding:6px 0}
+.pf-holdings{display:flex;flex-direction:column;gap:10px}
+.pf-tools{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.pf-filter{display:flex;gap:6px;flex-wrap:wrap}
+.pf-filter button{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:999px;border:1px solid var(--b2);background:var(--s1);color:var(--t2);font-size:13px;font-weight:600;cursor:pointer}
+.pf-filter button i{width:9px;height:9px;border-radius:50%;background:#8b97ad}.pf-filter button.good i{background:var(--long)}.pf-filter button.mid i{background:var(--mixed)}.pf-filter button.bad i{background:var(--short)}
+.pf-filter button b{font-family:var(--mono);color:var(--t1)}.pf-filter button:disabled{opacity:.4;cursor:default}
+.pf-filter button.bad{border-color:rgba(255,68,84,.45)}.pf-filter button.mid{border-color:rgba(255,170,0,.45)}.pf-filter button.good{border-color:rgba(0,200,150,.45)}
+.pf-filter button.on{border-color:var(--acc);background:var(--adim);color:var(--t1)}
+.pf-filter button.on.bad{background:var(--short);color:#fff;border-color:var(--short)}.pf-filter button.on.mid{background:var(--mixed);color:#1a1200;border-color:var(--mixed)}.pf-filter button.on.good{background:var(--long);color:#04121a;border-color:var(--long)}
+.pf-filter button.on.side{background:#8b97ad;color:#0b0f17;border-color:#8b97ad}.pf-filter button.on b{color:inherit}.pf-filter button.on i{background:currentColor}
+.pf-sort{display:inline-flex;align-items:center;gap:4px;padding:3px;border-radius:999px;border:1px solid var(--b2);background:var(--s1)}.pf-sort .dim{font-size:12px;padding:0 6px 0 8px}
+.pf-sort button{border:0;background:none;color:var(--t2);padding:6px 13px;border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer}.pf-sort button.on{background:var(--acc);color:var(--on-acc,#04121a)}
+.pf-fdesc{font-size:12.5px;margin-top:-2px}
+/* stock cards: all the same size; long reasons scroll inside */
+.pf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
+.pf-card{position:relative;height:440px;padding:14px 14px 12px 18px;display:flex;flex-direction:column;gap:8px}
+.pf-card::before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:5px;border-radius:10px 0 0 10px;background:#8b97ad}.pf-card.good::before{background:var(--long)}.pf-card.mid::before{background:var(--mixed)}.pf-card.bad::before{background:var(--short)}
+.pf-card.flash{box-shadow:0 0 0 2px var(--acc),0 0 26px -6px var(--acc);transition:box-shadow .3s}
+.pf-ch{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.pf-cn{display:flex;align-items:center;gap:8px;min-width:0}
+.pf-cn b{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.pf-cn .sx-tick{flex-shrink:0}
+.pf-cm{font-size:12.5px;color:var(--t2);margin-top:-4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pf-tag{font-size:12.5px;font-weight:800;padding:4px 11px;border-radius:999px;background:var(--s2);color:var(--t2)}
+.pf-tag.good{color:var(--long);background:var(--longd)}.pf-tag.mid{color:var(--mixed);background:rgba(255,170,0,.12)}.pf-tag.bad{color:var(--short);background:var(--shortd)}
+.pf-tag.soft{font-weight:700;font-size:11.5px;background:none;border:1px solid var(--b2)}.pf-tag.good.soft{border-color:rgba(0,200,150,.45)}
+.pf-gc{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--s2);color:var(--t2);white-space:nowrap}
+.pf-gc.good{color:var(--long);background:var(--longd)}.pf-gc.mid{color:var(--mixed);background:rgba(255,170,0,.12)}.pf-gc.bad{color:var(--short);background:var(--shortd)}
+.pf-lt{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.pf-ll{font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);font-weight:700}
+.pf-lt b{font:800 26px var(--mono);letter-spacing:-.5px}.pf-lt b small{font-size:14px}.pf-lt b.good,.pf-lw.good{color:var(--long)}.pf-lt b.bad,.pf-lw.bad{color:var(--short)}.pf-lt b.side,.pf-lw.side{color:var(--t2)}.pf-lw{font-size:13px;font-weight:700}
+.pf-dbar .dbar-t{height:8px;border-radius:4px}
+.pf-tfs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.pf-tf{display:flex;flex-direction:column;gap:2px;padding:6px 9px;border-radius:9px;background:var(--s2);border:1px solid var(--b1);font:800 14px var(--mono);min-width:0}
+.pf-tf i{font:700 10px var(--sans);font-style:normal;text-transform:uppercase;letter-spacing:.6px;color:var(--t3)}
+.pf-tf small{font:600 11.5px var(--sans);color:var(--t3)}
+.pf-tf.good{color:var(--long)}.pf-tf.bad{color:var(--short)}.pf-tf.side{color:var(--t2)}
+.pf-tf small.pf-sw{font:700 13px var(--sans);color:var(--t2)}.pf-tf small.pf-nd{display:inline-flex;align-items:center;gap:5px}
+.pf-newbox{display:flex;flex-direction:column;gap:3px;padding:10px 12px;border-radius:10px;background:var(--s2);border:1px dashed var(--b2);font-size:13px;color:var(--t2);line-height:1.5}.pf-newbox b{color:var(--t1)}
+.pf-why{flex:1;min-height:0;margin:2px 0 0;padding:0 4px 0 17px;display:flex;flex-direction:column;gap:5px;font-size:13px;line-height:1.5;color:var(--t1)}.pf-why li{flex-shrink:0}.pf-why li::marker{color:var(--t3)}
+.pf-ref{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding-top:8px;border-top:1px dashed var(--b1)}
+@media (max-width:1250px){.pf-widgets{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:1000px){.pf-sum,.pf-start{grid-template-columns:1fr}.pf-sumvis{border-left:0;border-top:1px solid var(--b1)}.pf-sr{border-left:0;border-top:1px solid var(--b1)}.pf-topadd{grid-template-columns:1fr}}
+@media (max-width:640px){.pf-widgets{grid-template-columns:1fr}.pf-w{height:auto;max-height:320px}.pf-grid{grid-template-columns:1fr}.pf-card{height:480px}
+  .pf-sl{padding:20px 16px}.pf-sl h1{font-size:25px}.pf-sr{padding:20px 16px}.pf-bi{grid-template-columns:24px 92px minmax(0,1fr) 26px}.pf-tools{flex-direction:column;align-items:stretch}}
 .dbar{min-width:60px}.dbar-t{position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,rgba(255,68,84,.13) 0 50%,rgba(0,200,150,.13) 50% 100%),var(--s3)}
 .dbar-0{position:absolute;left:50%;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--t1);opacity:.75;z-index:1}
 .dbar-f{position:absolute;top:0;bottom:0}.dbar-f.up{background:var(--long);border-radius:0 3px 3px 0}.dbar-f.down{background:var(--short);border-radius:3px 0 0 3px}.dbar-f.side{background:#8b97ad;border-radius:0 3px 3px 0}
@@ -1439,7 +1834,7 @@ td.cur .dbar{margin-top:7px}.m-row .dbar{min-width:80px}
 .info:hover,.info:focus{border-color:var(--acc);color:var(--acc);outline:none}
 .info-pop{display:none;position:absolute;top:calc(100% + 7px);left:-10px;z-index:50;width:250px;padding:9px 11px;border-radius:8px;background:var(--pop);border:1px solid var(--b2);box-shadow:0 14px 30px -10px rgba(0,0,0,.8);font:400 11.5px/1.5 var(--sans);color:var(--t1);white-space:normal;text-align:left}
 .info-pop.r{left:auto;right:-10px}.info:hover .info-pop,.info:focus .info-pop{display:block}
-.info-pop.wide{width:min(400px,calc(100vw - 32px))}
+.info-pop.above{top:auto;bottom:calc(100% + 7px)}.info-pop.wide{width:min(400px,calc(100vw - 32px))}
 .mw{width:100%;border-collapse:collapse;margin:8px 0 6px;font-size:11px}.mw th{font:700 9px var(--sans);color:var(--t3);text-transform:uppercase;letter-spacing:.6px;padding:4px 5px;border-bottom:1px solid var(--b2);text-align:left}
 .mw td{padding:5px;border-bottom:1px solid var(--b1);color:var(--t1);font-weight:600;white-space:nowrap}.mw td.mw-n{font:600 11px var(--mono);color:var(--t2);text-align:center}.mw th:not(:first-child):not(:last-child){text-align:center}
 .mw td.mw-n.mw-top{color:var(--acc);font-weight:800}.mw td.mw-n.mw-zero{color:var(--t3);opacity:.6}.mw td.mw-hint{font-weight:400;color:var(--t2);white-space:normal;font-size:10.5px}

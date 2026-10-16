@@ -279,6 +279,48 @@ def data(request: Request, date: str | None = None, part: str | None = None, c=D
                              "Cache-Control": "private, no-cache"})
 
 
+PF_MAX = 500                                          # stocks per portfolio ("any number" — capped against abuse)
+PF_SYM = re.compile(r"^[A-Z0-9&._-]{1,30}$")
+
+
+class PortfolioIn(BaseModel):
+    symbols: list[str]
+
+
+@contextmanager
+def _own(c):
+    """One transaction with row-level security switched to this customer."""
+    with pool.connection() as conn:
+        conn.execute("SELECT set_config('hp.cid', %s, true)", (str(c["id"]),))
+        yield conn
+
+
+@app.get("/app/api/portfolio")
+def portfolio_get(request: Request, c=Depends(customer)):
+    _rate("portfolio", _ip(request), 120, 60)
+    with _own(c) as conn:
+        r = conn.execute("SELECT symbols, updated_at FROM customer_portfolio WHERE customer_id = %s", (c["id"],)).fetchone()
+    return {"symbols": list(r["symbols"]) if r else [], "updated_at": r["updated_at"].isoformat() if r else None}
+
+
+@app.put("/app/api/portfolio")
+def portfolio_put(body: PortfolioIn, request: Request, c=Depends(customer)):
+    _rate("portfolio", _ip(request), 120, 60)
+    syms, seen = [], set()
+    for s in body.symbols:
+        s = str(s).strip().upper()
+        if not PF_SYM.match(s):
+            raise HTTPException(422, f"'{s[:30]}' is not a valid stock symbol")
+        if s not in seen:
+            seen.add(s); syms.append(s)
+    if len(syms) > PF_MAX:
+        raise HTTPException(422, f"A portfolio can hold up to {PF_MAX} stocks")
+    with _own(c) as conn:
+        conn.execute("INSERT INTO customer_portfolio (customer_id, symbols, updated_at) VALUES (%s, %s, now()) "
+                     "ON CONFLICT (customer_id) DO UPDATE SET symbols = EXCLUDED.symbols, updated_at = now()", (c["id"], syms))
+    return {"symbols": syms}
+
+
 @app.get("/app/api/health")
 def health():
     return {"ok": True}

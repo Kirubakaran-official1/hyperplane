@@ -16,6 +16,7 @@ import gzip
 import json
 import math
 import re
+from datetime import date, timedelta
 
 from .db import get_meta, get_settings, pool, set_meta, TECH_TF_DEFAULT
 
@@ -30,6 +31,11 @@ _IDX_SYM = re.compile(r"NIFTY|SENSEX|BEES|ETF$")
 _IDX_NAME = re.compile(r"\bETF\b|\bindex fund\b|\bfund of funds?\b", re.I)
 CAP = {"largecap": "Large", "midcap": "Mid", "smallcap": "Small"}
 KEEP_PUBLISHED = 30
+# AI Portfolio zone step (owner, 2026-10-16: "compare zone levels"): this month's / quarter's zone vs the zone stored in the
+# previous month / quarter. Middle of the zone moved up by ≥ ZONE_STEP × the earlier zone's width = stepping up (1), down
+# by as much = stepping down (−1), else level (0); None = no collection stored in the previous period.
+ZONE_STEP = 0.10
+_zone_cache = {}
 
 
 def _sym(v):
@@ -104,12 +110,60 @@ def _tech_net(row, tf, price, c):
     return sum(dirs) / (6 + (rsi70 is not None) + (atr is not None))
 
 
-def build_public(sheets, settings, as_of):
+def _zone_mids(snapshot_id):
+    """symbol -> {"M": (middle, width), "Q": (middle, width)} of one stored collection (small cache: a history rebuild
+    asks for the same earlier collection many times)."""
+    if snapshot_id in _zone_cache:
+        return _zone_cache[snapshot_id]
+    with pool.connection() as c:
+        r = c.execute("SELECT data_gz FROM snapshots WHERE id = %s", (snapshot_id,)).fetchone()
+    out = {}
+    for z in (json.loads(gzip.decompress(bytes(r["data_gz"]))).get("Zone_Levels", []) if r else []):
+        per = {}
+        for tf in "MQ":
+            top, bot = _num(z.get(f"{tf}_Top_Zone")), _num(z.get(f"{tf}_Bottom_Zone"))
+            if top is not None and bot is not None and top > bot:
+                per[tf] = ((top + bot) / 2, top - bot)
+        if per:
+            out[_sym(z.get("Symbol"))] = per
+    if len(_zone_cache) >= 6:
+        _zone_cache.pop(next(iter(_zone_cache)))
+    _zone_cache[snapshot_id] = out
+    return out
+
+
+def _period_start(d, months):
+    return date(d.year, (d.month - 1) // months * months + 1, 1)
+
+
+def earlier_zones(trade_date):
+    """{"M": zones stored in the previous month, "Q": zones stored in the previous quarter} (None when none stored)."""
+    out = {}
+    for tf, months in (("M", 1), ("Q", 3)):
+        start = _period_start(trade_date, months)
+        with pool.connection() as c:
+            r = c.execute("SELECT id FROM snapshots WHERE trade_date >= %s AND trade_date < %s ORDER BY taken_at DESC LIMIT 1",
+                          (_period_start(start - timedelta(days=1), months), start)).fetchone()
+        out[tf] = _zone_mids(r["id"]) if r else None
+    return out
+
+
+def _zone_step(z, tf, earlier):
+    old = ((earlier or {}).get(tf) or {}).get(_sym(z.get("Symbol")), {}).get(tf)
+    top, bot = _num(z.get(f"{tf}_Top_Zone")), _num(z.get(f"{tf}_Bottom_Zone"))
+    if not old or top is None or bot is None or top <= bot:
+        return None
+    shift = ((top + bot) / 2 - old[0]) / old[1]
+    return 1 if shift >= ZONE_STEP else -1 if shift <= -ZONE_STEP else 0
+
+
+def build_public(sheets, settings, as_of, earlier=None):
     flat = sheets.get("Flat_Data_For_Slicers", [])
     zl = {_sym(r.get("Symbol")): r for r in sheets.get("Zone_Levels", [])}
     master = {_sym(r.get("Symbol")): r for r in sheets.get("Master_Stock_Data", [])}
     health = {_sym(r.get("Symbol")): str(r.get("Health") or "").upper() for r in sheets.get("Price_Health", [])}
     stretched = {_sym(r.get("Symbol")) for r in sheets.get("Price_Health", []) if str(r.get("Stretched") or "") == "Yes"}
+    years = {_sym(r.get("Symbol")): _num(r.get("Years_Of_History")) for r in sheets.get("Price_Health", [])}
     tech = {_sym(r.get("Symbol")): r for r in sheets.get("Technicals", [])} if settings.get("tech_enabled") else {}
     tech_w = float(settings.get("tech_weight") or 0)
     tech_cfg = settings.get("tech") or {}
@@ -168,7 +222,11 @@ def build_public(sheets, settings, as_of):
                        # background (Price_Health): S = Healthy, M = Weak or unrated (as the Control Tower), W = Poor
                        "h": ({"HEALTHY": "S", "POOR": "W"}.get(health.get(sym), "M") if health else None),
                        # stretched: ≥ 3x its 1-year low (Price_Health "Stretched") — shown as a warning, never chase
-                       "x": 1 if sym in stretched else 0})
+                       "x": 1 if sym in stretched else 0,
+                       # years of yearly price history (None = no yearly data at all) — AI Portfolio "too new" check
+                       "yh": (int(years[sym]) if years.get(sym) is not None else None) if health else None,
+                       # zone step vs the previous month / quarter: [M, Q] each 1 up · 0 level · −1 down · None unknown
+                       "zs": [_zone_step(z, "M", earlier), _zone_step(z, "Q", earlier)]})
         if "-" not in rating and health.get(sym) != "POOR":
             weighted = sum(TF_WEIGHT[tf] * (1 if ch == "G" else -1 if ch == "W" else 0) for tf, ch in zip(TFS, rating))
             if weighted > 0:
@@ -308,7 +366,7 @@ def build_history(snapshot_id):
     if not snap:
         return None
     sheets = json.loads(gzip.decompress(bytes(snap["data_gz"])))
-    payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat())
+    payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat(), earlier_zones(snap["trade_date"]))
     gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
     with pool.connection() as c:
         c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz) "
@@ -338,12 +396,12 @@ def history_failed(snapshot_id, error):
 def publish(snapshot_id=None, mode="manual", by=None, dry_run=False):
     """Build the customer view from a collection (latest when snapshot_id is None) and store it."""
     with pool.connection() as c:
-        q = "SELECT id, taken_at, data_gz FROM snapshots " + ("WHERE id = %s" if snapshot_id else "ORDER BY taken_at DESC LIMIT 1")
+        q = "SELECT id, taken_at, trade_date, data_gz FROM snapshots " + ("WHERE id = %s" if snapshot_id else "ORDER BY taken_at DESC LIMIT 1")
         snap = c.execute(q, (snapshot_id,) if snapshot_id else ()).fetchone()
     if not snap:
         raise ValueError("no collection to publish")
     sheets = json.loads(gzip.decompress(bytes(snap["data_gz"])))
-    payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat())
+    payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat(), earlier_zones(snap["trade_date"]))
     if dry_run:
         return payload
     gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)

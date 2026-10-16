@@ -660,3 +660,48 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
   number as before) signed by its net bias `nb` (> 0 bullish = right side of the bubble chart, < 0 bearish, 0 neutral);
   `DivBar` like the stock card; word "<Level> · bullish / bearish / neutral" (`grpSigned`, `grpDir`, `grpTone`,
   `grpWord`). Verdict rules and the overall gauge maths ((st − 50) × 2) are unchanged; the gauge chips still show `st`.
+- AI PORTFOLIO ANALYSER (owner, 2026-10-16) — customer tab "AI Portfolio" (header switch, 3rd option), branded
+  "Hyperplane AI · Portfolio Analyser by QuantFriday". Customers add stocks one by one (no quantities, ≤ 500); saved
+  per customer in `customer_portfolio` (customer_id → customers ON DELETE CASCADE, symbols TEXT[]), portal role
+  SELECT / INSERT / UPDATE with RLS `portal_own` (customer_id::text = hp.cid); GET / PUT /app/api/portfolio (symbol
+  regex, 120 req/min/IP). publish.py adds `yh` (Years_Of_History) per stock. Client-side rules (`analyseHolding`):
+  long-term only — Y 4 · Q 4 · M 1.5 (Investing weights without D / W); groups: too new (yh < 3, PF_MIN_YEARS) · under
+  pressure (LT ≤ −24, or Y and Q both falling, or h = W and LT < 0) · intact (LT ≥ +24, Y and Q not falling, h ≠ W, not
+  stretched) · else watch. Sector / industry long-term backing = average of their Q and Y rows (nb sign = bullish /
+  bearish) — shown, never decides. Indirect wording (no buy / sell / hold). `portfolioSummary` paragraph + portfolio
+  gauge (average LT), distribution bar, sector mix, filter pills + card grid (attention first). Thresholds are Claude's
+  proposal built on the owner's guidance — owner may tune. Docs section "AI Portfolio".
+  v2 (owner, 2026-10-16): two stages — build (add any number, numbered list, "Analyse my portfolio" button) → result
+  (add more at the top, "Edit list" goes back; a saved list opens on the result). Customer words: plain, NO long dashes
+  "—", no timeframe names in the intro / summary. Groups renamed red / amber / green: "Look at first" (review) · "Keep an
+  eye on" (watch) · "Doing well" (intact) · grey "Too new to judge". Summary = short coloured bullet lines; gauge
+  "Current strength of the portfolio"; sector-mix section removed; 3 coloured widgets (name, ticker, %; click → card);
+  colour-coded filter chips; sort "Weakest first / Best first"; card boxes ordered Monthly · Quarterly · Yearly.
+  Summary line classes use the `pl-` prefix (`.info` is the ⓘ icon style — do not reuse it).
+  v3 (owner, 2026-10-16): strength = the stock's OWN `sc` only (sector / industry never added; shown on the card under "For
+  reference, not in the strength") with weights Quarterly 50 · Yearly 30 · Monthly 20 (owner-approved). Zone step: publish.py
+  `earlier_zones(trade_date)` loads the newest stored collection of the previous month / previous quarter (zones are fixed
+  inside a period and roll at its start — verified) and adds `zs: [M, Q]` per stock (1 up · 0 level · −1 down · None) —
+  middle of the zone moved ≥ ZONE_STEP (10 %, Claude's proposal, owner may tune) of the earlier zone's width. Owner rule
+  "change by one step": Doing well + Q stepped down → Keep an eye on; Keep an eye on + Q down + strength < 0 → Look at first;
+  Look at first + Q up → "Improving" tag. Customers read "price range", never "zone". "Too new" renamed "Recently listed"
+  (needs 3 years of yearly data). Start page = two columns (headline, search, numbered list, Analyse button | How it works,
+  colour key). 4 widgets in one row (red, amber, green, grey; fixed height). Cards fixed height (452 px) with the reasons in
+  a thin `.pf-scroll` scroller (slim at rest, wider on hover).
+  v4 (owner, 2026-10-16): header tab "AI Portfolio Analyser". Cards: no ✕ (remove via Edit list), "Reliability: High /
+  Medium / Low" chip (not "Price history"), no "Moved down" tag, no Higher / Same / Lower range labels in the boxes (the
+  quarter step still moves the colour and is told once in the reasons; the monthly step is published but not shown), a box at
+  exactly 0% reads "Sideways", sector / industry chips carry an ⓘ (opens upward: `<Info above>`) saying they are not used in
+  the strength. Card no longer clips (overflow visible) so the ⓘ shows; its colour stripe has its own rounded corner.
+  A box with no value shows "No data ⓘ"; Yearly's ⓘ says "Hyperplane needs 10 years of price data to calculate the yearly
+  trend" (owner, 2026-10-16; checked: all 30 stocks without a yearly value have 6–10 years of history).
+  Low reliability (h = W) is ALWAYS "Look at first", whatever the strength (owner, 2026-10-16; recently listed still wins).
+  Summary titles (owner: plain words): "Many of your stocks need attention" (≥ 30 % red) · "Most of your stocks are doing
+  well" (≥ 60 % green) · "Some stocks are doing well, others need watching" · "Your stocks are too new to judge".
+  Privacy note (owner wording, 2026-10-16): start page = right panel under "Your privacy" (not above the list); result page =
+  under "Add more stocks": "Private to you. Your stock list is visible only to you, the account holder. It is never visible
+  to other users or to the admin. We take the privacy of your investments seriously." (No SEBI claim: no known SEBI rule
+  backs it — owner agreed.) No "saving / saved" words anywhere;
+  a status shows only when an update fails. Fact behind it: the list IS stored server-side (customer_portfolio, RLS per
+  customer); no admin screen or API exposes it — keep it that way (never add an admin view of portfolios), or the note
+  becomes false. Direct database access could still read it (owner informed).

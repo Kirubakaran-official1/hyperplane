@@ -302,6 +302,43 @@ const SECTIONS = [
       you switch between Balanced, Swing and Investing.</Tip>
   </> },
 
+  { id: "portfolio", t: "AI Portfolio · Hyperplane AI by QuantFriday", body: <>
+    <p>Open <b>AI Portfolio Analyser</b> at the top. Add the stocks you own one by one. No quantities are needed, and you can add as many as
+      you like. When your list is ready, press <b>Analyse my portfolio</b>. You can add more stocks or edit the list at any time.</p>
+    <p><b>Private to you:</b> your stock list is visible only to you, the account holder. It is never visible to other users or to
+      the admin. We take the privacy of your investments seriously.</p>
+    <h3>What you see</h3>
+    <ul>
+      <li><b>Hyperplane AI summary</b>: a few short lines about your whole portfolio.</li>
+      <li><b>Current strength of the portfolio</b>: one meter for all your stocks together. Right of 0 is moving up, left of 0 is moving down.</li>
+      <li>Four coloured boxes with your stocks: <b style={{ color: "var(--short)" }}>Look at first</b>,
+        <b style={{ color: "var(--mixed)" }}> Keep an eye on</b>, <b style={{ color: "var(--long)" }}>Doing well</b> and
+        <b> Recently listed</b> (less than 3 years of yearly data, so no view yet).</li>
+      <li>A card for every stock, all the same size, with its monthly, quarterly and yearly strength (0% is shown as Sideways),
+        its reliability and the reasons in plain words. Long reasons scroll inside the card. Sort the cards weakest first or best
+        first, or show one colour at a time. To remove a stock, use <b>Edit list</b>.</li>
+    </ul>
+    <h3>How the colours are decided</h3>
+    <p>Hyperplane AI uses <b>only the stock's own data</b>. The quarterly trend counts most, then the yearly, then the monthly.
+      Daily and weekly moves are left out. The sector and industry are shown on each card for reference only (see its ⓘ). They
+      are never used to calculate the strength and never change a colour.</p>
+    <table className="g-table"><tbody>
+      <tr><td><b>Doing well</b></td><td>Strength +24% or more, the yearly and quarterly trends are not going down, no very big fall in
+        the past and not stretched.</td></tr>
+      <tr><td><b>Keep an eye on</b></td><td>Some signs are mixed, the strength is not high enough yet, or the price went up more than
+        3 times in a year.</td></tr>
+      <tr><td><b>Look at first</b></td><td>Strength −24% or lower, or the yearly and quarterly trends are both going down, or low
+        reliability (it once fell more than 70% from its highest price), whatever the strength.</td></tr>
+      <tr><td><b>Recently listed</b></td><td>Less than 3 years of yearly data. No view is given.</td></tr>
+    </tbody></table>
+    <p>Hyperplane AI also compares this quarter's price range with last quarter's. A stock that would be <b>Doing well</b> but has
+      stepped down to a lower range moves to <b>Keep an eye on</b>. A stock in <b>Keep an eye on</b> that stepped down with strength
+      below zero moves to <b>Look at first</b>. A stock in <b>Look at first</b> that stepped up is marked <b>Improving</b>.</p>
+    <Tip kind="warn" title="Information, not advice">Hyperplane AI is built on Hyperplane's own quant algorithms (fixed rules on our
+      data), with no outside AI service. It describes the trend; it does not tell you to buy or sell. Decide with your own research or a
+      SEBI-registered adviser.</Tip>
+  </> },
+
   { id: "helpdesk", t: "Helpdesk & notifications", body: <>
     <ol className="g-steps">
       <li>Open the menu under <b>your name</b> (top right) → <b>Helpdesk</b>, and press <b>New query</b>.</li>
