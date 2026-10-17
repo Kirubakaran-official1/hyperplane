@@ -3396,6 +3396,29 @@ def build_zone_level_rows(frame, master_stock_data, category_stocks):
     return rows
 
 
+def build_zone_history_rows(frame):
+    """Zone_History: top / bottom zone of the current + last 4 months, quarters and years (virgin-data), one row per stock.
+    M0 = this month's zone, M1 = last month's ... M4 = 4 months ago (same for Q and Y). Used by the AI Portfolio engine
+    (backend/app/zone_engine.py) to read whether the zones are stepping up or down."""
+    x = _Ctx(frame)
+    rows = []
+    for i, sym in enumerate(frame['symbol'].tolist()):
+        if any(w in sym.lower() for w in exclude_words) or np.isnan(x.c[i]):
+            continue
+        row, have = {'Symbol': sym}, False
+        for tf in 'mqy':
+            L = _TF_LABEL[tf]
+            for k in range(5):
+                top, bot = _r2(x.vzone(tf, 'top', k)[i]), _r2(x.vzone(tf, 'bottom', k)[i])
+                row[f'{L}{k}_Top'], row[f'{L}{k}_Bottom'] = top, bot
+                have = have or (k > 0 and top is not None)
+        for k in range(1, 5):                                   # month-end closes 1…4 months ago → "last 4 months" (Investment AI summary)
+            row[f'M{k}_Close'] = _r2(x.ohlc('m', 'close', k)[i])
+        if have:
+            rows.append(row)
+    return rows
+
+
 def build_return_potential_rows(zone_rows, health_rows=None):
     """
     HIDDEN RETURN — potential move if you enter on the MONTHLY zone breakout and exit at the
@@ -3667,6 +3690,7 @@ def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
         failed_rows = build_failed_nr_rows(frame, zone_rows, health_rows)
         retest_rows = build_zone_retest_rows(frame, zone_rows, health_rows)
         tech_rows = build_technical_rows(frame, zone_rows)
+        history_rows = build_zone_history_rows(frame)
         with pd.ExcelWriter(filename, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
             pd.DataFrame(zone_rows).to_excel(writer, sheet_name='Zone_Levels', index=False)
             pd.DataFrame(ret_rows).to_excel(writer, sheet_name='Return_Potential', index=False)
@@ -3675,6 +3699,8 @@ def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
             pd.DataFrame(retest_rows).to_excel(writer, sheet_name='Zone_Retest', index=False)
             if tech_rows:
                 pd.DataFrame(tech_rows).to_excel(writer, sheet_name='Technicals', index=False)
+            if history_rows:
+                pd.DataFrame(history_rows).to_excel(writer, sheet_name='Zone_History', index=False)
         n_long = sum(1 for r in ret_rows if r['Direction'] == 'LONG')
         print(f"  ✓ Added Zone_Levels ({len(zone_rows)} stocks) + Return_Potential ({n_long} long / {len(ret_rows) - n_long} short setups)")
         return True
@@ -3774,6 +3800,7 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         failed_nr_rows = build_failed_nr_rows(frame, zone_level_rows, health_rows)
         retest_rows = build_zone_retest_rows(frame, zone_level_rows, health_rows)
         tech_rows = build_technical_rows(frame, zone_level_rows)
+        history_rows = build_zone_history_rows(frame)
         n_long = sum(1 for r in return_rows if r['Direction'] == 'LONG')
         n_poor = sum(1 for r in health_rows if r['Health'] == 'POOR')
         n_weak = sum(1 for r in health_rows if r['Health'] == 'WEAK')
@@ -3782,6 +3809,8 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         print(f"  • Failed_NR: {len(failed_nr_rows)} trap setups")
         print(f"  • Zone_Retest: {len(retest_rows)} retest setups")
         print(f"  • Technicals: {len(tech_rows)} stocks" if tech_rows else "  • Technicals: no technical-data table this run")
+        print(f"  • Zone_History: {len(history_rows)} stocks (current + last 4 M / Q / Y zones)" if history_rows
+              else "  • Zone_History: no virgin-data table this run")
 
         current_step = "Saving Excel"
         filename = save_excel_with_enhanced_sheets(
@@ -3792,7 +3821,8 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
             extra_sheets={'Zone_Levels': zone_level_rows, 'Return_Potential': return_rows,
                           'Price_Health': health_rows, 'Failed_NR': failed_nr_rows,
                           'Zone_Retest': retest_rows,
-                          **({'Technicals': tech_rows} if tech_rows else {})}
+                          **({'Technicals': tech_rows} if tech_rows else {}),
+                          **({'Zone_History': history_rows} if history_rows else {})}
         )
         if not filename:
             raise Exception("Failed to generate Excel file")

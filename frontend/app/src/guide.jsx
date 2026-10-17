@@ -316,26 +316,30 @@ const SECTIONS = [
         <b> Recently listed</b> (less than 3 years of yearly data, so no view yet).</li>
       <li>Next to the coloured boxes, a <b>Trend map</b> with one dot per stock (quarterly trend left to right, yearly trend bottom
         to top). Click a dot to open that stock's card.</li>
-      <li>A card for every stock, all the same size, with its monthly, quarterly and yearly strength (0% is shown as Sideways),
-        its reliability, its company size (large, mid or small cap) and the reasons in plain words. Long reasons scroll inside the card. Sort the cards weakest first or best
-        first, or show one colour at a time. To remove a stock, use <b>Edit list</b>.</li>
+      <li><b>Holdings</b>: one card per stock with its status, strength, monthly, quarterly and yearly strength (0% is shown as
+        Sideways), its reliability and the reasons in plain words, always open. Show one colour at a time, or sort
+        weakest first or best first. To remove a stock, use <b>Edit list</b>.</li>
+      <li><b>Download report</b>: a PDF with a cover page, the summary, the gauge, the colour groups, the Trend map and every stock
+        with its reasons. It is made on your own device; your list is not sent anywhere to make it.</li>
     </ul>
-    <h3>How the colours are decided</h3>
-    <p>Hyperplane AI uses <b>only the stock's own data</b>. The quarterly trend counts most, then the yearly, then the monthly.
-      Daily and weekly moves are left out. The sector and industry are shown on each card for reference only (see its ⓘ). They
-      are never used to calculate the strength and never change a colour.</p>
+    <h3>How the strength and colours are decided</h3>
+    <p>Hyperplane AI uses <b>only the stock's own data</b>. For the month, the quarter and the year it looks at two things:</p>
+    <ul>
+      <li><b>The trend</b>: is it going up, flat or going down, and for how long? For example, "going down for the last 3
+        quarters" or "turned up this month".</li>
+      <li><b>How strong today's price is</b> for this month, quarter and year: very strong, holding up well, weak or very weak.</li>
+    </ul>
+    <p>These give a strength for each period and one <b>stock strength</b> from −100% to +100%. The quarter counts most, then the
+      year, then the month. Daily and weekly moves are left out. The sector and industry are shown on each card for reference only
+      (see its ⓘ); they are never used in the strength and never change a colour.</p>
     <table className="g-table"><tbody>
-      <tr><td><b>Doing well</b></td><td>Strength +24% or more, the yearly and quarterly trends are not going down, no very big fall in
-        the past and not stretched.</td></tr>
-      <tr><td><b>Keep an eye on</b></td><td>Some signs are mixed, the strength is not high enough yet, or the price went up more than
-        3 times in a year.</td></tr>
-      <tr><td><b>Look at first</b></td><td>Strength −24% or lower, or the yearly and quarterly trends are both going down, or low
-        reliability (it once fell more than 70% from its highest price), whatever the strength.</td></tr>
+      <tr><td><b>Doing well</b></td><td>Stock strength +24% or more, and the quarterly view is not negative.</td></tr>
+      <tr><td><b>Keep an eye on</b></td><td>Stock strength between −24% and +24% (moving sideways), or strong but with a negative
+        quarter. Also any stock that went up more than 3 times in a year.</td></tr>
+      <tr><td><b>Look at first</b></td><td>Stock strength −24% or lower. Also any stock with low reliability (it once fell more than
+        70% from its highest price), whatever its strength.</td></tr>
       <tr><td><b>Recently listed</b></td><td>Less than 3 years of yearly data. No view is given.</td></tr>
     </tbody></table>
-    <p>Hyperplane AI also compares this quarter's price range with last quarter's. A stock that would be <b>Doing well</b> but has
-      stepped down to a lower range moves to <b>Keep an eye on</b>. A stock in <b>Keep an eye on</b> that stepped down with strength
-      below zero moves to <b>Look at first</b>. A stock in <b>Look at first</b> that stepped up is marked <b>Improving</b>.</p>
     <Tip kind="warn" title="Information, not advice">Hyperplane AI is built on Hyperplane's own quant algorithms (fixed rules on our
       data), with no outside AI service. It describes the trend; it does not tell you to buy or sell. Decide with your own research or a
       SEBI-registered adviser.</Tip>

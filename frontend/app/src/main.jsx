@@ -6,6 +6,7 @@ import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../../shar
 import Guide, { GUIDE_CSS } from "./guide.jsx";
 import { QuickGuideButton, QUICK_CSS } from "./quick.jsx";
 import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
+import { placeLabels } from "./labels.js";
 
 // ─── vocabulary ──────────────────────────────────────────────────────────────
 const TFS = [["D","Daily","short term"],["W","Weekly","weeks"],["M","Monthly","months"],["Q","Quarterly","quarters"],["Y","Yearly","long term"]];
@@ -682,6 +683,7 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
         </div>
         </div>
 
+        {data && <InvestmentSummary s={s} data={data}/>}
         <div className="m-foot"><span className="sub">Data as of {fmtDT(asOf)} · strength = how strong the trend is (0–100%), not a price move</span><span className="sub m-disc">For education only — not investment advice.</span></div>
         <p className="fine">{DISCLAIMER}</p>
       </div>
@@ -914,7 +916,8 @@ function SimpleView({ data, mode, setMode, sym, setSym }) {
 // Yearly 30 · Monthly 20; Weekly and Daily are ignored. `zs` (publish: this month's / quarter's zone vs the zone stored in
 // the previous month / quarter) moves a group one step on the quarterly step: Doing well + quarter stepped down → Keep an
 // eye on; Keep an eye on + stepped down + strength < 0 → Look at first; Look at first + stepped up → marked "Improving".
-// Customer words: plain, no long dashes, "price range" (never "zone"), never "buy / sell / hold".
+// Customer words: plain, no long dashes, compare with past months / quarters / years (never "zone" or "range"), never
+// "buy / sell / hold" (owner, 2026-10-17: "people don't know what a range is").
 const LT_TF = [["M", 2, "Monthly", 20], ["Q", 3, "Quarterly", 50], ["Y", 4, "Yearly", 30]];   // card order M · Q · Y
 const PF_MIN_YEARS = 3;                 // fewer years of yearly price history → recently listed, no view
 // attention order: red → amber → green → grey
@@ -933,7 +936,56 @@ function groupLongTerm(data, sec, ind) {        // average of the Quarterly and 
   const avg = rows => rows.length ? { st: rows.reduce((a, r) => a + r.st, 0) / rows.length, nb: rows.reduce((a, r) => a + r.nb, 0) / rows.length } : null;
   return { sec: avg(pick(data.sectors, r => r.k === sec)), ind: avg(pick(data.industries, r => r.k === ind && r.sec === sec)) };
 }
+// Zone engine result (publish → zone_engine.py; owner, 2026-10-17): s.zv = [colour 1/0/−1, strength, [M], [Q], [Y]], each
+// timeframe [trend 2…−2, price position 2 / 1 / −1 / −2, strength]. All maths stays on the server; this only turns the
+// results into plain words for people with no finance background. No zv (collection without Zone_History) → strength rules.
+const ZTREND = { 2: "the trend is going up", 1: "the trend has just turned up", 0: "the trend is flat", [-1]: "the trend has just turned down", [-2]: "the trend is going down" };
+const ZPRICE = { 2: "very strong", 1: "holding up well", [-1]: "weak", [-2]: "very weak" };
+const ZPERIOD = { M: ["month", "months"], Q: ["quarter", "quarters"], Y: ["year", "years"] };
+// "going down for the last 3 quarters" — streak = periods in a row the trend moved the same way (sent by the server)
+const streakText = (t, k) => {
+  const [one, many] = ZPERIOD[k];
+  if (t.sd == null) return ZTREND[t.tr];                        // older published data without the streak
+  if (t.sd === 0) return t.sn >= 2 ? `the trend has been flat for the last ${t.sn} ${many}` : `the trend is flat this ${one}`;
+  const dir = t.sd > 0 ? "up" : "down";
+  return t.sn >= 2 ? `the trend has been going ${dir} for the last ${t.sn} ${many}` : `the trend turned ${dir} this ${one}`;
+};
+const zDir = t => t.sd != null ? t.sd : Math.sign(t.tr || 0);   // latest direction: 1 up · 0 flat · −1 down
+function analyseZone(s, data) {
+  const [fin, strength, ...per] = s.zv;
+  const tf = {};
+  ["M", "Q", "Y"].forEach((k, i) => { const t = per[i];
+    tf[k] = t ? { v: t[2], d: dirVal(t[2]), tr: t[0], pos: t[1], sd: t[3] ?? null, sn: t[4] ?? null } : { v: null, d: null, tr: null, pos: null, sd: null, sn: null }; });
+  const tooNew = s.yh == null || s.yh < PF_MIN_YEARS;
+  let cat = tooNew ? "new" : fin === 1 ? "intact" : fin === -1 ? "review" : "watch";
+  if (cat !== "new" && s.h === "W") cat = "review";                 // low reliability: always red (owner, 2026-10-16)
+  if (cat === "intact" && s.x) cat = "watch";                       // rose very fast: never "Doing well"
+  const { M, Q, Y } = tf;
+  const improving = cat === "review" && Q.tr != null && zDir(Q) === 1;
+  const why = [];
+  if (cat === "new") {
+    why.push(s.yh != null ? `It has about ${s.yh} year${s.yh === 1 ? "" : "s"} of price history so far.` : "It has very little price history so far.");
+    why.push(`The quant algorithm needs at least ${PF_MIN_YEARS} years of yearly data, so there is no view yet.`);
+  } else {
+    const line = (t, k, name) => { const tr = streakText(t, k), once = tr.endsWith(`this ${ZPERIOD[k][0]}`);
+      return `${name}: ${tr}, and the price is ${ZPRICE[t.pos]}${once ? "" : ` this ${ZPERIOD[k][0]}`}.`; };
+    why.push(line(Q, "Q", "Quarterly view"));
+    why.push(Y.tr != null ? line(Y, "Y", "Yearly view") : "Yearly view: not available yet. It needs 10 years of price data.");
+    if (M.tr != null) why.push(line(M, "M", "Monthly view")
+      + (zDir(M) === -1 && M.pos <= -1 ? " Keep an eye on it." : zDir(M) === 1 && M.pos >= 1 ? " A good short-term sign." : ""));
+    if (fin === 0 && Q.v >= TREND_CUT) why.push("The quarterly view is strong, but the yearly or monthly view holds it back.");
+    else if (fin === 0 && strength >= TREND_CUT && Q.v < 0) why.push("The overall strength is good, but the quarterly view is negative, so it is not marked Doing well yet.");
+    if (fin === -1 && Q.v > -TREND_CUT) why.push("The yearly and monthly views are weak enough to pull it down.");
+    if (s.h === "W") why.push(fin === -1 ? "Reliability is low: it once fell more than 70% from its highest price. That means more risk."
+                                         : "Reliability is low: it once fell more than 70% from its highest price. Low reliability always puts a stock in Look at first.");
+    else if (s.h === "M") why.push("It is more than 50% below its highest price, or lower than 5 years ago.");
+    if (s.x) why.push(fin === 1 ? "It went up more than 3 times in a year, so it stays in Keep an eye on. Such fast gains often cool off."
+                                : "It went up more than 3 times in a year. Such fast gains often cool off.");
+  }
+  return { s, cat, lt: tooNew ? null : strength, tf, g: groupLongTerm(data, s.sec, s.ind), why, moved: null, improving, qStep: s.zs ? s.zs[1] : null, zone: true };
+}
 function analyseHolding(s, data) {
+  if (s.zv) return analyseZone(s, data);
   const tf = {}; let a = 0, w = 0;
   LT_TF.forEach(([k, i, , wt]) => { const v = s.sc[i]; tf[k] = { v, d: v == null ? null : dirTf(s, i) }; if (v != null) { a += wt * v; w += wt; } });
   const lt = w ? Math.round(a / w) : null;
@@ -959,12 +1011,12 @@ function analyseHolding(s, data) {
     else if (dQ === 1 && dY === -1) why.push("The quarterly trend is going up, but the yearly trend is still down.");
     else why.push(dY == null ? `No clear direction yet. Quarterly is ${goingWord(dQ)}, and there is no yearly trend yet.`
                              : `No clear direction yet. Quarterly is ${goingWord(dQ)} and yearly is ${goingWord(dY)}.`);
-    if (moved === "watch") why.push("Its strength looks good, but this quarter's price range is lower than last quarter's. Worth watching.");
-    else if (moved === "review") why.push("Its strength is below zero and this quarter's price range is lower than last quarter's.");
-    else if (improving) why.push(lt < 0 ? "It is still weak, but this quarter's price range is higher than last quarter's. An early sign of improvement."
-                                        : "This quarter's price range is higher than last quarter's. An early sign of improvement.");
-    else if (qStep === 1) why.push("This quarter's price range is higher than last quarter's, a sign of a rising trend.");
-    else if (qStep === -1) why.push("This quarter's price range is lower than last quarter's, a sign of a falling trend.");
+    if (moved === "watch") why.push("Its strength looks good, but compared with last quarter the trend has weakened. Worth watching.");
+    else if (moved === "review") why.push("Its strength is below zero and compared with last quarter the trend has weakened.");
+    else if (improving) why.push(lt < 0 ? "It is still weak, but compared with last quarter the trend has improved. An early sign of improvement."
+                                        : "Compared with last quarter the trend has improved. An early sign of improvement.");
+    else if (qStep === 1) why.push("Compared with last quarter, the trend has improved.");
+    else if (qStep === -1) why.push("Compared with last quarter, the trend has weakened.");
     if (!moved && cat === "review" && !(dY === -1 && dQ === -1)) {
       if (lt <= -TREND_CUT) why.push(`Its strength is weak (${signed(lt)}%).`);
       else if (s.h === "W") why.push(lt < 0 ? `Its reliability is low and its strength is below zero (${signed(lt)}%).`
@@ -991,12 +1043,19 @@ function portfolioSummary(rows) {
   if (watch.length) lines.push(["mid", `${cnt(watch.length, "stock is", "stocks are")} worth keeping an eye on: ${names(watch)}.`]);
   if (intact.length) lines.push(["good", `${cnt(intact.length, "stock is", "stocks are")} doing well: ${names(intact)}.`]);
   if (fresh.length) lines.push(["side", `${cnt(fresh.length, "stock is", "stocks are")} recently listed, so there is no view yet: ${names(fresh)}.`]);
-  const up = live.filter(r => r.qStep === 1), down = live.filter(r => r.qStep === -1);
-  if (up.length || down.length) lines.push([up.length >= down.length ? "good" : "bad", "Compared with last quarter, " + andJoin([
-    up.length ? `${cnt(up.length, "stock", "stocks")} moved to a higher price range` : "",
-    down.length ? `${cnt(down.length, "stock", "stocks")} moved to a lower one` : ""].filter(Boolean)) + "."]);
+  const zoned = live.filter(r => r.zone && r.tf.Q.tr != null);
+  if (zoned.length) {
+    const rise = zoned.filter(r => zDir(r.tf.Q) === 1).length, fall = zoned.filter(r => zDir(r.tf.Q) === -1).length;
+    if (rise || fall) lines.push([rise >= fall ? "good" : "bad", "On the quarterly view, " + andJoin([
+      rise ? `${cnt(rise, "stock is", "stocks are")} trending up` : "", fall ? `${cnt(fall, "stock is", "stocks are")} trending down` : ""].filter(Boolean)) + "."]);
+  } else {
+    const up = live.filter(r => r.qStep === 1), down = live.filter(r => r.qStep === -1);
+    if (up.length || down.length) lines.push([up.length >= down.length ? "good" : "bad", "Compared with last quarter, " + andJoin([
+      up.length ? `${cnt(up.length, "stock has", "stocks have")} an improving trend` : "",
+      down.length ? `${cnt(down.length, "stock has", "stocks have")} a weakening one` : ""].filter(Boolean)) + "."]);
+  }
   const better = rows.filter(r => r.improving);
-  if (better.length) lines.push(["good", `${names(better)} ${better.length === 1 ? "is" : "are"} in Look at first, but stepping up this quarter.`]);
+  if (better.length) lines.push(["good", `${names(better)} ${better.length === 1 ? "is" : "are"} in Look at first, but the quarterly view is turning up.`]);
   const weak = rows.filter(r => r.s.h === "W");
   if (weak.length) lines.push(["bad", `${names(weak)} fell very sharply in the past, so ${weak.length === 1 ? "it carries" : "they carry"} more risk.`]);
   const hot = rows.filter(r => r.s.x);
@@ -1011,41 +1070,95 @@ function portfolioSummary(rows) {
   return { avg, title, tone, lines, counts: Object.fromEntries(PF_CATS.map(c => [c[0], by(c[0]).length])) };
 }
 
-function HoldingCard({ r, flash }) {
-  const [, label, tone] = PF_CAT[r.cat];
-  const grp = (x, kind) => !x ? <span className="pf-gc side">{kind}: no data</span>
-    : <span className={`pf-gc ${x.nb > 0 ? "good" : x.nb < 0 ? "bad" : "side"}`}>{kind} {x.nb > 0 ? "▲ strong" : x.nb < 0 ? "▼ weak" : "◆ flat"}</span>;
+// Holdings table row (owner, 2026-10-17: "professional like the big companies" — clean fintech + institutional research).
+const tc = v => `c-${dirToneOf(v)}`;                                  // red below 0 · green from the uptrend cut · else grey
+const pctTxt = v => v === 0 ? "Sideways" : `${signed(v)}%`;
+const noData = (k, lbl) => <span className="px-na px-nd">No data <Info text={k === "Y" ? "Hyperplane needs 10 years of price data to calculate the yearly trend."
+  : `Not enough price data yet to calculate the ${lbl.toLowerCase()} trend.`}/></span>;
+// stock strength + Monthly / Quarterly / Yearly tiles with the key-insight chip (AI Portfolio cards and the Research
+// stock card's Investment AI summary use the same block)
+function StrengthTiles({ r, label = "Stock strength" }) {
+  return <>
+    <div className="px-label">{label}</div>
+    <div className="px-dbig"><b className={tc(r.lt)}>{signed(r.lt)}<small>%</small></b><span className={tc(r.lt)}>{trendWordOf(r.lt)}</span></div>
+    <DivBar v={r.lt} d={dirVal(r.lt)} scale className="px-dbar"/>
+    <div className="px-tfs">{LT_TF.map(([k, , lbl]) => { const v = r.tf[k].v;
+      return (
+        <div key={k} className="px-tf">
+          <span className="px-label">{lbl}</span>
+          {v == null ? noData(k, lbl) : (() => { const x = streakShort(r, k);
+            return <><b className={`px-tfv ${tc(v)}`} title={trendWordOf(v)}>{pctTxt(v)}</b>
+              {x && <span className={`px-kin c-${x[1]}`} title={`${lbl}: ${x[2]}`}>{x[0]}</span>}</>; })()}
+        </div>); })}</div>
+  </>;
+}
+
+// Long-term AI Investment Summary (owner, 2026-10-17: "only the summary part") — the AI Portfolio engine's plain-word
+// research summary for ONE stock, inside the Research view's stock card. A different formula from the Research strength.
+function InvestmentSummary({ s, data }) {
+  const r = analyseHolding(s, data);
   return (
-    <div id={`pf-card-${r.s.s}`} className={`card pf-card ${tone} ${flash ? "flash" : ""}`}>
-      <div className="pf-ch">
-        <div className="pf-cn"><b title={r.s.n}>{r.s.n}</b><span className="sx-tick">{r.s.s}</span></div>
-      </div>
-      <div className="pf-cm" title={`${r.s.sec} › ${r.s.ind}`}>{r.s.sec} › {r.s.ind}</div>
-      <div className="pf-tags">
-        <span className={`pf-tag ${tone}`}>{label}</span>
-        {r.improving && <span className="pf-tag good soft">▲ Improving</span>}
-        {r.s.h && r.cat !== "new" && <span className={`pf-gc ${RELIABILITY[r.s.h][1]}`}>Reliability: {RELIABILITY[r.s.h][0]}</span>}
-        {r.s.cap && <span className="pf-gc cap">{r.s.cap} cap</span>}
-        {r.s.x ? <span className="pf-gc bad">Stretched</span> : null}
-      </div>
-      {r.cat !== "new" ? <>
-        <div className="pf-lt"><span className="pf-ll">Stock strength</span><b className={dirToneOf(r.lt)}>{signed(r.lt)}<small>%</small></b><span className={`pf-lw ${dirToneOf(r.lt)}`}>{trendWordOf(r.lt)}</span></div>
-        <DivBar v={r.lt} d={dirVal(r.lt)} scale className="pf-dbar"/>
-        <div className="pf-tfs">{LT_TF.map(([k, , lbl]) => { const t = r.tf[k];
-          return <span key={k} className={`pf-tf ${t.v == null ? "side" : t.v < 0 ? "bad" : t.d === 1 ? "good" : "side"}`} title={`${lbl}: ${goingWord(t.d)}`}>
-            <i>{lbl}</i><span className="pf-tv">{t.v == null ? <small className="pf-nd">No data <Info right={k === "Y"} text={k === "Y"
-                ? "Hyperplane needs 10 years of price data to calculate the yearly trend."
-                : `Not enough price data yet to calculate the ${lbl.toLowerCase()} trend.`}/></small> : t.v === 0 ? <small className="pf-sw">Sideways</small>
-              : <>{t.d === 1 ? "▲ " : t.d === -1 ? "▼ " : ""}{signed(t.v)}%</>}</span></span>; })}</div>
-      </> : <div className="pf-newbox">{r.why.map((w, i) => <span key={i}>{w}</span>)}</div>}
-      {r.cat !== "new" ? <ul className="pf-why pf-scroll">{r.why.map((w, i) => <li key={i}>{w}</li>)}</ul> : <div className="pf-why"/>}
-      <div className="pf-ref">{grp(r.g.sec, "Sector")}{grp(r.g.ind, "Industry")}<Info above right text="Sector and industry strength are shown for reference only. They are not used to calculate the stock strength or the colour."/></div>
-    </div>
+    <section className="blk inv">
+      <div className="px-aih"><span className="ai-spark">✦</span><b>Long-term</b><span>AI Investment Summary</span>
+        <Info right text="A long-term reading by Hyperplane AI (the same engine as the AI Portfolio Analyser): the monthly, quarterly and yearly trend of this stock and how long each has lasted. It uses a different formula from the Research view's strength above, which also looks at daily and weekly signals. Information, not advice."/></div>
+      <ul className="px-why">{r.why.map((w, i) => <li key={i}>{w}</li>)}</ul>
+    </section>
   );
 }
 
-// ─── AI Portfolio: protection insights (owner, 2026-10-17: "my goal is to protect them"). Only the Trend map stays (owner
-// removed Protection check, Strength at a glance and How your portfolio is spread the same day). Built from the card numbers.
+function HoldingItem({ r, flash }) {
+  const [, label, tone] = PF_CAT[r.cat];
+  const rel = r.s.h && r.cat !== "new" ? RELIABILITY[r.s.h] : null;
+  const grp = x => !x ? ["no data", ""] : x.nb > 0 ? ["strong", "good"] : x.nb < 0 ? ["weak", "bad"] : ["flat", ""];
+  const [sw, st] = grp(r.g.sec), [iw, it] = grp(r.g.ind);
+  const isNew = r.cat === "new";
+  return (
+    <article id={`pf-card-${r.s.s}`} className={`px-item ${tone} ${flash ? "flash" : ""}`}>
+      <div className="px-who">
+        <div className="px-name"><b title={r.s.n}>{r.s.n}</b><em>{r.s.s}</em></div>
+        <div className="px-where">{r.s.sec} › {r.s.ind}</div>
+        <span className={`px-pill ${tone}`}><i/>{label}</span>
+        <div className="px-chips">
+          {r.s.cap && <span className="px-chip">{r.s.cap} cap</span>}
+          {rel && <span className="px-chip" title={rel[2]}><i className={rel[1]}/>Reliability: {rel[0]}</span>}
+          {r.improving && <span className="px-chip"><i className="good"/>Improving</span>}
+          {r.s.x ? <span className="px-chip" title="Went up more than 3 times in a year"><i className="mid"/>Rose very fast</span> : null}
+        </div>
+        <div className="px-backdrop">
+          <div className="px-label">Sector and industry <Info text="Sector and industry strength are shown for reference only. They are not used to calculate the stock strength or the colour."/></div>
+          <div className="px-chips">
+            <span className="px-chip"><i className={st}/>Sector: {sw}</span>
+            <span className="px-chip"><i className={it}/>Industry: {iw}</span>
+          </div>
+        </div>
+      </div>
+      <div className="px-how">
+        {isNew ? <div className="px-newnote"><b>Recently listed</b><span>No view yet. The quant algorithm needs at least {PF_MIN_YEARS} years of yearly data.</span></div> : <>
+          <StrengthTiles r={r}/>
+        </>}
+      </div>
+      <div className="px-whyc">
+        <div className="px-aih"><span className="ai-spark">✦</span><b>Hyperplane AI</b><span>Research summary</span></div>
+        <ul className="px-why">{(isNew ? r.why.slice(0, 1) : r.why).map((w, i) => <li key={i}>{w}</li>)}</ul>
+      </div>
+    </article>
+  );
+}
+
+// "Portfolio by status" (owner, 2026-10-17: the 4 boxes looked boxy) — one panel: split bar, four status tabs with count
+// and share, then the selected status's stocks as clean rows (name · ticker · sector · quarterly trend · strength).
+// key insight per period (owner: "I like ▲ Up for 2 quarters — show it in the detail below the 3 boxes")
+const UNIT = { M: ["month", "months"], Q: ["quarter", "quarters"], Y: ["year", "years"] };
+function streakShort(r, k) {
+  const t = r.tf[k], [one, many] = UNIT[k];
+  if (t.v == null) return null;
+  const d = r.zone ? zDir(t) : t.d, n = r.zone ? t.sn : null;
+  const full = r.zone ? streakText(t, k) : `the trend is ${d === 1 ? "going up" : d === -1 ? "going down" : "flat"}`;
+  if (d === 1) return [n >= 2 ? `Up ${n} ${many}` : "Turned up", "good", full];          // colour shows the direction
+  if (d === -1) return [n >= 2 ? `Down ${n} ${many}` : "Turned down", "bad", full];
+  return [n >= 2 ? `Flat ${n} ${many}` : `Flat this ${one}`, "side", full];
+}
+
 const PF_COL = { bad: "var(--short)", mid: "var(--mixed)", good: "var(--long)", side: "#8b97ad" };
 
 function TrendMap({ rows, onPick }) {
@@ -1060,29 +1173,24 @@ function TrendMap({ rows, onPick }) {
   const x = v => L + (v + 100) / 200 * (W - L - R), y = v => T + (100 - v) / 200 * (H - T - B);
   const quads = [["Rising", "good", 1, 1], ["Cooling off", "mid", -1, 1], ["Recovering", "mid", 1, -1], ["Falling", "bad", -1, -1]];
   // ticker labels: right, left, above or below the dot, whichever overlaps nothing (red first); else hover only
-  const boxes = [], tags = {};
   const dots = pts.map(r => ({ r, cx: x(r.tf.Q.v), cy: y(r.tf.Y.v) }));
-  dots.forEach(d => boxes.push([d.cx - 8, d.cy - 8, d.cx + 8, d.cy + 8]));
-  const inside = b => b[0] >= x(-100) + 2 && b[2] <= x(100) - 2 && b[1] >= y(100) && b[3] <= y(-100);
-  const free = b => !boxes.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
-  [...dots].sort((a, b) => PF_ORDER[a.r.cat] - PF_ORDER[b.r.cat]).forEach(({ r, cx, cy }) => {
-    const w = r.s.s.length * 6.5 + 2;
-    const pick = [["start", cx + 10, cy + 3.5, [cx + 10, cy - 6, cx + 10 + w, cy + 6]], ["end", cx - 10, cy + 3.5, [cx - 10 - w, cy - 6, cx - 10, cy + 6]],
-                  ["middle", cx, cy - 11, [cx - w / 2, cy - 21, cx + w / 2, cy - 9]], ["middle", cx, cy + 20, [cx - w / 2, cy + 9, cx + w / 2, cy + 21]]]
-      .find(o => inside(o[3]) && free(o[3]));
-    if (pick) { boxes.push(pick[3]); tags[r.s.s] = pick; }
-  });
+  const tags = placeLabels([...dots].sort((a, b) => PF_ORDER[a.r.cat] - PF_ORDER[b.r.cat]).map(d => ({ key: d.r.s.s, x: d.cx, y: d.cy, label: d.r.s.s })),
+    { box: [x(-100), y(100), x(100), y(-100)] });
   const unlabelled = pts.length - Object.keys(tags).length;
   return (
-    <div className="card pf-ins pf-mapcard">
-      <div className="pf-ih"><b>Trend map</b></div>
-      <div className="pf-isub">One dot per stock. Further right means a stronger quarterly trend, higher up means a stronger yearly trend.</div>
+    <div className="px-card px-map">
+      <div className="px-ch">
+        <div><h3>Trend map</h3><p>Each dot is one stock. Right: stronger quarterly trend. Up: stronger yearly trend.</p></div>
+        <div className="px-legend">{PF_CATS.filter(c => c[0] !== "new").map(([k, l, t]) => <span key={k}><i className={t}/>{l}</span>)}</div>
+      </div>
       <div ref={box} className="pf-mapw"><svg className="pf-map" width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Trend map of your stocks">
         {quads.map(([lbl, tone, sx, sy]) => (
           <g key={lbl}>
-            <rect x={sx > 0 ? x(0) : x(-100)} y={sy > 0 ? y(100) : y(0)} width={x(0) - x(-100)} height={y(0) - y(100)} style={{ fill: PF_COL[tone] }} opacity=".08"/>
+            <rect x={sx > 0 ? x(0) : x(-100)} y={sy > 0 ? y(100) : y(0)} width={x(0) - x(-100)} height={y(0) - y(100)} style={{ fill: PF_COL[tone] }} opacity=".06"/>
             <text x={sx > 0 ? x(100) : x(-100)} y={sy > 0 ? y(100) - 7 : y(-100) + 15} textAnchor={sx > 0 ? "end" : "start"} className="pf-mq" style={{ fill: PF_COL[tone] }}>{lbl}</text>
           </g>))}
+        {[-50, 50].map(v => <g key={`g${v}`}><line x1={x(v)} x2={x(v)} y1={y(100)} y2={y(-100)} className="pf-mgrid"/><line x1={x(-100)} x2={x(100)} y1={y(v)} y2={y(v)} className="pf-mgrid"/></g>)}
+        <rect x={x(-100)} y={y(100)} width={x(100) - x(-100)} height={y(-100) - y(100)} className="pf-mframe"/>
         <line x1={x(0)} x2={x(0)} y1={y(100)} y2={y(-100)} className="pf-max"/>
         <line x1={x(-100)} x2={x(100)} y1={y(0)} y2={y(0)} className="pf-max"/>
         <text x={x(0)} y={y(-100) + 13} textAnchor="middle" className="pf-mt">0</text>
@@ -1093,16 +1201,70 @@ function TrendMap({ rows, onPick }) {
           return (
             <g key={r.s.s} className="pf-dot" onClick={() => onPick(r.s.s)}>
               <title>{`${r.s.n} (${r.s.s}): quarterly ${signed(r.tf.Q.v)}%, yearly ${signed(r.tf.Y.v)}%. ${PF_CAT[r.cat][1]}.`}</title>
-              <circle cx={cx} cy={cy} r="7" style={{ fill: PF_COL[PF_CAT[r.cat][2]], stroke: "var(--s1)" }} strokeWidth="2"/>
+              <circle cx={cx} cy={cy} r="6.5" style={{ fill: PF_COL[PF_CAT[r.cat][2]], stroke: "var(--s1)" }} strokeWidth="2.5"/>
               {t && <text x={t[1]} y={t[2]} textAnchor={t[0]} className="pf-ml">{r.s.s}</text>}
             </g>); })}
       </svg></div>
-      <div className="pf-inote">{hidden > 0 ? `${hidden} not shown: recently listed or no yearly data yet. ` : ""}{unlabelled > 0 ? "Point at a dot to see its name. " : ""}Dot colours match the boxes on the left.</div>
+      <div className="px-foot">{hidden > 0 ? `${hidden} not shown: recently listed or no yearly data yet. ` : ""}{unlabelled > 0 ? "Point at a dot to see its name. " : ""}Click a dot to open the stock.</div>
     </div>
   );
 }
 
-function PortfolioView({ data, symbols, setSymbols, status }) {
+// PDF report (owner, 2026-10-17): the page hands report.js the same numbers and words it shows; report.js only draws.
+const PF_LONG = {
+  review: "The stock's strength is weak (-24% or lower), or its reliability is low because it once fell more than 70% from its highest price. Look at these first.",
+  watch: "Mixed signs: the strength is between -24% and +24% (moving sideways), the quarterly view is negative, or the price rose very fast. Check these from time to time.",
+  intact: "The stock's strength is +24% or more and the quarterly view is not negative. The bigger picture is holding up well.",
+  new: "Less than 3 years of yearly price data, so Hyperplane AI gives no view on these yet.",
+};
+const PF_GUIDE = [
+  ["Stock strength", "A number from -100% to +100%. Above +24% is an uptrend, below -24% is a downtrend, in between is sideways. Weak, Average, Good and Strong tell how strong the trend is (up to 30%, up to 60%, up to 80%, above 80%)."],
+  ["Monthly, quarterly and yearly views", "For each period Hyperplane AI checks whether the trend is going up, flat or going down and for how long (for example, going down for the last 3 quarters), and how strong today's price is for this month, quarter and year. The quarter counts most, then the year, then the month. Daily and weekly moves are left out."],
+  ["Reliability", "High, Medium or Low, from the stock's whole price history. Low means it once fell more than 70% from its highest price, which means more risk."],
+  ["Rose very fast", "The price went up more than 3 times in a year. Such fast gains often cool off, so these stocks are never marked Doing well."],
+  ["Trend map", "Each dot is one stock. Top right (Rising): the quarterly and yearly trends are both up. Bottom left (Falling): both down. Top left (Cooling off) and bottom right (Recovering) are mixed."],
+  ["Sector and industry", "Shown on each stock for reference only. They are never used to calculate the strength and never change a colour."],
+  ["Your privacy", "This report was made on your own device. Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin, as per SEBI norms."],
+];
+function reportModel(rows, sum, data, me) {
+  const now = new Date();
+  const dots = rows.filter(r => r.cat !== "new" && r.tf.Q.v != null && r.tf.Y.v != null)
+    .map(r => ({ s: r.s.s, q: r.tf.Q.v, y: r.tf.Y.v, tone: PF_CAT[r.cat][2], rank: PF_ORDER[r.cat] }));
+  const grp = x => !x ? "no data" : x.nb > 0 ? "strong" : x.nb < 0 ? "weak" : "flat";
+  return {
+    file: `Hyperplane-Portfolio-Report-${now.toISOString().slice(0, 10)}.pdf`,
+    customer: (me && me.name) || "", asOf: fmtDT(data.as_of), total: rows.length,
+    generated: now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }),
+    title: sum.title, tone: sum.tone, lines: sum.lines, avg: sum.avg, avgWord: trendWordOf(sum.avg), zones: G_ZONES,
+    cats: PF_CATS.map(([k, label, tone, desc]) => ({ key: k, label, tone, desc, long: PF_LONG[k], count: sum.counts[k],
+      items: rows.filter(r => r.cat === k).sort((a, b) => k === "new" ? (b.s.yh ?? 0) - (a.s.yh ?? 0) : k === "review" ? a.lt - b.lt : b.lt - a.lt)
+        .map(r => ({ n: r.s.n, s: r.s.s, v: k === "new" ? null : r.lt, extra: r.s.yh != null ? `${r.s.yh} yr` : "new" })) })),
+    dots, hidden: rows.length - dots.length, guide: PF_GUIDE,
+    keys: (() => {
+      const live = rows.filter(r => r.cat !== "new"), q = r => r.zone ? (r.tf.Q.tr == null ? null : zDir(r.tf.Q)) : r.tf.Q.d;
+      const up = live.filter(r => q(r) >= 1).length, down = live.filter(r => q(r) <= -1).length;
+      const low = rows.filter(r => r.s.h === "W").length, fast = rows.filter(r => r.s.x).length;
+      const tone = v => v == null ? "side" : v < 0 ? "bad" : dirVal(v) === 1 ? "good" : "side";
+      return [["Stocks analysed", String(rows.length), `${live.length} with a full view`, "side"],
+        ["Portfolio strength", sum.avg == null ? "No data" : `${sum.avg < 0 ? "-" : ""}${Math.abs(sum.avg)}%`, trendWordOf(sum.avg), tone(sum.avg)],
+        ["Trending up", String(up), "on the quarterly view", up ? "good" : "side"],
+        ["Trending down", String(down), "on the quarterly view", down ? "bad" : "side"],
+        ["Low reliability", String(low), "fell over 70% in the past", low ? "bad" : "good"],
+        ["Rose very fast", String(fast), "3 times or more in a year", fast ? "mid" : "good"]];
+    })(),
+    stocks: [...rows].sort((a, b) => PF_ORDER[a.cat] - PF_ORDER[b.cat] || (a.lt ?? 999) - (b.lt ?? 999)).map(r => ({
+      n: r.s.n, s: r.s.s, sec: r.s.sec, ind: r.s.ind, label: PF_CAT[r.cat][1], tone: PF_CAT[r.cat][2], isNew: r.cat === "new",
+      chips: [r.improving && ["Improving", "good"], r.s.cap && [`${r.s.cap} cap`, null],
+        r.s.h && r.cat !== "new" && [`Reliability: ${RELIABILITY[r.s.h][0]}`, RELIABILITY[r.s.h][1]], r.s.x && ["Rose very fast", "mid"]].filter(Boolean),
+      v: r.lt, word: trendWordOf(r.lt), why: r.why,
+      tfs: LT_TF.map(([k, , lbl]) => ({ label: lbl, v: r.tf[k].v, word: r.tf[k].v == null ? "" : trendWordOf(r.tf[k].v),
+        note: k === "Y" ? "Needs 10 years" : "Not enough data" })),
+      ref: `Sector: ${grp(r.g.sec)}. Industry: ${grp(r.g.ind)}. Shown for reference only, not used in the strength.`,
+    })),
+  };
+}
+
+function PortfolioView({ data, symbols, setSymbols, status, me }) {
   const bySym = useMemo(() => Object.fromEntries(data.stocks.map(x => [x.s, x])), [data]);
   const added = useMemo(() => new Set(symbols), [symbols]);
   const rows = useMemo(() => symbols.filter(k => bySym[k]).map(k => analyseHolding(bySym[k], data)), [symbols, bySym, data]);
@@ -1114,8 +1276,10 @@ function PortfolioView({ data, symbols, setSymbols, status }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [show, setShow] = useState("all");
   const [order, setOrder] = useState("bad");            // bad = weakest first · good = best first (recently listed always last)
+  const [rel, setRel] = useState([]);                  // reliability filter (multi-select): S high · M medium · W low; none = all
   const [flash, setFlash] = useState(null);
-  const listed = rows.filter(r => show === "all" || r.cat === show).sort((a, b) => order === "bad"
+  const [making, setMaking] = useState("");             // "" · "busy" · error text
+  const listed = rows.filter(r => (show === "all" || r.cat === show) && (!rel.length || rel.includes(r.s.h))).sort((a, b) => order === "bad"
     ? PF_ORDER[a.cat] - PF_ORDER[b.cat] || (a.lt ?? 999) - (b.lt ?? 999)
     : (a.cat === "new") - (b.cat === "new") || PF_ORDER[b.cat] - PF_ORDER[a.cat] || (b.lt ?? -999) - (a.lt ?? -999));
   const jump = k => { setShow("all"); setFlash(k); setTimeout(() => { const el = document.getElementById(`pf-card-${k}`); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); }, 60); setTimeout(() => setFlash(null), 1800); };
@@ -1123,7 +1287,8 @@ function PortfolioView({ data, symbols, setSymbols, status }) {
   const clearAll = <>{confirmClear
     ? <span className="pf-clr">Remove all {symbols.length}? <button type="button" onClick={() => { setSymbols([]); setConfirmClear(false); setStage("build"); }}>Yes, clear</button><button type="button" onClick={() => setConfirmClear(false)}>Cancel</button></span>
     : <button type="button" className="pf-clrbtn" onClick={() => setConfirmClear(true)}>Clear all</button>}</>;
-  const brand = <div className="sv-brand"><span className="ai-spark">✦</span> Hyperplane AI <span className="sv-pow">· Portfolio Analyser by QuantFriday</span></div>;
+  const brand = <div className="px-eyebrow"><span className="ai-spark">✦</span> Hyperplane AI · Portfolio Analyser <span>by QuantFriday</span></div>;
+  const lock = <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>;
   const search = <StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Type a stock name or ticker to add it"/>;
   const privacy = <div className="pf-priv"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
     <span><b>Private to you.</b> Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin, as per SEBI norms. We take the privacy of your investments seriously.</span></div>;
@@ -1133,7 +1298,7 @@ function PortfolioView({ data, symbols, setSymbols, status }) {
       <section className="card pf-start">
         <div className="pf-sl">
           {brand}
-          <h1>Know where your portfolio <span className="pf-grad">stands today</span></h1>
+          <h1>Know where your portfolio <span>stands today</span></h1>
           <p className="pf-lead">Add the stocks you own. Hyperplane AI checks each one and puts it in a clear colour group,
             with a simple reason for every stock. No quantities, no prices, no spreadsheets.</p>
           <div className="pf-add">{search}</div>
@@ -1144,7 +1309,7 @@ function PortfolioView({ data, symbols, setSymbols, status }) {
                 <button type="button" onClick={() => remove(k)} aria-label={`Remove ${k}`} title={`Remove ${k}`}>✕</button></div>))}</div>
               : <div className="pf-bempty">Your list is empty. Type a stock name or ticker above to add your first stock.</div>}
             <button type="button" className="pf-go" disabled={!symbols.length} onClick={() => { setStage("result"); window.scrollTo(0, 0); }}>
-              ✦ Analyse my portfolio{symbols.length ? ` (${symbols.length})` : ""}</button>
+              Analyse my portfolio{symbols.length ? ` (${symbols.length})` : ""}</button>
           </div>
         </div>
         <aside className="pf-sr">
@@ -1164,72 +1329,106 @@ function PortfolioView({ data, symbols, setSymbols, status }) {
     </div>
   );
 
-  const widget = k => { const [, label, tone, desc] = PF_CAT[k];
-    const list = rows.filter(r => r.cat === k).sort((a, b) => k === "new" ? (b.s.yh ?? 0) - (a.s.yh ?? 0) : k === "review" ? a.lt - b.lt : b.lt - a.lt);
-    return (
-      <div key={k} className={`card pf-w ${tone}`}>
-        <div className="pf-wh"><i/><b>{label}</b><span className="pf-wn">{list.length}</span></div>
-        <div className="pf-wd">{desc}</div>
-        {list.length ? <div className="pf-wl pf-scroll">{list.map(r => (
-          <button key={r.s.s} type="button" onClick={() => jump(r.s.s)} title="Show the details">
-            <span className="pf-wname">{r.s.n}</span><span className="mono pf-wt">{r.s.s}</span>
-            {k === "new" ? <b className="mono side">{r.s.yh != null ? `${r.s.yh} yr` : "new"}</b> : <b className={`mono ${dirToneOf(r.lt)}`}>{signed(r.lt)}%</b>}</button>))}</div>
-          : <div className="pf-wnone">None right now</div>}
-      </div>);
-  };
+  const KIND = { bad: "Needs attention", mid: "Mixed", good: "Healthy", side: "Too new" };
+  const ranked = rows.filter(r => r.cat !== "new" && r.lt != null).sort((a, b) => b.lt - a.lt);
+  const secN = {}; rows.forEach(r => { secN[r.s.sec] = (secN[r.s.sec] || 0) + 1; });
+  const [topSec, topN] = Object.entries(secN).sort((a, b) => b[1] - a[1])[0] || ["", 0];
+  const topPct = rows.length ? Math.round(topN / rows.length * 100) : 0, nSec = Object.keys(secN).length;
+  const capN = ["Large", "Mid", "Small"].map(c => [c, rows.filter(r => r.s.cap === c).length]).filter(c => c[1]);
+  const facts = ranked.length ? [
+    ["Strongest", `${ranked[0].s.s} ${signed(ranked[0].lt)}%`, tc(ranked[0].lt)],
+    ["Weakest", `${ranked[ranked.length - 1].s.s} ${signed(ranked[ranked.length - 1].lt)}%`, tc(ranked[ranked.length - 1].lt)],
+    ["Spread", `${nSec} sector${nSec === 1 ? "" : "s"} · top ${topPct}%`, rows.length >= 4 && topPct >= 40 ? "c-mid" : "c-good",
+      `Your ${rows.length} stocks are spread across ${nSec} sector${nSec === 1 ? "" : "s"}. The largest, ${topSec}, holds ${topN} of them (${topPct}%).`
+      + ` When one sector holds 40% or more of your stocks, a bad phase for that sector hits a big part of the portfolio.`
+      + (capN.length ? ` By company size: ${capN.map(([c, n]) => `${c} cap ${n}`).join(", ")}.` : "") + " Every stock counts equally (no quantities)."],
+    ["Low reliability", `${rows.filter(r => r.s.h === "W").length} of ${rows.length}`, rows.some(r => r.s.h === "W") ? "c-bad" : "c-good"],
+  ] : [];
   return (
-    <div className="pf">
-      <section className="card pf-top">
-        <div className="pf-toprow">
+    <div className="pf px">
+      <header className="px-head">
+        <div className="px-ht">
           {brand}
-          <span className="pf-count dim">{plural(symbols.length)}{status ? ` · ${status}` : ""}</span>
-          <button type="button" className="pf-edit" onClick={() => { setStage("build"); window.scrollTo(0, 0); }}>Edit list</button>
+          <h1>Your portfolio</h1>
+          <div className="px-meta">{plural(symbols.length)} · Data as of {fmtDT(data.as_of)}{status ? ` · ${status}` : ""}</div>
         </div>
-        <div className="pf-topadd"><span className="pf-tal">Add more stocks</span>{search}</div>
-        {privacy}
-      </section>
-
+        <div className="px-actions">
+          <div className="px-search"><StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Add a stock: name or ticker"/></div>
+          <button type="button" className="px-btn" onClick={() => { setStage("build"); window.scrollTo(0, 0); }}>Edit list</button>
+          {sum && <button type="button" className="px-btn primary pf-dl" disabled={making === "busy"} onClick={() => {
+            setMaking("busy");
+            import("./report.js").then(({ downloadReport }) => { downloadReport(reportModel(rows, sum, data, me)); setMaking(""); })
+              .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
+          }}><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            {making === "busy" ? "Preparing…" : "Download report"}</button>}
+        </div>
+      </header>
+      <div className="px-privacy">{lock}<span><b>Private to you.</b> Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin, as per SEBI norms. We take the privacy of your investments seriously.</span></div>
+      {making && making !== "busy" && <div className="pf-miss">{making}</div>}
       {missing.length > 0 && <div className="pf-miss">Not in today's data: {missing.join(", ")}. They stay in your list and are checked again when they appear.</div>}
 
       {sum && <>
-        <section className="card pf-sum">
-          <div className={`pf-sumtxt ${sum.tone}`}>
-            <div className="sx-lbl"><span className="ai-spark">✦</span> Hyperplane AI summary <Info text="Built on Hyperplane's own quant algorithms: fixed rules on our trend data, the same numbers as the Research view. No outside AI service is used and it never makes up a number. For information only, not investment advice."/></div>
-            <div className="sx-vtitle">{sum.title}</div>
-            <ul className="pf-lines">{sum.lines.map(([t, txt], i) => <li key={i} className={`pl-${t}`}>{txt}</li>)}</ul>
+        <section className="px-card px-strip">
+          <div className="px-sg"><TrendGauge v={sum.avg} size={150} caption={false}/></div>
+          <div className="px-sm2">
+            <div className="px-label">Current strength of the portfolio <Info text="The average strength of your stocks that have enough history. It uses each stock's own data only. Right of 0 means moving up, left of 0 means moving down."/></div>
+            <div className="px-sfacts">
+              <div className="px-sv"><b className={tc(sum.avg)}>{sum.avg == null ? "No data" : <>{signed(sum.avg)}<small>%</small></>}</b><span className={tc(sum.avg)}>{trendWordOf(sum.avg)}</span></div>
+              <dl className="px-facts">{facts.map(([k, v, c, tip]) => <div key={k}><dt>{k}{tip && <Info text={tip}/>}</dt><dd className={c}>{v}</dd></div>)}</dl>
+            </div>
           </div>
-          <div className="pf-sumvis">
-            <div className="ometer">
-              <div className="sx-lbl">Current strength of the portfolio <Info text="The average strength of your stocks that have enough history. It uses each stock's own data only. Right of 0 means moving up, left of 0 means moving down."/></div>
-              <TrendGauge v={sum.avg} size={200} caption={false}/>
-              <div className={`sx-gv ${dirToneOf(sum.avg)}`}>{sum.avg == null ? "No data" : <>{signed(sum.avg)}<small>%</small></>}</div>
-              <div className={`sx-gw ${dirToneOf(sum.avg)}`}>{trendWordOf(sum.avg)}</div>
-            </div>
-            <div className="pf-dist">
-              <div className="pf-bar">{PF_CATS.map(([k, , tone]) => sum.counts[k] ? <span key={k} className={tone} style={{ flex: sum.counts[k] }} title={`${PF_CAT[k][1]}: ${sum.counts[k]}`}>{sum.counts[k]}</span> : null)}</div>
-              <div className="pf-legend">{PF_CATS.map(([k, label, tone]) => <div key={k} className={sum.counts[k] ? "" : "zero"}><i className={tone}/><span>{label}</span><b>{sum.counts[k]}</b></div>)}</div>
-            </div>
+          <div className="px-smix">
+            <div className="px-label">How your {rows.length} stocks are split</div>
+            <div className="px-split">{PF_CATS.map(([k, , tone]) => sum.counts[k] ? <span key={k} className={tone} style={{ flex: sum.counts[k] }} title={`${PF_CAT[k][1]}: ${sum.counts[k]}`}/> : null)}</div>
+            <div className="px-splitl">{PF_CATS.map(([k, label, tone]) => <div key={k} className={sum.counts[k] ? "" : "zero"}><i className={tone}/><span>{label}</span><b className="px-num">{sum.counts[k]}</b></div>)}</div>
           </div>
         </section>
 
-        <section className="pf-mid">
-          <div className="pf-widgets">{PF_CATS.map(c => widget(c[0]))}</div>
+        <section className="px-row2">
+          <div className="px-card px-sumc">
+            <div className="px-label"><span className="ai-spark">✦</span> Hyperplane AI summary <Info text="Built on Hyperplane's own quant algorithms: fixed rules on our trend data. No outside AI service is used and it never makes up a number. For information only, not investment advice."/></div>
+            <div className="px-headline"><span className={`px-pill ${sum.tone}`}><i/>{KIND[sum.tone]}</span><h2>{sum.title}</h2></div>
+            <ul className="px-points">{sum.lines.map(([t, txt], i) => <li key={i} className={`pl-${t}`}>{txt}</li>)}</ul>
+          </div>
           <TrendMap rows={rows} onPick={jump}/>
         </section>
 
-        <section className="pf-holdings">
-          <div className="pf-tools">
-            <div className="pf-filter" role="tablist" aria-label="Show">
-              <button type="button" role="tab" aria-selected={show === "all"} className={`all ${show === "all" ? "on" : ""}`} onClick={() => setShow("all")}>All <b>{rows.length}</b></button>
-              {PF_CATS.map(([k, label, tone]) => <button key={k} type="button" role="tab" aria-selected={show === k} disabled={!sum.counts[k]} className={`${tone} ${show === k ? "on" : ""}`} onClick={() => setShow(k)}><i/>{label} <b>{sum.counts[k]}</b></button>)}
-            </div>
-            <div className="pf-sort" role="radiogroup" aria-label="Sort">
-              <span className="dim">Sort</span>
-              {[["bad", "Weakest first"], ["good", "Best first"]].map(([k, l]) => <button key={k} type="button" role="radio" aria-checked={order === k} className={order === k ? "on" : ""} onClick={() => setOrder(k)}>{l}</button>)}
+        <section className="px-card px-hold">
+          <div className="px-ch">
+            <div><h3>Holdings</h3><p>{listed.length} of {rows.length} stocks · every stock with its strength and the reasons in plain words</p></div>
+            <div className="px-tools">
+              <div className="px-seg" role="group" aria-label="Reliability">
+                <span className="px-segl">Reliability <Info wide text={<>
+                  <b>Reliability</b> comes from the stock's whole price history. It tells you how safely the stock has behaved in the past, not how strong it is today.
+                  <br/><br/><b>Low:</b> it once fell more than 70% from its highest price. That means more risk, so Hyperplane AI always puts it in Look at first.
+                  <br/><b>Medium:</b> it is more than 50% below its highest price, or lower than it was 5 years ago.
+                  <br/><b>High:</b> it has stayed close to its highest price over the years. The steadiest history.
+                </>}/></span>
+                {[["S", "High"], ["M", "Medium"], ["W", "Low"]].map(([k, l]) => {
+                  const n = rows.filter(r => r.s.h === k).length, on = rel.includes(k);
+                  return <button key={k} type="button" role="checkbox" aria-checked={on} disabled={!n} className={on ? "on" : ""}
+                    onClick={() => setRel(on ? rel.filter(x => x !== k) : [...rel, k])}>{l} <b>{n}</b></button>; })}
+              </div>
+              <div className="px-seg" role="radiogroup" aria-label="Sort">
+                <span className="px-segl">Sort</span>
+                {[["bad", "Weakest first"], ["good", "Best first"]].map(([k, l]) => <button key={k} type="button" role="radio" aria-checked={order === k} className={order === k ? "on" : ""} onClick={() => setOrder(k)}>{l}</button>)}
+              </div>
             </div>
           </div>
-          {show !== "all" && <div className="pf-fdesc dim">{PF_CAT[show][3]}</div>}
-          <div className="pf-grid">{listed.map(r => <HoldingCard key={r.s.s} r={r} flash={flash === r.s.s}/>)}</div>
+          <div className="px-split px-split2">{PF_CATS.map(([k, , t]) => sum.counts[k] ? <span key={k} className={t} style={{ flex: sum.counts[k] }}/> : null)}</div>
+          <div className="px-tabs" role="tablist" aria-label="Show">
+            <button type="button" role="tab" aria-selected={show === "all"} className={`px-tab all ${show === "all" ? "on" : ""}`} onClick={() => setShow("all")}>
+              <span className="px-tl"><i/>All stocks</span><b className="px-num">{rows.length}</b><small>100% of portfolio</small></button>
+            {PF_CATS.map(([k, label, t]) => (
+              <button key={k} type="button" role="tab" aria-selected={show === k} disabled={!sum.counts[k]} className={`px-tab ${t} ${show === k ? "on" : ""}`} onClick={() => setShow(show === k ? "all" : k)}>
+                <span className="px-tl"><i/>{label}</span>
+                <b className="px-num">{sum.counts[k]}</b>
+                <small>{rows.length ? Math.round(sum.counts[k] / rows.length * 100) : 0}% of portfolio</small>
+              </button>))}
+          </div>
+          {show !== "all" && <p className="px-tdesc"><i className={PF_CAT[show][2]}/>{PF_CAT[show][3]}</p>}
+          {!listed.length && <p className="px-tdesc">No stock matches these filters.</p>}
+          <div className="px-list">{listed.map(r => <HoldingItem key={r.s.s} r={r} flash={flash === r.s.s}/>)}</div>
         </section>
         <div className="sv-foot dim">Data as of {fmtDT(data.as_of)} · Hyperplane AI by QuantFriday · For education only, not investment advice.</div>
       </>}
@@ -1378,7 +1577,7 @@ function Home({ me, onOut }) {
 
       {view === "guide" && <Guide disclaimer={DISCLAIMER}/>}
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
-      {view === "tower" && face === "portfolio" && (data && pf != null ? <PortfolioView data={data} symbols={pf} setSymbols={setPf} status={pfStatus}/>
+      {view === "tower" && face === "portfolio" && (data && pf != null ? <PortfolioView data={data} symbols={pf} setSymbols={setPf} status={pfStatus} me={me}/>
         : <div className="card empty">{err || "Loading…"}</div>)}
       {view === "tower" && face === "simple" && (data ? <SimpleView data={data} mode={mode} setMode={m => { setMode(m); setTfs([]); }} sym={simpleSym} setSym={setSimpleSym}/>
         : <div className="card empty">{err || "Loading…"}</div>)}
@@ -1652,7 +1851,28 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 @media (max-width:1180px){.sv-row3{grid-template-columns:repeat(2,minmax(0,1fr))}.sv-metrics{grid-column:1/-1;order:-1}}
 .sx{max-width:1260px}
 .pf{max-width:1260px;margin:14px auto 0;display:flex;flex-direction:column;gap:12px}
-.pf{display:flex;flex-direction:column;gap:14px}
+.pf{display:flex;flex-direction:column;gap:16px}
+/* AI Portfolio — one design language (owner, 2026-10-17: clean fintech + a touch of institutional research):
+   solid surfaces, 1px borders, 14px corners, Inter with tabular numbers, colour only for status. */
+.pf .c-good,.inv .c-good{color:var(--long)}.pf .c-bad,.inv .c-bad{color:var(--short)}.pf .c-mid,.inv .c-mid{color:var(--mixed)}.pf .c-side,.inv .c-side{color:var(--t2)}
+.inv{margin-top:12px;padding:14px 18px;display:flex;flex-direction:column;gap:10px;border:1px solid var(--b1);border-radius:12px;background:linear-gradient(180deg,var(--adim),transparent 60%),var(--s2)}
+.px-num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+.px-label{display:flex;align-items:center;gap:6px;font:600 11px var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--t3)}
+.px-card{background:var(--s1);border:1px solid var(--b1);border-radius:14px;box-shadow:0 1px 2px rgba(15,27,45,.04),0 8px 24px -18px rgba(15,27,45,.25)}
+.px-na{color:var(--t3);font-weight:500}
+.px-pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;font:600 12px var(--sans);white-space:nowrap;background:rgba(139,151,173,.14);color:var(--t2)}
+.px-pill i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.px-pill.good{background:var(--longd);color:var(--long)}.px-pill.mid{background:var(--mixedd);color:var(--mixed)}.px-pill.bad{background:var(--shortd);color:var(--short)}
+.px-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:8px;border:1px solid var(--b1);color:var(--t2);font:500 12px var(--sans);white-space:nowrap}
+.px-chip i{width:7px;height:7px;border-radius:50%;background:#8b97ad}.px-chip i:not([class]),.px-chip i[class=""]{display:none}
+.px-chip i.good,.px-legend i.good,.px-splitl i.good,.px-seg i.good,.px-rel i.good{background:var(--long)}
+.px-chip i.mid,.px-legend i.mid,.px-splitl i.mid,.px-seg i.mid,.px-rel i.mid{background:var(--mixed)}
+.px-chip i.bad,.px-legend i.bad,.px-splitl i.bad,.px-seg i.bad,.px-rel i.bad{background:var(--short)}
+.px-legend i.side,.px-splitl i.side,.px-seg i.side{background:#8b97ad}
+.px-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:40px;padding:0 16px;border-radius:10px;border:1px solid var(--b2);background:var(--s1);color:var(--t1);font:600 13.5px var(--sans);cursor:pointer;white-space:nowrap}
+.px-btn:hover{border-color:var(--acc)}
+.px-btn.primary{background:var(--acc);border-color:var(--acc);color:var(--on-acc)}.px-btn.primary:hover{filter:brightness(1.06)}.px-btn:disabled{opacity:.6;cursor:progress}
+.px-eyebrow{display:flex;align-items:center;gap:6px;font:600 12px var(--sans);letter-spacing:.04em;color:var(--acc)}.px-eyebrow span:last-child{color:var(--t3);font-weight:500}
 /* thin scroller: slim at rest, wider and easy to grab on hover */
 .pf-scroll{overflow-y:auto;overscroll-behavior:contain}
 .pf-scroll::-webkit-scrollbar{width:10px}.pf-scroll::-webkit-scrollbar-track{background:transparent}
@@ -1660,126 +1880,153 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .pf-scroll:hover::-webkit-scrollbar-thumb{background-color:var(--t3);border-width:1px}
 .pf-scroll::-webkit-scrollbar-thumb:hover,.pf-scroll::-webkit-scrollbar-thumb:active{background-color:var(--acc)}
 @supports not selector(::-webkit-scrollbar){.pf-scroll{scrollbar-width:thin;scrollbar-color:var(--b2) transparent}}
-/* start page */
-.pf-start{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);padding:0;overflow:hidden}
-.pf-sl{padding:30px 32px 28px;background:radial-gradient(90% 120% at 0% 0%,rgba(167,139,250,.16),transparent 60%),radial-gradient(70% 90% at 100% 0%,rgba(34,211,238,.10),transparent 55%),var(--s1)}
-.pf-sl .sv-brand{margin:0 0 16px}
-.pf-sl h1{font-size:34px;line-height:1.15;margin:0 0 12px;letter-spacing:-.6px;color:var(--t1)}
-.pf-grad{background:linear-gradient(90deg,#a78bfa,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
-.pf-lead{font-size:15.5px;line-height:1.65;color:var(--t2);margin:0 0 20px;max-width:640px}
+.pf-miss{font-size:13px;color:var(--mixed);padding:10px 14px;border:1px solid var(--mixedd);background:var(--mixedd);border-radius:10px}
+
+/* ── start page ── */
+.pf-start{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(300px,1fr);padding:0;overflow:hidden;border-radius:14px}
+.pf-sl{padding:34px 36px 32px}
+.pf-sl .px-eyebrow{margin-bottom:14px}
+.pf-sl h1{font:700 34px/1.15 var(--sans);letter-spacing:-.025em;margin:0 0 12px;color:var(--t1)}.pf-sl h1 span{color:var(--acc)}
+.pf-lead{font-size:15.5px;line-height:1.65;color:var(--t2);margin:0 0 22px;max-width:620px}
 .pf-add{width:100%}
-.pf-priv{display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:9px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;color:var(--t2);background:var(--longd);border:1px solid rgba(0,200,150,.3)}
-.pf-priv svg{flex-shrink:0;margin-top:2px;color:var(--long)}.pf-priv b{color:var(--long)}.pf-top .pf-priv,.pf-sr .pf-priv{margin-top:0}
-.pf-build{margin-top:16px}
-.pf-bhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}.pf-bhead b{font-size:14px}.pf-bhead .pf-clrbtn,.pf-bhead .pf-clr{margin-left:auto}
+.pf-build{margin-top:18px}
+.pf-bhead{display:flex;align-items:center;gap:10px;margin-bottom:8px}.pf-bhead b{font-size:14px;font-weight:650}.pf-bhead .pf-clrbtn,.pf-bhead .pf-clr{margin-left:auto}
 .pf-blist{display:flex;flex-direction:column;border:1px solid var(--b1);border-radius:12px;max-height:300px;background:var(--s1)}
-.pf-bi{display:grid;grid-template-columns:28px 120px minmax(0,1fr) 28px;gap:10px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--b1);font-size:13px}
-.pf-bi:last-child{border-bottom:0}.pf-bn{color:var(--t3);font:600 11px var(--mono)}.pf-bi b{color:var(--acc)}.pf-bname{color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pf-bi button{border:1px solid var(--b2);background:var(--s2);color:var(--t3);border-radius:50%;width:24px;height:24px;font-size:10px;cursor:pointer}.pf-bi button:hover{color:var(--short);border-color:var(--short)}
-.pf-bempty{padding:22px 16px;border:1px dashed var(--b2);border-radius:12px;color:var(--t3);font-size:13.5px;text-align:center}
-.pf-go{display:block;width:100%;margin-top:14px;padding:14px 18px;border:0;border-radius:12px;font-size:15.5px;font-weight:800;cursor:pointer;color:#04121a;background:linear-gradient(90deg,#a78bfa,#22d3ee);box-shadow:0 10px 26px -12px rgba(34,211,238,.6)}
-.pf-go:hover{filter:brightness(1.07)}.pf-go:disabled{opacity:.4;cursor:default;box-shadow:none;filter:none}
-.pf-clrbtn,.pf-clr button{border:1px solid var(--b2);background:var(--s2);color:var(--t2);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer}
+.pf-bi{display:grid;grid-template-columns:28px 120px minmax(0,1fr) 28px;gap:10px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--b1);font-size:13.5px}
+.pf-bi:last-child{border-bottom:0}.pf-bn{color:var(--t3);font-size:12px;font-variant-numeric:tabular-nums}.pf-bi b{color:var(--t1);font:650 13px var(--sans);letter-spacing:.02em}
+.pf-bname{color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-bi button{border:1px solid transparent;background:none;color:var(--t3);border-radius:8px;width:28px;height:28px;font-size:11px;cursor:pointer}.pf-bi button:hover{color:var(--short);border-color:var(--b2)}
+.pf-bempty{padding:24px 16px;border:1px dashed var(--b2);border-radius:12px;color:var(--t3);font-size:13.5px;text-align:center}
+.pf-go{display:block;width:100%;margin-top:16px;height:48px;border:0;border-radius:12px;font:650 15px var(--sans);cursor:pointer;color:var(--on-acc);background:var(--acc)}
+.pf-go:hover{filter:brightness(1.06)}.pf-go:disabled{opacity:.4;cursor:default;filter:none}
+.pf-clrbtn,.pf-clr button{border:1px solid var(--b2);background:var(--s1);color:var(--t2);border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer}
 .pf-clr{font-size:12px;color:var(--t2);display:inline-flex;gap:6px;align-items:center}.pf-clr button:first-of-type{color:var(--short);border-color:var(--short)}
-.pf-sr{padding:28px 26px;border-left:1px solid var(--b1);background:var(--s2);display:flex;flex-direction:column;gap:14px}
-.pf-sr h3{margin:0;font-size:11.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--t3)}
-.pf-steps{display:flex;flex-direction:column;gap:14px;margin-bottom:6px}
-.pf-step{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;align-items:start}
-.pf-step b{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font:800 15px var(--mono);color:#04121a;background:linear-gradient(135deg,#a78bfa,#22d3ee)}
-.pf-step strong{display:block;font-size:14.5px;color:var(--t1);margin-bottom:2px}.pf-step span{font-size:13px;color:var(--t2);line-height:1.5}
+.pf-sr{padding:32px 28px;border-left:1px solid var(--b1);background:var(--s2);display:flex;flex-direction:column;gap:14px}
+.pf-sr h3{margin:0;font:600 11px var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--t3)}
+.pf-steps{display:flex;flex-direction:column;gap:16px;margin-bottom:6px}
+.pf-step{display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px;align-items:start}
+.pf-step b{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font:700 13px var(--sans);color:var(--acc);background:var(--adim);border:1px solid var(--accb)}
+.pf-step strong{display:block;font-size:14.5px;font-weight:650;color:var(--t1);margin-bottom:2px}.pf-step span{font-size:13px;color:var(--t2);line-height:1.5}
 .pf-key{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.pf-key div{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;padding:9px 11px;border-radius:10px;background:var(--s1);border:1px solid var(--b1)}
-.pf-key i{width:10px;height:10px;border-radius:50%;background:#8b97ad;flex-shrink:0}.pf-key .good i{background:var(--long)}.pf-key .mid i{background:var(--mixed)}.pf-key .bad i{background:var(--short)}
-.pf-trust{margin-top:auto;display:flex;gap:8px;font-size:12px;color:var(--t3);line-height:1.5;padding-top:8px;border-top:1px solid var(--b1)}
-/* result page */
-.pf-miss{font-size:12.5px;color:var(--mixed);padding:8px 12px;border:1px dashed var(--b2);border-radius:10px}
-.pf-top{padding:14px 18px;display:flex;flex-direction:column;gap:10px}
-.pf-toprow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.pf-toprow .sv-brand{margin:0}.pf-count{font-size:12.5px;margin-left:auto}
-.pf-edit{border:1px solid var(--b2);background:var(--s2);color:var(--t1);border-radius:9px;padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer}.pf-edit:hover{border-color:var(--acc)}
-.pf-topadd{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:center}.pf-tal{font-size:12px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.6px}
-.pf-sum{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,1fr);padding:0;overflow:hidden}
-.pf-sumtxt{padding:18px 22px;border-left:4px solid var(--mixed)}.pf-sumtxt.good{border-left-color:var(--long)}.pf-sumtxt.bad{border-left-color:var(--short)}.pf-sumtxt.side{border-left-color:#8b97ad}
-.pf-sumtxt.good .sx-vtitle{color:var(--long)}.pf-sumtxt.bad .sx-vtitle{color:var(--short)}.pf-sumtxt.side .sx-vtitle{color:var(--t2)}
-.pf-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
-.pf-lines li{position:relative;padding-left:18px;font-size:14.5px;line-height:1.55;color:var(--t1)}
-.pf-lines li::before{content:"";position:absolute;left:2px;top:8px;width:8px;height:8px;border-radius:50%;background:#8b97ad}
-.pf-lines li.pl-good::before{background:var(--long)}.pf-lines li.pl-mid::before{background:var(--mixed)}.pf-lines li.pl-bad::before{background:var(--short)}.pf-lines li.pl-info::before{background:var(--acc)}
-.pf-sumvis{border-left:1px solid var(--b1);background:var(--s2);padding:16px 18px;display:flex;flex-direction:column;gap:14px;align-items:stretch}
-.pf-sumvis .gauge{margin:8px 0 14px}
-.pf-bar{display:flex;height:22px;border-radius:7px;overflow:hidden;gap:2px}.pf-bar span{display:flex;align-items:center;justify-content:center;font:700 11.5px var(--mono);color:#04121a;min-width:22px}
-.pf-bar .good{background:var(--long)}.pf-bar .mid{background:var(--mixed)}.pf-bar .bad{background:var(--short)}.pf-bar .side{background:#8b97ad}
-.pf-legend{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin-top:10px;font-size:12px;color:var(--t2)}
-.pf-legend div{display:flex;align-items:center;gap:7px}.pf-legend div.zero{opacity:.45}.pf-legend b{margin-left:auto;font-family:var(--mono);color:var(--t1)}
-.pf-legend i{width:10px;height:10px;border-radius:3px;flex-shrink:0}.pf-legend i.good{background:var(--long)}.pf-legend i.mid{background:var(--mixed)}.pf-legend i.bad{background:var(--short)}.pf-legend i.side{background:#8b97ad}
-.pf-mid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:12px;align-items:stretch}
-.pf-widgets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.pf-w{padding:14px 14px 10px;border-top:4px solid #8b97ad;display:flex;flex-direction:column;gap:6px;min-width:0;height:250px;background:linear-gradient(180deg,rgba(139,151,173,.08),transparent 60%),var(--s1)}
-.pf-w.bad{border-top-color:var(--short);background:linear-gradient(180deg,rgba(255,68,84,.08),transparent 60%),var(--s1)}
-.pf-w.mid{border-top-color:var(--mixed);background:linear-gradient(180deg,rgba(255,170,0,.08),transparent 60%),var(--s1)}
-.pf-w.good{border-top-color:var(--long);background:linear-gradient(180deg,rgba(0,200,150,.08),transparent 60%),var(--s1)}
-.pf-wh{display:flex;align-items:center;gap:8px}.pf-wh i{width:11px;height:11px;border-radius:50%;background:#8b97ad;flex-shrink:0}.pf-w.bad .pf-wh i{background:var(--short)}.pf-w.mid .pf-wh i{background:var(--mixed)}.pf-w.good .pf-wh i{background:var(--long)}
-.pf-wh b{font-size:15.5px;white-space:nowrap}.pf-wn{margin-left:auto;font:800 13px var(--mono);padding:2px 9px;border-radius:999px;background:var(--s2);border:1px solid var(--b2)}
-.pf-wd{font-size:12px;color:var(--t3);line-height:1.45;min-height:35px}
-.pf-wl{display:flex;flex-direction:column;flex:1;min-height:0;margin:0 -6px 0 0;padding-right:2px}
-.pf-wl button{display:grid;grid-template-columns:minmax(0,1fr) auto 50px;gap:8px;align-items:center;padding:7px 4px;border:0;border-bottom:1px solid var(--b1);background:none;color:var(--t1);text-align:left;cursor:pointer;font-size:13px;flex-shrink:0}
-.pf-wl button:last-child{border-bottom:0}.pf-wl button:hover{background:var(--s2)}
-.pf-wname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pf-wt{font-size:11.5px;color:var(--acc)}.pf-wl b{text-align:right;font-size:13px}
-.pf-wl b.good{color:var(--long)}.pf-wl b.bad{color:var(--short)}.pf-wl b.side{color:var(--t2)}
-.pf-wnone{font-size:13px;color:var(--t3);padding:6px 0}
-.pf-holdings{display:flex;flex-direction:column;gap:10px}
-.pf-insights{display:flex;flex-direction:column;gap:12px;margin-top:4px}
-.pf-insh{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.pf-insh h2{margin:0;font-size:19px}.pf-insh .dim{font-size:12.5px}
-.pf-ins{padding:14px 16px;display:flex;flex-direction:column;gap:6px;min-width:0}
-.pf-ih{display:flex;align-items:center;gap:10px}.pf-ih b{font-size:15.5px}
-.pf-isub{font-size:12.5px;color:var(--t3);line-height:1.45;margin-bottom:4px}
-.pf-inote{font-size:11.5px;color:var(--t3)}
+.pf-key div{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:550;padding:9px 11px;border-radius:10px;background:var(--s1);border:1px solid var(--b1)}
+.pf-key i{width:8px;height:8px;border-radius:50%;background:#8b97ad;flex-shrink:0}.pf-key .good i{background:var(--long)}.pf-key .mid i{background:var(--mixed)}.pf-key .bad i{background:var(--short)}
+.pf-priv{display:flex;align-items:flex-start;gap:8px;padding:11px 12px;border-radius:10px;font-size:12.5px;line-height:1.55;color:var(--t2);background:var(--s1);border:1px solid var(--b1)}
+.pf-priv svg{flex-shrink:0;margin-top:2px;color:var(--long)}.pf-priv b{color:var(--t1)}
+.pf-trust{margin-top:auto;display:flex;gap:8px;font-size:12px;color:var(--t3);line-height:1.5;padding-top:10px;border-top:1px solid var(--b1)}
+
+/* ── result page ── */
+.px-head{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;padding:6px 2px 0}
+.px-ht h1{font:700 28px/1.15 var(--sans);letter-spacing:-.025em;margin:6px 0 4px;color:var(--t1)}
+.px-meta{font-size:13px;color:var(--t2)}
+.px-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.px-search{width:380px}.px-search input{height:40px}
+.px-privacy{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;line-height:1.5;color:var(--t3);padding:0 2px}
+.px-privacy svg{flex-shrink:0;margin-top:2px;color:var(--long)}.px-privacy b{color:var(--t2);font-weight:600}
+/* overview */
+.px-strip{display:grid;grid-template-columns:auto minmax(0,1.25fr) minmax(0,1.3fr);gap:32px;align-items:center;padding:16px 28px}
+.px-sg .gauge{display:block;margin:0}
+.px-sm2{display:flex;flex-direction:column;gap:8px;min-width:0}.px-sm2 .px-sv{align-items:flex-start;margin:0}
+.px-sfacts{display:flex;align-items:center;gap:28px}
+.px-facts{display:grid;grid-template-columns:repeat(2,minmax(0,auto));gap:8px 26px;margin:0;padding-left:28px;border-left:1px solid var(--b1)}
+.px-facts div{display:flex;flex-direction:column;gap:1px;min-width:0}
+.px-facts dt{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--t3)}.px-facts dd{margin:0;font:650 13.5px var(--sans);color:var(--t1);white-space:nowrap;font-variant-numeric:tabular-nums}
+.px-smix{display:flex;flex-direction:column;gap:10px;padding-left:32px;border-left:1px solid var(--b1)}.px-smix .px-splitl{margin-top:0;grid-template-columns:1fr 1fr;gap:6px 24px}.px-smix .px-splitl span{white-space:nowrap}
+.px-sumc{padding:20px 24px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.px-headline{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:12px 0 10px}
+.px-headline h2{margin:0;font:700 22px/1.25 var(--sans);letter-spacing:-.015em;color:var(--t1)}
+.px-points{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.px-points{gap:9px}
+.px-points li{position:relative;padding-left:20px;font-size:15px;line-height:1.55;color:var(--t1)}
+.px-points li::before{content:"";position:absolute;left:3px;top:8px;width:7px;height:7px;border-radius:50%;background:#8b97ad}
+.px-points li.pl-good::before{background:var(--long)}.px-points li.pl-mid::before{background:var(--mixed)}.px-points li.pl-bad::before{background:var(--short)}.px-points li.pl-info::before{background:var(--acc)}
+
+.px-sv{display:flex;flex-direction:column;align-items:center;gap:2px;margin-bottom:18px}
+.px-sv b{font:700 40px/1 var(--sans);letter-spacing:-.03em;font-variant-numeric:tabular-nums}.px-sv b small{font-size:20px;margin-left:1px}
+.px-sv span{font:600 14px var(--sans)}
+.px-split{display:flex;gap:3px;height:10px;border-radius:6px;overflow:hidden}
+.px-split span{display:block;min-width:6px}.px-split .good{background:var(--long)}.px-split .mid{background:var(--mixed)}.px-split .bad{background:var(--short)}.px-split .side{background:#8b97ad}
+.px-splitl{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;margin-top:12px;font-size:12.5px;color:var(--t2)}
+.px-splitl div{display:flex;align-items:center;gap:8px}.px-splitl div.zero{opacity:.45}.px-splitl i{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.px-splitl b{margin-left:auto;color:var(--t1);font-weight:650}
+/* row 2: colour groups | trend map */
+.px-row2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:stretch}
+.px-split2{margin:14px 20px 0;height:6px;gap:2px}
+.px-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin-top:6px;border-bottom:1px solid var(--b1)}
+.px-tab{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px 20px 14px;border:0;background:none;color:var(--t1);text-align:left;cursor:pointer;min-width:0}
+.px-tab+.px-tab::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:1px;background:var(--b1)}
+.px-tab:hover{background:var(--hover)}.px-tab:disabled{opacity:.45;cursor:default;background:none}
+.px-tl{display:flex;align-items:center;gap:7px;font:600 12.5px var(--sans);color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.px-tl i{width:8px;height:8px;border-radius:50%;background:#8b97ad;flex-shrink:0}
+.px-tab.good .px-tl i{background:var(--long)}.px-tab.mid .px-tl i{background:var(--mixed)}.px-tab.bad .px-tl i{background:var(--short)}
+.px-tab b{font:700 26px/1.1 var(--sans);letter-spacing:-.02em}.px-tab small{font-size:11.5px;color:var(--t3)}
+.px-tab.on::after{content:"";position:absolute;left:20px;right:20px;bottom:-1px;height:3px;border-radius:3px 3px 0 0;background:#8b97ad}
+.px-tab.on.good::after{background:var(--long)}.px-tab.on.mid::after{background:var(--mixed)}.px-tab.on.bad::after{background:var(--short)}
+.px-tab.on .px-tl{color:var(--t1)}.px-tab.all .px-tl i{background:var(--acc)}.px-tab.on.all::after{background:var(--acc)}
+.px-tdesc{display:flex;align-items:center;gap:8px;margin:0;padding:12px 20px;font-size:12.5px;color:var(--t2)}
+.px-tdesc i{width:6px;height:6px;border-radius:50%;background:#8b97ad;flex-shrink:0}.px-tdesc i.good{background:var(--long)}.px-tdesc i.mid{background:var(--mixed)}.px-tdesc i.bad{background:var(--short)}
+.px-slist{flex:1;min-height:0;display:flex;flex-direction:column}
+.px-sval{display:flex;align-items:center;justify-content:flex-end;gap:10px}.px-sval b{min-width:46px;text-align:right;font-weight:650;font-size:14px}
+.px-ch{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.px-ch h3{margin:0;font:700 16px var(--sans);color:var(--t1)}.px-ch p{margin:3px 0 0;font-size:12.5px;color:var(--t3)}
+.px-map{padding:18px 18px 12px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.px-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--t2)}.px-legend span{display:inline-flex;align-items:center;gap:6px}.px-legend i{width:8px;height:8px;border-radius:50%}
 .pf-mapw{position:relative;flex:1;width:100%;min-width:0;min-height:300px;overflow:hidden}.pf-map{position:absolute;left:0;top:0;display:block}
-.pf-mq{font:800 12.5px var(--sans);opacity:.9}.pf-max{stroke:var(--b2);stroke-width:1}
-.pf-mt{font:600 10.5px var(--mono);fill:var(--t3)}.pf-mt.b{font-family:var(--sans);font-weight:700}
-.pf-ml{font:700 10.5px var(--mono);fill:var(--t1);paint-order:stroke;stroke:var(--s1);stroke-width:3px}
+.pf-mq{font:650 12px var(--sans)}.pf-max{stroke:var(--b2);stroke-width:1.2}.pf-mgrid{stroke:var(--b1);stroke-width:1;stroke-dasharray:3 4}.pf-mframe{fill:none;stroke:var(--b1);stroke-width:1}
+.pf-mt{font:500 10.5px var(--sans);fill:var(--t3)}.pf-mt.b{font-weight:600}
+.pf-ml{font:650 10.5px var(--sans);letter-spacing:.02em;fill:var(--t1);paint-order:stroke;stroke:var(--s1);stroke-width:3px}
 .pf-dot{cursor:pointer}.pf-dot:hover circle{stroke:var(--acc)!important}
-.pf-gc.cap{color:var(--acc);background:var(--adim)}
-.pf-tools{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
-.pf-filter{display:flex;gap:6px;flex-wrap:wrap}
-.pf-filter button{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:999px;border:1px solid var(--b2);background:var(--s1);color:var(--t2);font-size:13px;font-weight:600;cursor:pointer}
-.pf-filter button i{width:9px;height:9px;border-radius:50%;background:#8b97ad}.pf-filter button.good i{background:var(--long)}.pf-filter button.mid i{background:var(--mixed)}.pf-filter button.bad i{background:var(--short)}
-.pf-filter button b{font-family:var(--mono);color:var(--t1)}.pf-filter button:disabled{opacity:.4;cursor:default}
-.pf-filter button.bad{border-color:rgba(255,68,84,.45)}.pf-filter button.mid{border-color:rgba(255,170,0,.45)}.pf-filter button.good{border-color:rgba(0,200,150,.45)}
-.pf-filter button.on{border-color:var(--acc);background:var(--adim);color:var(--t1)}
-.pf-filter button.on.bad{background:var(--short);color:#fff;border-color:var(--short)}.pf-filter button.on.mid{background:var(--mixed);color:#1a1200;border-color:var(--mixed)}.pf-filter button.on.good{background:var(--long);color:#04121a;border-color:var(--long)}
-.pf-filter button.on.side{background:#8b97ad;color:#0b0f17;border-color:#8b97ad}.pf-filter button.on b{color:inherit}.pf-filter button.on i{background:currentColor}
-.pf-sort{display:inline-flex;align-items:center;gap:4px;padding:3px;border-radius:999px;border:1px solid var(--b2);background:var(--s1)}.pf-sort .dim{font-size:12px;padding:0 6px 0 8px}
-.pf-sort button{border:0;background:none;color:var(--t2);padding:6px 13px;border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer}.pf-sort button.on{background:var(--acc);color:var(--on-acc,#04121a)}
-.pf-fdesc{font-size:12.5px;margin-top:-2px}
-/* stock cards: all the same size; long reasons scroll inside */
-.pf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
-.pf-card{position:relative;height:440px;padding:14px 14px 12px 18px;display:flex;flex-direction:column;gap:8px}
-.pf-card::before{content:"";position:absolute;left:-1px;top:-1px;bottom:-1px;width:5px;border-radius:10px 0 0 10px;background:#8b97ad}.pf-card.good::before{background:var(--long)}.pf-card.mid::before{background:var(--mixed)}.pf-card.bad::before{background:var(--short)}
-.pf-card.flash{box-shadow:0 0 0 2px var(--acc),0 0 26px -6px var(--acc);transition:box-shadow .3s}
-.pf-ch{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.pf-cn{display:flex;align-items:center;gap:8px;min-width:0}
-.pf-cn b{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.pf-cn .sx-tick{flex-shrink:0}
-.pf-cm{font-size:12.5px;color:var(--t2);margin-top:-4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pf-tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.pf-tag{font-size:12.5px;font-weight:800;padding:4px 11px;border-radius:999px;background:var(--s2);color:var(--t2)}
-.pf-tag.good{color:var(--long);background:var(--longd)}.pf-tag.mid{color:var(--mixed);background:rgba(255,170,0,.12)}.pf-tag.bad{color:var(--short);background:var(--shortd)}
-.pf-tag.soft{font-weight:700;font-size:11.5px;background:none;border:1px solid var(--b2)}.pf-tag.good.soft{border-color:rgba(0,200,150,.45)}
-.pf-gc{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--s2);color:var(--t2);white-space:nowrap}
-.pf-gc.good{color:var(--long);background:var(--longd)}.pf-gc.mid{color:var(--mixed);background:rgba(255,170,0,.12)}.pf-gc.bad{color:var(--short);background:var(--shortd)}
-.pf-lt{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.pf-ll{font-size:10.5px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3);font-weight:700}
-.pf-lt b{font:800 26px var(--mono);letter-spacing:-.5px}.pf-lt b small{font-size:14px}.pf-lt b.good,.pf-lw.good{color:var(--long)}.pf-lt b.bad,.pf-lw.bad{color:var(--short)}.pf-lt b.side,.pf-lw.side{color:var(--t2)}.pf-lw{font-size:13px;font-weight:700}
-.pf-dbar .dbar-t{height:8px;border-radius:4px}
-.pf-tfs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
-.pf-tf{display:flex;flex-direction:column;gap:2px;padding:6px 9px;border-radius:9px;background:var(--s2);border:1px solid var(--b1);font:800 14px var(--mono);min-width:0}
-.pf-tf i{font:700 10px var(--sans);font-style:normal;text-transform:uppercase;letter-spacing:.6px;color:var(--t3)}
-.pf-tf small{font:600 11.5px var(--sans);color:var(--t3)}
-.pf-tf.good{color:var(--long)}.pf-tf.bad{color:var(--short)}.pf-tf.side{color:var(--t2)}
-.pf-tf small.pf-sw{font:700 13px var(--sans);color:var(--t2)}.pf-tf small.pf-nd{display:inline-flex;align-items:center;gap:5px}
-.pf-newbox{display:flex;flex-direction:column;gap:3px;padding:10px 12px;border-radius:10px;background:var(--s2);border:1px dashed var(--b2);font-size:13px;color:var(--t2);line-height:1.5}.pf-newbox b{color:var(--t1)}
-.pf-why{flex:1;min-height:0;margin:2px 0 0;padding:0 4px 0 17px;display:flex;flex-direction:column;gap:5px;font-size:13px;line-height:1.5;color:var(--t1)}.pf-why li{flex-shrink:0}.pf-why li::marker{color:var(--t3)}
-.pf-ref{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding-top:8px;border-top:1px dashed var(--b1)}
-@media (max-width:1000px){.pf-mid{grid-template-columns:1fr}.pf-sum,.pf-start{grid-template-columns:1fr}.pf-sumvis{border-left:0;border-top:1px solid var(--b1)}.pf-sr{border-left:0;border-top:1px solid var(--b1)}.pf-topadd{grid-template-columns:1fr}}
-@media (max-width:640px){.pf-widgets{grid-template-columns:1fr}.pf-w{height:auto;max-height:320px}.pf-grid{grid-template-columns:1fr}.pf-card{height:480px}
-  .pf-sl{padding:20px 16px}.pf-sl h1{font-size:25px}.pf-sr{padding:20px 16px}.pf-bi{grid-template-columns:24px 92px minmax(0,1fr) 26px}.pf-tools{flex-direction:column;align-items:stretch}}
+.px-foot{font-size:11.5px;color:var(--t3)}
+/* row 3: holdings table */
+.px-hold{padding:18px 0 4px}
+.px-hold>.px-ch{padding:0 20px 14px}
+.px-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.px-seg{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--s2);border:1px solid var(--b1);flex-wrap:wrap}
+.px-seg button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:0;border-radius:8px;background:none;color:var(--t2);font:550 12.5px var(--sans);cursor:pointer;white-space:nowrap}
+.px-seg button b{font-weight:650;color:var(--t3);font-variant-numeric:tabular-nums}
+.px-seg button i{width:7px;height:7px;border-radius:50%}
+.px-seg button.on{background:var(--s1);color:var(--t1);box-shadow:0 1px 2px rgba(15,27,45,.12),0 0 0 1px var(--b1)}.px-seg button.on b{color:var(--t1)}
+.px-seg button:disabled{opacity:.4;cursor:default}
+.px-segl{display:inline-flex;align-items:center;gap:5px;padding:0 6px 0 9px;font:600 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--t3)}
+.px-list{display:flex;flex-direction:column}
+.px-item{position:relative;display:grid;grid-template-columns:minmax(210px,.85fr) minmax(340px,1.15fr) minmax(0,1.3fr);gap:28px;padding:22px 24px 22px 28px;border-top:1px solid var(--b1)}
+.px-item::before{content:"";position:absolute;left:0;top:18px;bottom:18px;width:4px;border-radius:0 3px 3px 0;background:#8b97ad}
+.px-item.good::before{background:var(--long)}.px-item.mid::before{background:var(--mixed)}.px-item.bad::before{background:var(--short)}
+.px-item.flash{background:var(--hover);box-shadow:inset 0 0 0 2px var(--accb)}
+.px-who,.px-how,.px-whyc{display:flex;flex-direction:column;gap:10px;min-width:0}
+.px-who{align-items:flex-start}
+.px-name{display:flex;flex-direction:column;gap:3px;min-width:0;max-width:100%}
+.px-name b{font:700 17px/1.25 var(--sans);letter-spacing:-.01em;color:var(--t1)}
+.px-name em{font:650 12px var(--sans);font-style:normal;letter-spacing:.04em;color:var(--acc)}
+.px-where{font-size:12.5px;color:var(--t3);line-height:1.4;margin-top:-4px}
+.px-how{padding:0 2px}
+.px-whyc{padding:16px 18px 14px;border-radius:12px;border:1px solid var(--b1);background:linear-gradient(180deg,var(--adim),transparent 55%),var(--s2)}
+.px-aih{display:flex;align-items:center;gap:7px;font:650 11.5px var(--sans);letter-spacing:.07em;text-transform:uppercase}
+.px-aih b{color:var(--acc);font-weight:700}.px-aih span:last-child{color:var(--t2)}.px-aih span:last-child::before{content:"·";margin-right:7px;color:var(--t3)}
+.px-nd{display:inline-flex;align-items:center;gap:6px;font:600 14px var(--sans)}
+.px-dbig{display:flex;align-items:baseline;gap:10px}.px-dbig b{font:700 30px/1 var(--sans);letter-spacing:-.02em;font-variant-numeric:tabular-nums}.px-dbig b small{font-size:16px}
+.px-dbig span{font:600 14px var(--sans)}
+.px-dbar .dbar-t{height:8px;border-radius:4px}
+.px-tfs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.px-tf{display:flex;flex-direction:column;gap:4px;padding:10px 10px;border-radius:10px;background:var(--s1);border:1px solid var(--b1);min-width:0}
+.px-tfv{font:700 18px var(--sans);font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;gap:6px}.px-tfv.px-na{font-size:14px;font-weight:600}
+.px-chips{display:flex;gap:6px;flex-wrap:wrap}
+.px-kin{display:inline-block;margin-top:4px;padding:4px 7px;border-radius:6px;font:650 11.5px/1.25 var(--sans);background:rgba(139,151,173,.12);align-self:flex-start;max-width:100%}
+.px-kin.c-good{background:var(--longd)}.px-kin.c-bad{background:var(--shortd)}.px-kin.px-na{font-weight:500}
+.px-newnote{display:flex;flex-direction:column;gap:4px;padding:14px;border-radius:10px;border:1px dashed var(--b2);font-size:13px;color:var(--t2);line-height:1.5}.px-newnote b{color:var(--t1)}
+.px-why{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.px-why li{position:relative;padding-left:16px;font-size:14px;line-height:1.55;color:var(--t1)}
+.px-why li::before{content:"";position:absolute;left:2px;top:9px;width:6px;height:6px;border-radius:50%;background:var(--t3)}
+.px-backdrop{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:4px;padding-top:12px;border-top:1px dashed var(--b2)}
+
+@media (max-width:1180px){.px-item{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)}.px-whyc{grid-column:1/-1}}
+@media (max-width:1000px){.px-row2,.pf-start{grid-template-columns:1fr}.pf-sr{border-left:0;border-top:1px solid var(--b1)}
+  .px-strip{grid-template-columns:auto 1fr;gap:18px}.px-smix{grid-column:1/-1;padding-left:0;border-left:0;padding-top:14px;border-top:1px solid var(--b1)}.px-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .px-search{width:100%}.px-actions{width:100%}}
+@media (max-width:760px){.px-item{grid-template-columns:1fr;gap:16px;padding:18px 16px 18px 20px}.px-hold>.px-ch{padding:0 14px 12px}}
+@media (max-width:640px){.px-tabs{grid-template-columns:1fr 1fr}.px-tab:nth-child(odd)::before{display:none}.px-strip{padding:14px 16px}.px-smix .px-splitl{grid-template-columns:1fr 1fr}
+  .px-sumc{padding:18px 16px}
+  .px-headline h2{font-size:19px}.px-ht h1{font-size:24px}
+  .pf-sl{padding:22px 16px}.pf-sl h1{font-size:26px}.pf-sr{padding:20px 16px}.pf-bi{grid-template-columns:24px 92px minmax(0,1fr) 28px}}
 .dbar{min-width:60px}.dbar-t{position:relative;height:6px;border-radius:3px;background:linear-gradient(90deg,rgba(255,68,84,.13) 0 50%,rgba(0,200,150,.13) 50% 100%),var(--s3)}
 .dbar-0{position:absolute;left:50%;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--t1);opacity:.75;z-index:1}
 .dbar-f{position:absolute;top:0;bottom:0}.dbar-f.up{background:var(--long);border-radius:0 3px 3px 0}.dbar-f.down{background:var(--short);border-radius:3px 0 0 3px}.dbar-f.side{background:#8b97ad;border-radius:0 3px 3px 0}

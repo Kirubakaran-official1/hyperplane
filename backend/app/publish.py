@@ -19,6 +19,7 @@ import re
 from datetime import date, timedelta
 
 from .db import get_meta, get_settings, pool, set_meta, TECH_TF_DEFAULT
+from .zone_engine import read_all as zone_read_all
 
 TFS = "DWMQY"
 TF_WEIGHT = {"D": 1, "W": 2, "M": 3, "Q": 4, "Y": 5}
@@ -165,6 +166,20 @@ def build_public(sheets, settings, as_of, earlier=None):
     stretched = {_sym(r.get("Symbol")) for r in sheets.get("Price_Health", []) if str(r.get("Stretched") or "") == "Yes"}
     years = {_sym(r.get("Symbol")): _num(r.get("Years_Of_History")) for r in sheets.get("Price_Health", [])}
     tech = {_sym(r.get("Symbol")): r for r in sheets.get("Technicals", [])} if settings.get("tech_enabled") else {}
+    zv = zone_read_all(sheets)                   # AI Portfolio zone engine codes (empty for collections without Zone_History)
+    mc = {_sym(r.get("Symbol")): [_num(r.get(f"M{k}_Close")) for k in range(1, 5)] for r in sheets.get("Zone_History", [])}
+    m3 = {k: v[2] for k, v in mc.items()}                                                              # close 3 months ago
+
+    def month_moves(sym, price):
+        """% change of each of the last 4 months, oldest first: [m−3, m−2, m−1, this month so far]; a move outside
+        −95 … +400 % is unadjusted data (share consolidation etc.) and left out (None)."""
+        c = mc.get(sym)
+        if not c:
+            return None
+        chain = [c[3], c[2], c[1], c[0], price]
+        out = [round((b / a - 1) * 100, 1) if a and b else None for a, b in zip(chain, chain[1:])]
+        out = [v if v is not None and -95 <= v <= 400 else None for v in out]
+        return out if any(v is not None for v in out) else None
     tech_w = float(settings.get("tech_weight") or 0)
     tech_cfg = settings.get("tech") or {}
     add, keep = set(settings.get("index_add") or []), set(settings.get("index_keep") or [])
@@ -226,7 +241,15 @@ def build_public(sheets, settings, as_of, earlier=None):
                        # years of yearly price history (None = no yearly data at all) — AI Portfolio "too new" check
                        "yh": (int(years[sym]) if years.get(sym) is not None else None) if health else None,
                        # zone step vs the previous month / quarter: [M, Q] each 1 up · 0 level · −1 down · None unknown
-                       "zs": [_zone_step(z, "M", earlier), _zone_step(z, "Q", earlier)]})
+                       "zs": [_zone_step(z, "M", earlier), _zone_step(z, "Q", earlier)],
+                       # zone engine result: [colour, score, [M], [Q], [Y]] — see zone_engine.py (codes only)
+                       **({"zv": zv[sym]} if sym in zv else {}),
+                       # price change since the close 3 months ago, % (AI Portfolio "last 3 months"); a move beyond
+                       # −95 % … +400 % is treated as unadjusted data (e.g. a share consolidation) and left out
+                       **({"r3": r3} if (r3 := (round((price / m3[sym] - 1) * 100, 1) if m3.get(sym) else None)) is not None
+                          and -95 <= r3 <= 400 else {}),
+                       # last 4 months, % per month (Investment AI summary in the Research stock card)
+                       **({"mr": mr} if (mr := month_moves(sym, price)) else {})})
         if "-" not in rating and health.get(sym) != "POOR":
             weighted = sum(TF_WEIGHT[tf] * (1 if ch == "G" else -1 if ch == "W" else 0) for tf, ch in zip(TFS, rating))
             if weighted > 0:

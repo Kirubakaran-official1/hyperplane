@@ -720,3 +720,98 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
   Result page order (owner, 2026-10-17): AI summary | gauge → `.pf-mid` = colour boxes 2 × 2 (red, amber / green, grey; 250 px
   each) | Trend map (fills the same height; svg sized from its box's width AND height via ResizeObserver, min 300 px when
   stacked) → filter / sort + cards. No "Protection insights" heading any more. ≤ 1000 px: boxes above the map.
+  ZONE ENGINE (owner, 2026-10-17: "do all the math in the backend … decide the best output"). Scanner writes a new sheet
+  `Zone_History` (build_zone_history_rows: M/Q/Y current + last 4 zones from Chartink virgin-data, `M0_Top`…`Y4_Bottom`;
+  virgin-data was always downloaded but never stored before). `backend/app/zone_engine.py` — CONTINUOUS calculation (owner
+  2026-10-17: "cover all 27k combinations, true strength, optimized"; replaced the first 30-cell / 27-pattern version, which
+  gave only 187 distinct strengths): per timeframe trend T (4 zone steps in widths of the older zone, ±0.5 width = full
+  step, recency 40/30/20/10) and price position P (inside the current zone −0.67…+0.67, ±1 a quarter width outside);
+  timeframe strength = 100 × (0.6 T + 0.4 P); stock strength = Q 50 · Y 30 · M 20 (missing M/Y re-weighted); colour green
+  ≥ +24 AND quarter ≥ 0, red ≤ −24 (the app's TREND_CUT). publish adds `zv: [colour, strength, [M], [Q], [Y]]` (each
+  [trend code 2…−2, position code 2/1/−1/−2, strength]) for EVERY stock with Zone_History (1,821 on 13 Oct, ~76 ms once
+  per publish). Customer app `analyseZone`: plain words for non-finance users (uptrend / turning up / sideways / turning
+  down / downtrend; price above / upper part / lower part / below "this quarter's price range"; never "zone"); boxes show
+  the period strength + the app's level word; overrides: recently listed grey, low reliability red, rose very fast never
+  green. Card tags redesigned: one status badge (`.pf-status`) + neutral chips (`.pf-meta`, coloured dot only) for cap,
+  reliability, "Rose very fast", "Improving", sector / industry. No zv → old strength rules. 13 Oct: engine G 302 · A 1,207 ·
+  R 312 (after overrides G 260 · A 1,037 · R 524). Review: D:\Trading\Hyperplane_Zone_Engine_Review.xlsx (all 27,900 typical
+  combinations + every real stock with its exact values). Constants are Claude's proposal — owner may tune.
+  PDF REPORT (owner, 2026-10-17): "Download report" button on the AI Portfolio result page. Made in the customer's
+  browser (the list never leaves the device) by `app/src/report.js` with jsPDF 4.2.1 (dependency added; lazy-loaded chunk
+  ~135 KB gzip, main bundle unchanged). PortfolioView builds the model with `reportModel()` (same rows / summary / words
+  as the screen; report.js only draws, no analysis). Pages: dark branded cover (logo, "AI Portfolio Report", prepared
+  for / data as of / report date / stocks, colour counts, privacy + disclaimer) → overview (AI summary | vector gauge,
+  spread bar, 6 key numbers) → colour groups 2 × 2 → Trend map (vector, labels via shared `app/src/labels.js`, also used
+  by the on-screen map) → stock-by-stock cards → "How to read" + disclaimer. Header (logo, title, customer, data date,
+  gradient rule) and footer (brand · private · education only · Page X of Y) on every page after the cover. Standard PDF
+  fonts: report.js swaps "−" and symbols for plain characters. Typical file ~100 KB, made in ~0.5 s.
+  REDESIGN (owner, 2026-10-17: "professional like the big companies"; chose AI Portfolio page, style = clean fintech +
+  a touch of institutional research). One design language in the `.pf` CSS block: solid surfaces, 1px borders, 14px
+  corners, Inter + tabular numbers, colour only for status (`.c-good/.c-bad/.c-mid/.c-side`, `.px-pill`, `.px-chip`).
+  Result page (`.px`): page header ("Your portfolio", meta, search · Edit list · Download report), quiet privacy line →
+  `.px-over` (AI summary with status pill + headline + divided points | strength panel: gauge, big number, status split)
+  with a 5-tile key-numbers strip → `.px-row2` (2 × 2 colour groups | Trend map with legend + gridlines) → `.px-hold`
+  holdings TABLE (`HoldingRow`: Stock · Status · Strength with mini bar · Monthly · Quarterly · Yearly · Reliability;
+  click = expandable details: strength + DivBar + period tiles + chips | Why + sector / industry reference). Filter and
+  sort are segmented controls; jump() from groups / map opens and highlights the row. ≤ 760 px the table becomes a
+  list (stock + status + strength). Start page restyled in the same language (solid accent, no gradients).
+  Same day (owner): key-numbers strip REMOVED; strength panel content centred top-to-bottom (`.px-sbody`); the click-to-open
+  table was replaced by ALWAYS-OPEN cards (`HoldingItem`, `.px-item`: who — name, ticker, sector › industry, status pill,
+  chips | how strong — big strength + DivBar + Monthly / Quarterly / Yearly tiles | why — reasons + sector / industry
+  reference), no repeated data, several visible at once; missing values show "No data ⓘ" (never "n/a").
+  The reasons column is headed "✦ HYPERPLANE AI · RESEARCH SUMMARY" (`.px-aih`, owner — not "Why") inside its own soft
+  accent panel (`.px-whyc`). Sector / industry chips + their ⓘ sit in the LEFT column under the tags (`.px-backdrop`,
+  label "Sector and industry"), not in the summary panel (owner: more space there).
+  NO "range" WORDING (owner, 2026-10-17: "people don't know what a range is" — supersedes the earlier "price range" notes
+  above). Reasons compare over time: "<Quarterly|Yearly|Monthly> view: compared with the last 4 <quarters|years|months>,
+  the trend is going up / has just turned up / is flat / has just turned down / is going down, and the price is very
+  strong / holding up well / weak / very weak this <period>." The monthly line is always shown (+ "Keep an eye on it." /
+  "A good short-term sign." when trend and price agree). Fallback rules say "compared with last quarter, the trend has
+  improved / weakened". Summary: "Compared with the last 4 quarters, N stocks are trending up and M trending down."
+  STREAK WORDING (owner, same day: "not always 'last 4' — say going down for the last 2 / 3 quarters"): zone_engine adds
+  per timeframe a streak [direction, length] = periods in a row the zone middle moved the same way (≥ MOVE 10 % of the
+  older zone's width; up to 4, from the current + last 4 zones). Customer sentence: "<View>: the trend has been going
+  up / down / flat for the last N <periods>" (N ≥ 2) or "the trend turned up / down this <period>" / "is flat this
+  <period>", then "and the price is very strong / holding up well / weak / very weak [this <period>]" (no repeated "this
+  <period>"). zDir() (streak direction) drives the summary counts ("On the quarterly view, N trending up…"), "Improving"
+  and the report's trending numbers. Older payloads without the streak fall back to the trend-code words.
+  The 4 colour boxes were replaced (owner: "boxy") by ONE `StatusPanel` ("Portfolio by status", `.px-status`, 560 px =
+  same height as the Trend map): split bar → 4 status tabs (dot + name, big count, "% of portfolio", coloured underline
+  on the active one; first non-empty status selected) → status description → clean rows (`.px-srow`: name, ticker ·
+  sector, quarterly streak "▼ Down for 3 quarters" / "▲ Turned up this quarter" / "Flat…", MiniBar + strength %; click
+  → jump to the card). Phone: tabs 2 × 2, rows show name + %. Class `.px-sv` is the big portfolio number — the row value
+  uses `.px-sval`.
+  LAYOUT v3 (owner, same day): StatusPanel REMOVED (duplicated the holdings). Order now: header → `.px-strip` (gauge 150 |
+  "Current strength of the portfolio" + big number | "How your N stocks are split" bar + counts) → `.px-row2` (AI summary
+  card `.px-sumc`, no dividers, tighter spacing | Trend map, same height) → Holdings: sort control top-right, the status
+  TABS are the holdings filter (split bar + "All stocks" + 4 statuses with count and "% of portfolio"; clicking the
+  active tab returns to All) + description line. Each stock card shows a "Key insight" row under the M / Q / Y tiles
+  (`streakShort`: "▼ Down 3 qtrs", "▲ Up 2 months", "▲ Turned up", "Flat 4 yrs", tooltip = full sentence).
+  Then (owner): the insight chip moved INSIDE each M / Q / Y tile in place of the level word ("Average downtrend" removed;
+  it is the tile value's tooltip); units "mths / qtrs / yrs"; a "No data" tile shows only "No data ⓘ". The strip shows 4
+  quick facts beside the big % (`.px-facts`): Strongest, Weakest, Quarterly trend "N up · M down", Low reliability "N of
+  total"; split legend 2 × 2.
+  Insight chips: no ▲ / ▼ arrows (colour shows direction), full units ("Down 3 quarters", "Up 2 months", "Flat 4 years"),
+  chips may wrap to 2 lines (never cut). Holdings header: "RELIABILITY All · High · Medium · Low" segmented filter (with
+  counts, combines with the status tabs; "No stock matches these filters." when empty) next to "SORT Weakest / Best first".
+  The reliability filter has NO red / amber / green dots (owner: confused with strength) and an ⓘ explaining, in this
+  order, Low (fell > 70 % from its high → always Look at first) · Medium (> 50 % below its high or lower than 5 years ago)
+  · High (stayed close to its high).
+  Reliability filter is MULTI-SELECT (High / Medium / Low toggles, none selected = all; no "All" button). The strip's
+  "Quarterly trend" fact was replaced by "Last 3 months: ±x% avg" (ⓘ: average price change since the end of <month −3>,
+  each stock equal, no quantities): scanner writes `M3_Close` (= m3_close, monthly close 3 months ago) into Zone_History;
+  publish adds `r3` = price vs M3_Close in % — dropped when outside −95 … +400 % (unadjusted corporate actions, e.g. MBECL
+  showed +12,372 %).
+  Then (owner): "Last 3 months" REPLACED by "Spread: N sectors · top X%" (amber when one sector ≥ 40 % of ≥ 4 stocks; ⓘ
+  names the largest sector, the 40 % risk note and the large / mid / small cap counts; every stock counts equally). `r3`
+  is still published but no longer shown. Facts have only the ⓘ popup (no `title` tooltip) and a thin vertical divider
+  separating them from the big %.
+  INVESTMENT AI SUMMARY (owner, 2026-10-17) — Research view stock card (`StockCard`), full-width block under the two
+  columns: `InvestmentSummary` runs the AI Portfolio engine (`analyseHolding`) for that one stock — a DIFFERENT formula
+  from the card's own Research strength (owner: no issue). Shows status pill + description, `StrengthTiles` (shared with
+  the AI Portfolio cards: long-term strength, DivBar, M / Q / Y tiles with streak chips), "Last 4 months" diverging
+  month bars + "Since the end of <month>: ±x%" (compounded), and the research summary. Data: scanner writes
+  `M1_Close`…`M4_Close` (month-end closes) into Zone_History; publish adds `mr` = [m−3, m−2, m−1, this month so far] %
+  (each outside −95 … +400 % → None). No `mr` → "Month-by-month prices are not available for this stock yet."
+  Then (owner: "only the summary part"): the block is ONLY "✦ LONG-TERM · AI INVESTMENT SUMMARY" (ⓘ) + the plain-word
+  research sentences in a soft accent panel — no status, strength, tiles or month bars. `mr` / `r3` stay published, unused.
