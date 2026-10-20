@@ -497,6 +497,9 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
   WhatsApp, City, State, Country, Status (active / expired / pending / blocked), Access until, Joined, Approved on, Last
   login, Logins, Locked until, Signed up from IP, Notes (`CUST_EXPORT` in server.jsx). Owner, 2026-10-18.
 
+- Customer app theme: LIGHT is the default (owner, 2026-10-20); dark only when the customer picked it (`qf_theme` =
+  "dark" in localStorage). The admin dashboard keeps its own default.
+
 ## 8. Develop and test
 
 ### Scanner rule tests (run after ANY scanner change)
@@ -819,6 +822,8 @@ address (cookies are per address). Keep the DuckDNS updater running a few months
   names the largest sector, the 40 % risk note and the large / mid / small cap counts; every stock counts equally). `r3`
   is still published but no longer shown. Facts have only the ⓘ popup (no `title` tooltip) and a thin vertical divider
   separating them from the big %.
+  Phones (≤ 760 px): the strip stacks — gauge, label + big % centred, then the 4 facts as a 2 × 2 grid under a line
+  (values may wrap), then the split. Checked at 430 / 820 / 1600 px: no overlap.
   INVESTMENT AI SUMMARY (owner, 2026-10-17) — Research view stock card (`StockCard`), full-width block under the two
   columns: `InvestmentSummary` runs the AI Portfolio engine (`analyseHolding`) for that one stock — a DIFFERENT formula
   from the card's own Research strength (owner: no issue). Shows status pill + description, `StrengthTiles` (shared with

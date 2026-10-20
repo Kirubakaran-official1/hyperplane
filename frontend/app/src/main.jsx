@@ -136,9 +136,9 @@ function combinedView(od, bi, sec, ind, os = null, stretched = false) {
   return { tone: v[0], title: v[1], text: v[2] };
 }
 
-// ─── theme (dark default, light optional; remembered on this device) ───
+// ─── theme (light default for customers — owner, 2026-10-20; dark optional; a customer's own choice is remembered) ───
 const THEME_KEY = "qf_theme";
-const getTheme = () => { try { return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"; } catch { return "dark"; } };
+const getTheme = () => { try { return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; } };
 const applyTheme = t => { document.documentElement.dataset.theme = t; try { localStorage.setItem(THEME_KEY, t); } catch { /* storage blocked */ } };
 function useTheme() {
   const [theme, setTheme] = useState(getTheme);
@@ -2022,7 +2022,11 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 @media (max-width:1000px){.px-row2,.pf-start{grid-template-columns:1fr}.pf-sr{border-left:0;border-top:1px solid var(--b1)}
   .px-strip{grid-template-columns:auto 1fr;gap:18px}.px-smix{grid-column:1/-1;padding-left:0;border-left:0;padding-top:14px;border-top:1px solid var(--b1)}.px-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}
   .px-search{width:100%}.px-actions{width:100%}}
-@media (max-width:760px){.px-item{grid-template-columns:1fr;gap:16px;padding:18px 16px 18px 20px}.px-hold>.px-ch{padding:0 14px 12px}}
+@media (max-width:760px){.px-item{grid-template-columns:1fr;gap:16px;padding:18px 16px 18px 20px}.px-hold>.px-ch{padding:0 14px 12px}
+  .px-strip{grid-template-columns:1fr;gap:14px;justify-items:stretch}.px-sg{justify-self:center}
+  .px-sm2 .px-label{justify-content:center;text-align:center}.px-sfacts{flex-direction:column;align-items:stretch;gap:14px}.px-sm2 .px-sv{align-items:center}
+  .px-facts{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px;padding:14px 0 0;border-left:0;border-top:1px solid var(--b1)}
+  .px-facts dd{white-space:normal;overflow-wrap:anywhere}.px-smix{padding-top:14px}}
 @media (max-width:640px){.px-tabs{grid-template-columns:1fr 1fr}.px-tab:nth-child(odd)::before{display:none}.px-strip{padding:14px 16px}.px-smix .px-splitl{grid-template-columns:1fr 1fr}
   .px-sumc{padding:18px 16px}
   .px-headline h2{font-size:19px}.px-ht h1{font-size:24px}
