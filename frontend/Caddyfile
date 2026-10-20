@@ -1,4 +1,5 @@
-# DOMAIN comes from .env — e.g. hyperplane-kiruba.duckdns.org
+# DOMAIN comes from .env — e.g. hyperplane.quantfriday.in
+# OLD_DOMAIN (optional, .env) — a previous address that now forwards to DOMAIN, path kept (e.g. hyperplane.duckdns.org).
 # Caddy gets and renews the HTTPS certificate by itself.
 # For a quick test without a domain set DOMAIN=:80 (plain http).
 
@@ -12,6 +13,12 @@
 			idle 2m
 		}
 	}
+}
+
+# Old address → new address, keeping the path (/app, /app/…, bookmarks). Customers sign in once on the new address
+# (sign-in cookies belong to one address). Caddy also gets a certificate for the old name so https:// links keep working.
+{$OLD_DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
 }
 
 {$DOMAIN} {

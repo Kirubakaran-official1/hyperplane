@@ -491,6 +491,12 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
 
 ---
 
+- Admin → 👥 Customers → "Customer accounts": "📋 Copy table (N)" (tab-separated with headings → paste into Excel /
+  Google Sheets) and "⬇ Download Excel (N)" (`Hyperplane-customers-<date>.xlsx`, sheet "Customers", via the xlsx package
+  already in the admin bundle). Both export exactly the rows on screen (status pill + search); columns: Name, Email,
+  WhatsApp, City, State, Country, Status (active / expired / pending / blocked), Access until, Joined, Approved on, Last
+  login, Logins, Locked until, Signed up from IP, Notes (`CUST_EXPORT` in server.jsx). Owner, 2026-10-18.
+
 ## 8. Develop and test
 
 ### Scanner rule tests (run after ANY scanner change)
@@ -538,6 +544,13 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
   deploys when `main` changes was offered as an alternative; not built yet.
 - Only changed images rebuild; data volumes are untouched. HTTPS by Caddy for `DOMAIN`. Oracle needs ports 80/443 open
   in the VCN security list AND in iptables (see README Part 3). Backups: `backups/hyperplane_*.dump` nightly, 14 days.
+
+**Own domain (owner, 2026-10-20):** `quantfriday.in` bought at Hostinger (Hostinger nameservers). Plan: admin + customers
+on `hyperplane.quantfriday.in` (customers at /app); DNS A record `hyperplane` → server IP 130.210.46.117. Server `.env`:
+`DOMAIN=hyperplane.quantfriday.in` and `OLD_DOMAIN=hyperplane.duckdns.org` — the Caddyfile's `{$OLD_DOMAIN}` block
+301-redirects the old address to the new one keeping the path (compose default = unused `http://old-address.localhost`).
+Switch `.env` only AFTER the new name resolves, or Caddy cannot get the certificate. Customers sign in once on the new
+address (cookies are per address). Keep the DuckDNS updater running a few months for the redirect.
 
 ## 10. History (for context)
 

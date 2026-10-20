@@ -1,5 +1,6 @@
 // Server shell around the Hyperplane dashboard: login, data picker, Admin (settings, Sync now, customers), Compare, Helpdesk.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   Dashboard, mapDB, parseWorkbookFile, HyperplaneLogo, ThemeToggle, CSS, APP_NAME, FocusCard, Pill, SymCell,
   ListCopy, HealthBadge, HEALTH_C, HEALTH_LEVELS, sectorColor, SectionTitle, EqRow, formatDateLabel,
@@ -695,6 +696,30 @@ const CUST_STATUS_C = { pending: "var(--mixed)", approved: "var(--long)", blocke
 const RCOL = { G: "var(--long)", M: "var(--mixed)", W: "var(--short)", "-": "var(--t3)" };
 const EMPTY_CUST = { name: "", email: "", phone: "", country: "India", state: "", city: "", password: "", status: "approved", expires_on: "" };
 
+// Customer table → Excel download / copy for pasting into Excel (owner, 2026-10-18). Exports exactly the rows on screen
+// (status filter + search applied; "All" = every customer).
+const CUST_EXPORT = [
+  ["Name", c => c.name], ["Email", c => c.email], ["WhatsApp", c => c.phone || ""], ["City", c => c.city || ""], ["State", c => c.state || ""],
+  ["Country", c => c.country || ""], ["Status", (c, today) => c.status === "approved" ? (c.expires_on && c.expires_on < today ? "expired" : "active") : c.status],
+  ["Access until", c => c.expires_on || ""], ["Joined", c => c.created_at ? fmtDT(c.created_at) : ""], ["Approved on", c => c.approved_at ? fmtDT(c.approved_at) : ""],
+  ["Last login", c => c.last_login ? fmtDT(c.last_login) : ""], ["Logins", c => c.login_count ?? 0],
+  ["Locked until", c => c.locked_until && new Date(c.locked_until) > new Date() ? fmtDT(c.locked_until) : ""],
+  ["Signed up from IP", c => c.signup_ip || ""], ["Notes", c => c.notes || ""],
+];
+const custTable = (rows, today) => [CUST_EXPORT.map(([h]) => h), ...rows.map(c => CUST_EXPORT.map(([, f]) => f(c, today)))];
+function downloadCustomers(rows, today) {
+  const ws = XLSX.utils.aoa_to_sheet(custTable(rows, today));
+  ws["!cols"] = CUST_EXPORT.map(([h]) => ({ wch: Math.max(10, Math.min(36, h.length + 4, ...rows.map(c => String(CUST_EXPORT.find(x => x[0] === h)[1](c, today)).length + 2))) }));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Customers");
+  XLSX.writeFile(wb, `Hyperplane-customers-${today}.xlsx`);
+}
+async function copyCustomers(rows, today) {
+  const text = custTable(rows, today).map(r => r.map(v => String(v).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n");
+  try { await navigator.clipboard.writeText(text); return; } catch { /* fall back below (http, older browsers) */ }
+  const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+}
+
 function CustomersTab({ snaps, notify }) {
   const [list, setList] = useState(null);
   const [pub, setPub] = useState(null);
@@ -827,6 +852,11 @@ function CustomersTab({ snaps, notify }) {
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
           {["all", "pending", "approved", "blocked"].map(k => <Pill key={k} active={statusF === k} color={CUST_STATUS_C[k] || "var(--acc)"} onClick={() => setStatusF(k)}>{k === "all" ? "All" : k[0].toUpperCase() + k.slice(1)} · {counts[k]}</Pill>)}
           <input placeholder="Search name, email, phone, place" value={q} onChange={e => setQ(e.target.value)} style={{ ...input, width: 230 }} />
+          <span style={{ flex: 1 }} />
+          <button id="cust-copy" disabled={!shown.length} title="Copies the rows below with headings; paste into Excel or Google Sheets"
+            onClick={() => copyCustomers(shown, today).then(() => notify(`Copied ${shown.length} customer${shown.length === 1 ? "" : "s"}. Paste into Excel.`), e => notify(e.message, "err"))} style={btn()}>📋 Copy table ({shown.length})</button>
+          <button id="cust-xlsx" disabled={!shown.length} title="Downloads the rows below as an Excel file"
+            onClick={() => { try { downloadCustomers(shown, today); notify(`Excel downloaded: ${shown.length} customer${shown.length === 1 ? "" : "s"}`); } catch (e) { notify(e.message, "err"); } }} style={btn(true)}>⬇ Download Excel ({shown.length})</button>
         </div>
         {adding && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", padding: 10, border: "1px dashed var(--b2)", borderRadius: 8, marginBottom: 10 }}>
