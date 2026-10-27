@@ -90,7 +90,11 @@ async function api(path, opts = {}) {
   if (opts.json !== undefined) { init.body = JSON.stringify(opts.json); init.headers["content-type"] = "application/json"; }
   const res = await fetch(path, init);
   const data = await res.json().catch(() => null);
-  if (!res.ok) { const e = new Error((data && data.detail) || "Something went wrong — please try again"); e.status = res.status; throw e; }
+  if (!res.ok) {
+    const e = new Error((data && data.detail) || "Something went wrong — please try again"); e.status = res.status;
+    e.noAccess = res.headers.get("x-access") === "denied";          // an application outside the customer's roles
+    throw e;
+  }
   return data;
 }
 const fmtDT = iso => iso ? new Date(iso).toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"numeric", minute:"2-digit", timeZone:"Asia/Kolkata" }) : "—";
@@ -181,6 +185,9 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
             <div className="acct-rows">
               <div><span className="lbl">Email</span><span>{me.email}</span></div>
               <div><span className="lbl">Access until</span><span>{me.expires_on ? new Date(me.expires_on + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "No end date"}</span></div>
+              <div><span className="lbl">Plan</span><span className="acct-plan">{(me.roles || []).join(" · ") || "—"}</span></div>
+              <div className="acct-apps"><span className="lbl">Applications</span><span className="acct-chips">{(me.apps || []).length
+                ? me.apps.map(a => <span key={a.key} className="acct-chip"><AppIcon k={a.key}/>{a.name}</span>) : "None yet"}</span></div>
               <div><span className="lbl">Appearance</span><div className="sg">{[["dark", "Dark"], ["light", "Light"]].map(([k, l]) => <button key={k} type="button" className={theme === k ? "on" : ""} onClick={() => setTheme(k)}>{l}</button>)}</div></div>
             </div>
             <p className="sub">To change your email or password, or to renew your access, raise a query in the <b>Helpdesk</b>.</p>
@@ -271,13 +278,105 @@ function Logo({ size = 32 }) {
     </svg>
   );
 }
-const TowerIcon = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>);
 const GuideIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>);
 const Brand = () => <div className="brand"><Logo/><div><div className="brand-name">Hyperplane</div><div className="brand-by">by QuantFriday</div></div></div>;
+
+// ─── side navigation: one item per application the customer's roles allow (Admin → Access manager) ───
+const NavSvg = ({ children, size = 19 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>);
+const APP_ICON = {
+  research: <NavSvg><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/><circle cx="19" cy="8" r="1.2" fill="currentColor"/></NavSvg>,
+  simple: <NavSvg><path d="M12 3l1.9 4.9L19 9.8l-5.1 1.9L12 16.6l-1.9-4.9L5 9.8l5.1-1.9z"/><path d="M19 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></NavSvg>,
+  portfolio: <NavSvg><path d="M21.2 15.9A10 10 0 1 1 8.1 2.8"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></NavSvg>,
+};
+const AppIcon = ({ k }) => APP_ICON[k] || <NavSvg><rect x="4" y="4" width="16" height="16" rx="3"/></NavSvg>;
+const CollapseIcon = () => <NavSvg size={17}><path d="M11 17l-5-5 5-5"/><path d="M18 17l-5-5 5-5"/></NavSvg>;
+const MenuIcon = () => <NavSvg size={20}><path d="M4 7h16M4 12h16M4 17h16"/></NavSvg>;
+const GridIcon = () => <NavSvg><rect x="4" y="4" width="4" height="4" rx="1"/><rect x="10" y="4" width="4" height="4" rx="1"/><rect x="16" y="4" width="4" height="4" rx="1"/>
+  <rect x="4" y="10" width="4" height="4" rx="1"/><rect x="10" y="10" width="4" height="4" rx="1"/><rect x="16" y="10" width="4" height="4" rx="1"/>
+  <rect x="4" y="16" width="4" height="4" rx="1"/><rect x="10" y="16" width="4" height="4" rx="1"/><rect x="16" y="16" width="4" height="4" rx="1"/></NavSvg>;
+const PinIcon = ({ on }) => <NavSvg size={17}><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z" fill={on ? "currentColor" : "none"}/><path d="M12 14v7"/></NavSvg>;
+const SearchIcon = () => <NavSvg size={17}><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></NavSvg>;
+
+// "More apps": every application on the customer's plan, with search and pins (owner, 2026-10-28)
+function AppsPanel({ apps, pins, maxPins, current, onOpen, onPin, onClose, msg }) {
+  const [q, setQ] = useState("");
+  useEffect(() => { const k = e => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
+  const ql = foldText(q.trim());
+  const list = apps.filter(a => !ql || foldText(`${a.name} ${a.description || ""}`).includes(ql));
+  const full = pins.length >= maxPins;
+  const row = a => { const on = pins.includes(a.key); return (
+    <div key={a.key} className={`ap-row ${current === a.key ? "cur" : ""}`} data-app={a.key}>
+      <button type="button" className="ap-open" onClick={() => onOpen(a.key)}>
+        <span className="ap-ic"><AppIcon k={a.key}/></span>
+        <span className="ap-t"><b>{a.name}</b>{a.description && <span>{a.description}</span>}</span>
+      </button>
+      <button type="button" className={`ap-pin ${on ? "on" : ""}`} onClick={() => onPin(a.key)} disabled={!on && full} aria-pressed={on}
+        aria-label={on ? `Unpin ${a.name}` : `Pin ${a.name}`}
+        title={on ? "Unpin from the menu" : full ? `You can pin up to ${maxPins} apps. Unpin one first.` : "Pin to the menu"}><PinIcon on={on}/></button>
+    </div>); };
+  const pinned = list.filter(a => pins.includes(a.key)), rest = list.filter(a => !pins.includes(a.key));
+  return (
+    <>
+      <div className="ap-scrim" onClick={onClose} aria-hidden="true"/>
+      <aside className="ap" role="dialog" aria-label="All apps" id="apps-panel">
+        <div className="ap-head">
+          <label className="ap-search"><SearchIcon/><input autoFocus placeholder="Search apps" value={q} onChange={e => setQ(e.target.value)} aria-label="Search apps" id="apps-search"/></label>
+          <button type="button" className="ap-x" onClick={onClose} aria-label="Close" id="apps-close">✕</button>
+        </div>
+        <div className="ap-note"><b>{pins.length} of {maxPins}</b> pinned to your menu · pin the apps you use most</div>
+        {msg && <div className="ap-msg" role="alert">{msg}</div>}
+        <div className="ap-list">
+          {pinned.length > 0 && <><div className="ap-h">Pinned</div>{pinned.map(row)}</>}
+          {rest.length > 0 && <><div className="ap-h">{pinned.length ? "More apps" : "All apps"}</div>{rest.map(row)}</>}
+          {!list.length && <div className="ap-empty">{apps.length ? <>No app matches “{q}”</> : "No applications on your plan yet"}</div>}
+        </div>
+      </aside>
+    </>
+  );
+}
+const NAV_KEY = "qf_nav";
+// collapsed (icon + name rail) unless the customer opened it wide (owner, 2026-10-28)
+const getNavMin = () => { try { return localStorage.getItem(NAV_KEY) !== "full"; } catch { return true; } };
+
+function SideNav({ apps, pins, face, view, onFace, onDocs, onHelpdesk, unread, min, setMin, open, onClose, moreOn, onMore }) {
+  const rail = apps.filter(a => pins.includes(a.key));           // catalogue order; at most 6 (max_pins)
+  const item = (key, label, icon, on, onClick, badge) => (
+    <button key={key} type="button" className={`sn-it ${on ? "on" : ""}`} onClick={onClick} aria-current={on ? "page" : undefined}
+      aria-label={label} title={label} id={`nav-${key}`}>
+      <span className="sn-ic">{icon}{badge > 0 && <span className="sn-dot" aria-hidden="true"/>}</span>
+      <span className="sn-l">{label}</span>
+      {badge > 0 && <span className="tab-n sn-n">{badge}</span>}
+    </button>);
+  return (
+    <>
+      <div className={`sn-scrim ${open ? "on" : ""}`} onClick={onClose} aria-hidden="true"/>
+      <nav className={`sn ${min ? "min" : ""} ${open ? "open" : ""}`} aria-label="Applications">
+        <div className="sn-head">
+          <button type="button" className="sn-brand" onClick={() => apps[0] && onFace(face || apps[0].key)} aria-label="Hyperplane home">
+            <Logo size={36}/><span className="sn-bt"><span className="brand-name">Hyperplane</span><span className="brand-by">by QuantFriday</span></span>
+          </button>
+          <button type="button" className="sn-tog" onClick={() => setMin(!min)} aria-expanded={!min} aria-label={min ? "Open the menu" : "Close the menu"}
+            title={min ? "Open the menu" : "Close the menu"} id="nav-collapse">{min ? <MenuIcon/> : <CollapseIcon/>}</button>
+        </div>
+        <div className="sn-sec">Applications</div>
+        <div className="sn-list">
+          {rail.map(a => item(a.key, a.name, <AppIcon k={a.key}/>, view === "tower" && face === a.key, () => onFace(a.key)))}
+          {!apps.length && <div className="sn-none">No applications on your plan yet</div>}
+          {apps.length > 0 && !rail.length && <div className="sn-none">Pin apps from More apps</div>}
+        </div>
+        <div className="sn-sec">Support</div>
+        <div className="sn-list">
+          {item("docs", "Docs", <GuideIcon/>, view === "guide", onDocs)}
+          {item("helpdesk", "Helpdesk", <HelpdeskIcon size={18}/>, view === "helpdesk", onHelpdesk, unread)}
+        </div>
+        {apps.length > 0 && <div className="sn-list sn-more">{item("more", "More apps", <GridIcon/>, moreOn, onMore)}</div>}
+      </nav>
+    </>
+  );
+}
 
 const dirKey = d => d === 1 ? "up" : d === -1 ? "down" : "side";
 const dirWord = d => d === 1 ? "uptrend" : d === -1 ? "downtrend" : "sideways";
@@ -1474,7 +1573,9 @@ function DayPicker({ days, sel, asOf, onPick, onOpen }) {
 // ─── main page ───────────────────────────────────────────────────────────────
 const EMPTY = { sectors:[], industries:[], sizes:[], bg:[], fno:false, trend:"all" };
 
-function Home({ me, onOut }) {
+function Home({ me, onOut, reloadMe }) {
+  const apps = me.apps || [];
+  const allowed = apps.map(a => a.key);
   const [rawData, setData] = useState(null); const [err, setErr] = useState("");
   const [mode, setModeState] = useState(getMode);
   const setMode = m => { setModeState(m); try { localStorage.setItem(MODE_KEY, m); } catch { /* storage blocked */ } };
@@ -1486,8 +1587,26 @@ function Home({ me, onOut }) {
   // a peer inside the card: keep only the ORIGINAL stock to go back to (owner: back = the one I picked first)
   const openFromCard = st => { const origin = trail[0] || open; setTrail(origin && origin.s !== st.s ? [origin] : []); setOpenRaw(st); };
   const [view, setView] = useState("tower"); const [hdReq, setHdReq] = useState(null);
-  const [face, setFaceRaw] = useState(() => { try { const f = localStorage.getItem("qf_face"); return f === "simple" || f === "portfolio" ? f : "research"; } catch { return "research"; } });
-  const setFace = f => { setFaceRaw(f); setView("tower"); try { localStorage.setItem("qf_face", f); } catch { /* storage blocked */ } window.scrollTo(0, 0); };
+  const [faceRaw, setFaceRaw] = useState(() => { try { return localStorage.getItem("qf_face") || "research"; } catch { return "research"; } });
+  // only an application the customer's roles allow; otherwise their first one (null = none on their plan)
+  const face = allowed.includes(faceRaw) ? faceRaw : allowed[0] || null;
+  const [navMin, setNavMinRaw] = useState(getNavMin); const [navOpen, setNavOpen] = useState(false);
+  // pinned applications (rail shows at most max_pins; everything is under "More apps"); null = never chose → first 6
+  const maxPins = me.max_pins || 6;
+  const [pinsRaw, setPinsRaw] = useState(me.pins ?? null);
+  useEffect(() => { setPinsRaw(me.pins ?? null); }, [me]);
+  const pins = (pinsRaw ?? allowed.slice(0, maxPins)).filter(k => allowed.includes(k)).slice(0, maxPins);
+  const [moreOpen, setMoreOpen] = useState(false); const [pinMsg, setPinMsg] = useState("");
+  const togglePin = k => {
+    const next = pins.includes(k) ? pins.filter(x => x !== k) : [...pins, k];
+    if (next.length > maxPins) { setPinMsg(`You can pin up to ${maxPins} apps. Unpin one first.`); return; }
+    const prev = pinsRaw; setPinsRaw(next); setPinMsg("");
+    api("/app/api/pins", { method: "PUT", json: { pins: next } })
+      .catch(e => { setPinsRaw(prev); setPinMsg(`Could not save: ${e.message}`); if (e.noAccess) reloadMe(); else if (e.status === 401) onOut(e.message); });
+  };
+  const setNavMin = v => { setNavMinRaw(v); try { localStorage.setItem(NAV_KEY, v ? "min" : "full"); } catch { /* storage blocked */ } };
+  const setFace = f => { setFaceRaw(f); setView("tower"); setNavOpen(false); try { localStorage.setItem("qf_face", f); } catch { /* storage blocked */ } window.scrollTo(0, 0); };
+  const goView = v => { setView(v); setNavOpen(false); window.scrollTo(0, 0); };
   const [simpleSym, setSimpleSym] = useState(null);
   // AI Portfolio: the customer's stock list, saved to their account (no quantities)
   const [pf, setPfRaw] = useState(null); const [pfStatus, setPfStatus] = useState("");
@@ -1501,18 +1620,38 @@ function Home({ me, onOut }) {
   };
   const hdApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); throw e; }), []);
   const unread = useHelpdeskUnread(hdApi, "/app/api/helpdesk");
-  const openHelpdesk = id => { setView("helpdesk"); setHdReq({ id, n: Date.now() }); };
+  const openHelpdesk = id => { goView("helpdesk"); setHdReq({ id, n: Date.now() }); };
+  // Activity log: which application is open (once per visit) and a minute heartbeat while the page is visible
+  const track = useCallback((module, kind) => module && api("/app/api/activity", { method: "POST", json: { module, kind } })
+    .catch(e => { if (e.noAccess) reloadMe(); else if (e.status === 401) onOut(e.message); }), []);
+  useEffect(() => { if (view === "tower" && face) track(face, "open"); }, [view, face]);
+  useEffect(() => {
+    if (view !== "tower" || !face) return undefined;
+    const t = setInterval(() => { if (document.visibilityState === "visible") track(face, "ping"); }, 60000);
+    return () => clearInterval(t);
+  }, [view, face]);
+  // role changes made by Admin show up without signing out: refresh the plan when the customer comes back to the tab
+  useEffect(() => {
+    let last = Date.now();
+    const f = () => { if (document.visibilityState === "visible" && Date.now() - last > 60000) { last = Date.now(); reloadMe(); } };
+    document.addEventListener("visibilitychange", f); window.addEventListener("focus", f);
+    return () => { document.removeEventListener("visibilitychange", f); window.removeEventListener("focus", f); };
+  }, []);
+  useEffect(() => { const k = e => { if (e.key === "Escape") setNavOpen(false); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
   // past days: offered only when the admin has switched it on; sel = { date, part } or null for the latest published data
   const [hist, setHist] = useState(null); const [sel, setSel] = useState(null);
-  const loadHist = () => api("/app/api/history").then(setHist).catch(() => setHist(null));
-  useEffect(() => { loadHist(); }, []);
+  const hasApps = allowed.length > 0;
+  const loadHist = () => hasApps ? api("/app/api/history").then(setHist).catch(() => setHist(null)) : Promise.resolve(setHist(null));
+  useEffect(() => { loadHist(); }, [hasApps]);
   useEffect(() => {
     setData(null); setErr(""); setOpen(null);
+    if (!hasApps) return;
     api("/app/api/data" + (sel ? `?date=${sel.date}&part=${sel.part}` : "")).then(setData).catch(e => {
+      if (e.noAccess) { setErr(e.message); reloadMe(); return; }
       if (sel && e.status !== 401) { setSel(null); setErr(""); return; }      // not available (any more) → back to the latest
       if (e.status === 401 || e.status === 403) onOut(e.message); else setErr(e.message);
     });
-  }, [sel]);
+  }, [sel, hasApps]);
   useEffect(() => setPage(0), [f, tfs, q, sort]);
   const stocks = data ? data.stocks : [];
   const sectorOpts = useMemo(() => [...new Set(stocks.map(s => s.sec))].sort(), [stocks]);
@@ -1551,30 +1690,43 @@ function Home({ me, onOut }) {
   const active = f.sectors.length || f.industries.length || f.sizes.length || f.bg.length || f.fno || f.trend !== "all" || tfs.length;
   const scope = tfs.length ? (tfs.length === 1 ? TF_NAME[tfs[0]] : `all of ${tfs.join(" · ")}`) : "combined";
 
+  const curApp = apps.find(a => a.key === face);
+  const here = view === "helpdesk" ? { icon: <HelpdeskIcon size={18}/>, name: "Helpdesk", sub: "Your questions and our answers" }
+    : view === "guide" ? { icon: <GuideIcon/>, name: "Docs", sub: "How to use Hyperplane · golden rules" }
+    : curApp ? { icon: <AppIcon k={curApp.key}/>, name: curApp.name, sub: curApp.description } : { icon: null, name: "Hyperplane", sub: "" };
   return (
+    <div className={`shell ${navMin ? "nav-min" : ""}`}>
+      <SideNav apps={apps} pins={pins} face={face} view={view} onFace={k => { setMoreOpen(false); setFace(k); }}
+        onDocs={() => { setMoreOpen(false); goView("guide"); }} onHelpdesk={() => { setMoreOpen(false); openHelpdesk(null); }}
+        unread={unread.total} min={navMin} setMin={setNavMin} open={navOpen} onClose={() => { setNavOpen(false); setMoreOpen(false); }}
+        moreOn={moreOpen || (view === "tower" && !!face && !pins.includes(face))} onMore={() => { setPinMsg(""); setMoreOpen(v => !v); }}/>
+      {moreOpen && <AppsPanel apps={apps} pins={pins} maxPins={maxPins} current={view === "tower" ? face : null} msg={pinMsg}
+        onOpen={k => { setMoreOpen(false); setFace(k); }} onPin={togglePin} onClose={() => setMoreOpen(false)}/>}
+      <div className="shell-main">
     <div className="page">
       <header className="top">
-        <button type="button" className="brand-home" onClick={() => setView("tower")} title="Control Tower"><Brand/></button>
-        <div className="sg face" role="tablist" aria-label="View">
-          {[["research", "Research view"], ["simple", "Simplified view (AI Mode)"], ["portfolio", "AI Portfolio Analyser"]].map(([k, l]) => (
-            <button key={k} type="button" role="tab" aria-selected={face === k} className={face === k && view === "tower" ? "on" : ""} onClick={() => setFace(k)}>{l}</button>))}
+        <button type="button" className="sn-burger" onClick={() => setNavOpen(true)} aria-label="Open menu" id="nav-burger"><MenuIcon/></button>
+        <div className="top-here" id="top-here">
+          {here.icon && <span className="th-ic">{here.icon}</span>}
+          <div className="th-t"><b>{here.name}</b>{here.sub && <span className="th-sub">{here.sub}</span>}</div>
         </div>
-        {hist && hist.enabled && hist.days.length
+        {hasApps && (hist && hist.enabled && hist.days.length
           ? <DayPicker days={hist.days} sel={sel} asOf={data && data.as_of} onPick={setSel} onOpen={loadHist}/>
-          : <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : "Loading…"}</div>}
-        <QuickGuideButton onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}/>
+          : <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : err ? "" : "Loading…"}</div>)}
+        <QuickGuideButton onDocs={() => goView("guide")}/>
         <InboxBell unread={unread} onOpen={openHelpdesk}/>
-        <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => { setView("guide"); window.scrollTo(0, 0); }}
+        <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => goView("guide")}
           onSignOut={async () => { await api("/app/api/logout", { method:"POST" }).catch(() => {}); onOut(); }}/>
       </header>
-      {view !== "tower" && (
-        <div className="crumb">
-          <button type="button" onClick={() => setView("tower")}><TowerIcon/>← Control Tower</button>
-          <span className="crumb-sep">/</span>
-          <span className="crumb-here">{view === "helpdesk" ? <><HelpdeskIcon/>Helpdesk</> : <><GuideIcon/>Docs</>}</span>
+
+      {view === "tower" && !hasApps && (
+        <div className="card no-apps" id="no-apps">
+          <div className="na-ic"><NavSvg size={26}><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></NavSvg></div>
+          <h2>No applications on your plan yet</h2>
+          <p className="muted">Your account is active, but no application has been added to your plan. Please raise a query in the Helpdesk and QuantFriday will set it up for you.</p>
+          <button type="button" className="primary" onClick={() => openHelpdesk(null)}>Open Helpdesk</button>
         </div>
       )}
-
       {view === "guide" && <Guide disclaimer={DISCLAIMER}/>}
       {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
       {view === "tower" && face === "portfolio" && (data && pf != null ? <PortfolioView data={data} symbols={pf} setSymbols={setPf} status={pfStatus} me={me}/>
@@ -1667,6 +1819,8 @@ function Home({ me, onOut }) {
       <footer><p className="fine">{DISCLAIMER}</p><p className="fine">© {new Date().getFullYear()} QuantFriday · Hyperplane</p></footer>
       {open && <StockCard key={open.s} s={(data && data.stocks.find(x => x.s === open.s)) || open} data={data} onOpen={openFromCard} onClose={() => setOpen(null)} origin={trail[0] || null}/>}
     </div>
+      </div>
+    </div>
   );
 }
 
@@ -1676,7 +1830,9 @@ function App() {
   useEffect(() => { load(); }, []);
   if (me === undefined) return <div className="loading"><Brand/></div>;
   if (!me) return <AuthScreen onIn={load} notice={notice}/>;
-  return <Home me={me} onOut={msg => { setNotice(typeof msg === "string" ? msg : ""); setMe(null); }}/>;
+  // later refreshes (plan changed by Admin) keep the page on a network hiccup; only a real sign-out ends it
+  const refresh = () => api("/app/api/me").then(setMe).catch(e => { if (e.status === 401 || e.status === 403) { setMe(null); if (e.status === 403) setNotice(e.message); } });
+  return <Home me={me} reloadMe={refresh} onOut={msg => { setNotice(typeof msg === "string" ? msg : ""); setMe(null); }}/>;
 }
 
 // Same palette and type as the Hyperplane dashboard (dark)
@@ -2175,7 +2331,7 @@ td.cur .dbar{margin-top:7px}.m-row .dbar{min-width:80px}
 .ms-q{padding:7px 9px;font-size:12px;margin-bottom:6px}.ms-clear{background:none;border:0;color:var(--acc);font-size:11.5px;padding:2px 4px;float:right}
 .ms-list{max-height:280px;overflow:auto;clear:both}.ms-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;font-size:12.5px;cursor:pointer;text-transform:none;letter-spacing:0;font-weight:500;color:var(--t1)}
 .ms-item:hover{background:var(--s2)}.ms-item input{width:15px;height:15px;accent-color:#00e5ff}.ms-empty{padding:8px;color:var(--t3);font-size:12px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-bottom:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(138px,1fr));gap:8px;margin-bottom:12px}
 .kpi{padding:11px 14px;display:flex;flex-direction:column;gap:3px;position:relative}.kpi::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:10px 10px 0 0;background:var(--acc);opacity:.5}
 .kpi .lbl{display:flex;align-items:center;gap:5px}
 .kpi.up::before{background:var(--long)}.kpi.down::before{background:var(--short)}.kpi.bi::before{background:var(--ret)}.kpi.side::before{background:var(--t3)}.kpi.side b{color:var(--t1)}.kpi.side .kbar div{background:var(--t3)}.kpi.bi .kbar div{background:var(--ret)}
@@ -2268,8 +2424,100 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 }
 .m-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0}
 footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
-@media (min-width:1380px){.fbar{flex-wrap:nowrap}.fbar .fg{flex-shrink:0}.fbar .fg.grow{flex:0 1 150px;min-width:96px}.fbar .fg.grow .ms{width:100%!important}.fbar .reset{flex-shrink:0;padding:0 9px}}
+/* one-row filter bar only when the CONTENT (viewport minus the side nav) is 1380px+ wide */
+@media (min-width:1615px){.shell:not(.nav-min) .fbar{flex-wrap:nowrap}.shell:not(.nav-min) .fbar .fg{flex-shrink:0}.shell:not(.nav-min) .fbar .fg.grow{flex:0 1 150px;min-width:96px}.shell:not(.nav-min) .fbar .fg.grow .ms{width:100%!important}.shell:not(.nav-min) .fbar .reset{flex-shrink:0;padding:0 9px}}
+@media (min-width:1480px){.shell.nav-min .fbar{flex-wrap:nowrap}.shell.nav-min .fbar .fg{flex-shrink:0}.shell.nav-min .fbar .fg.grow{flex:0 1 150px;min-width:96px}.shell.nav-min .fbar .fg.grow .ms{width:100%!important}.shell.nav-min .fbar .reset{flex-shrink:0;padding:0 9px}}
 @media (max-width:900px){.top .tabs{order:5;width:100%;margin:0 0 8px}.top .tabs button{flex:1;justify-content:center}.auth-page{grid-template-columns:1fr}.hero{padding:30px 22px;border-right:0;border-bottom:1px solid var(--b1)}.hero-h{font-size:28px}.hero-demo{display:none}.panels{grid-template-columns:1fr}.m-overall{grid-template-columns:auto auto}.cv-verdict{grid-column:1/-1;justify-self:start;white-space:normal}}
+/* shell: side navigation (applications from the customer's roles) + content. A dark rail in both themes; collapsed
+   (default) = icon with its name underneath, open = icon + name in a row (owner's reference, 2026-10-28) */
+.shell{--nav-w:208px;min-height:100vh}.shell.nav-min{--nav-w:76px}
+.shell-main{padding-left:var(--nav-w);transition:padding-left .22s ease;min-width:0}
+.sn{--rail:#1e2532;--rail-b:rgba(255,255,255,.07);--rail-t:#a7b2c3;--rail-h:rgba(255,255,255,.06);--rail-on:rgba(255,255,255,.12);--rail-acc:#22d3ee;
+  position:fixed;left:0;top:0;bottom:0;z-index:30;width:var(--nav-w);display:flex;flex-direction:column;padding:12px 10px;background:var(--rail);border-right:1px solid var(--rail-b);
+  color:var(--rail-t);transition:width .22s ease,transform .25s ease;overflow:hidden auto;scrollbar-width:none}
+.sn::-webkit-scrollbar{display:none}
+:root:not([data-theme="light"]) .sn{--rail:#0a1322;--rail-b:#1b2d48}
+.sn-head{display:flex;align-items:center;gap:8px;padding:2px 2px 12px;margin-bottom:4px;border-bottom:1px solid var(--rail-b)}
+.sn-brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:4px;border:0;border-radius:10px;background:none;color:inherit;text-align:left}
+.sn-bt{display:flex;flex-direction:column;white-space:nowrap;min-width:0}.sn-bt .brand-name{font-size:16px;color:#fff}.sn-bt .brand-by{margin-top:1px;color:var(--rail-t)}
+.sn-tog{flex:0 0 36px;height:36px;display:flex;align-items:center;justify-content:center;border:1px solid var(--rail-b);border-radius:9px;background:rgba(255,255,255,.04);color:var(--rail-t);transition:background .15s,color .15s}
+.sn-tog:hover{background:var(--rail-h);color:#fff}
+.sn-sec{padding:14px 12px 6px;font-size:9px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:rgba(255,255,255,.38);white-space:nowrap}
+.sn-list{display:flex;flex-direction:column;gap:4px}
+.sn-it{position:relative;display:flex;align-items:center;gap:11px;width:100%;min-height:42px;padding:0 12px;border:0;border-radius:10px;background:none;color:var(--rail-t);font-size:12.5px;font-weight:600;text-align:left;white-space:nowrap;transition:background .15s,color .15s}
+.sn-it:hover{background:var(--rail-h);color:#fff}
+.sn-it.on{background:var(--rail-on);color:#fff}
+.sn-it.on::before{content:"";position:absolute;left:-10px;top:8px;bottom:8px;width:4px;border-radius:0 4px 4px 0;background:var(--rail-acc)}
+.sn-it.on .sn-ic{color:var(--rail-acc)}
+.sn-it:focus-visible,.sn-tog:focus-visible,.sn-brand:focus-visible{outline:2px solid var(--rail-acc);outline-offset:1px}
+.sn-ic{position:relative;flex:0 0 22px;display:flex;align-items:center;justify-content:center}
+.sn-l{white-space:normal;line-height:1.3;padding:6px 0;overflow-wrap:break-word;min-width:0}.sn-n{margin-left:auto}
+.sn-dot{display:none;position:absolute;top:-3px;right:-5px;width:9px;height:9px;border-radius:50%;background:#ff4454;box-shadow:0 0 0 2px var(--rail)}
+.sn-none{padding:6px 12px;font-size:12px;color:var(--rail-t);white-space:normal;line-height:1.4}
+.sn-scrim,.sn-burger{display:none}
+.sn-more{margin-top:auto;padding-top:10px;border-top:1px solid var(--rail-b)}
+/* More apps panel: slides out beside the rail */
+.ap-scrim{position:fixed;top:0;bottom:0;right:0;left:var(--nav-w);z-index:29;background:rgba(6,11,20,.38);animation:apFade .15s ease}
+.ap{position:fixed;top:0;bottom:0;left:var(--nav-w);z-index:31;width:min(360px,calc(100vw - var(--nav-w)));display:flex;flex-direction:column;
+  background:#252d3b;color:#c3ccd9;border-right:1px solid rgba(255,255,255,.07);box-shadow:24px 0 60px -24px rgba(0,0,0,.55);animation:apIn .18s ease}
+:root:not([data-theme="light"]) .ap{background:#0f1a2c;border-right-color:#1b2d48}
+@keyframes apIn{from{transform:translateX(-14px);opacity:0}to{transform:none;opacity:1}}@keyframes apFade{from{opacity:0}to{opacity:1}}
+.ap-head{display:flex;align-items:center;gap:8px;padding:14px 14px 10px}
+.ap-search{flex:1;display:flex;align-items:center;gap:9px;height:40px;padding:0 12px;border:1px solid rgba(255,255,255,.18);border-radius:9px;color:#c3ccd9}
+.ap-search:focus-within{border-color:#22d3ee}
+.ap-search input{border:0;background:none;padding:0;color:#fff;font-size:13.5px;outline:none;color-scheme:dark}.ap-search input:focus{outline:none}
+.ap-search input::placeholder{color:#8f9bad}
+.ap-x{width:36px;height:36px;border:0;border-radius:9px;background:none;color:#c3ccd9;font-size:15px}.ap-x:hover{background:rgba(255,255,255,.07);color:#fff}
+.ap-note{padding:0 16px 8px;font-size:11.5px;color:#8f9bad}.ap-note b{color:#fff}
+.ap-msg{margin:0 14px 8px;padding:8px 10px;border-radius:8px;background:rgba(255,170,0,.12);color:#ffcf66;font-size:12px}
+.ap-list{flex:1;overflow:auto;padding:0 8px 14px;scrollbar-width:thin}
+.ap-h{padding:12px 10px 6px;font-size:9.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:rgba(255,255,255,.4)}
+.ap-row{display:flex;align-items:center;gap:4px;border-radius:10px}.ap-row:hover{background:rgba(255,255,255,.06)}
+.ap-row.cur{background:rgba(255,255,255,.1)}.ap-row.cur .ap-ic{color:#22d3ee}
+.ap-open{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:9px 8px;border:0;background:none;color:inherit;text-align:left}
+.ap-ic{flex:0 0 34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);color:#dfe6f0}
+.ap-t{display:flex;flex-direction:column;min-width:0}.ap-t b{font-size:13.5px;font-weight:600;color:#fff}
+.ap-t span{font-size:11px;color:#8f9bad;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-pin{flex:0 0 34px;height:34px;margin-right:4px;border:0;border-radius:8px;background:none;color:#7d899b;display:flex;align-items:center;justify-content:center}
+.ap-pin:hover:not(:disabled){background:rgba(255,255,255,.08);color:#fff}.ap-pin.on{color:#22d3ee}.ap-pin:disabled{opacity:.3;cursor:not-allowed}
+.ap-open:focus-visible,.ap-pin:focus-visible,.ap-x:focus-visible{outline:2px solid #22d3ee;outline-offset:1px}
+.ap-empty{padding:24px 12px;text-align:center;font-size:12.5px;color:#8f9bad}
+@media (min-width:901px){
+  .sn.min{padding:12px 5px}
+  .sn.min .sn-head{flex-direction:column;gap:10px;padding:2px 0 12px}
+  .sn.min .sn-brand{flex:none;justify-content:center;padding:2px}.sn.min .sn-bt{display:none}
+  .sn.min .sn-tog{flex:none;width:36px;height:34px}
+  .sn.min .sn-sec{height:1px;padding:0;margin:10px 8px;font-size:0;background:var(--rail-b)}
+  .sn.min .sn-it{flex-direction:column;justify-content:center;gap:5px;min-height:58px;padding:8px 2px;text-align:center;white-space:normal}
+  .sn.min .sn-it.on::before{left:-5px;top:10px;bottom:10px}
+  .sn.min .sn-ic svg{width:21px;height:21px}
+  .sn.min .sn-l{padding:0;font-size:9.5px;font-weight:600;line-height:1.25;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:break-word;max-width:100%}
+  .sn.min .sn-n,.sn.min .sn-none{display:none}
+  .sn.min .sn-dot{display:block}
+}
+.top-here{display:flex;align-items:center;gap:11px;min-width:0;margin-right:auto}
+.th-ic{flex:0 0 36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--adim);color:var(--acc);border:1px solid var(--accb)}
+.th-t{display:flex;flex-direction:column;min-width:0}.th-t b{font-size:15.5px;line-height:1.25;white-space:nowrap}
+.th-sub{font-size:11.5px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52ch}
+.top-here+.asof,.top-here+.dp{margin-left:0}
+.no-apps{max-width:560px;margin:64px auto;padding:36px 32px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
+.no-apps h2{margin:0;font-size:20px}.no-apps p{margin:0;line-height:1.6}.no-apps .primary{padding:10px 22px;margin-top:6px}
+.na-ic{width:56px;height:56px;border-radius:16px;display:flex;align-items:center;justify-content:center;background:var(--adim);color:var(--acc);border:1px solid var(--accb)}
+.acct-rows>div.acct-apps{align-items:flex-start}.acct-plan{font-weight:600}
+.acct-chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.acct-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px 3px 7px;border-radius:999px;border:1px solid var(--b2);background:var(--s2);font-size:12px;white-space:nowrap}
+.acct-chip svg{width:14px;height:14px;color:var(--acc)}
+@media (max-width:1100px){.th-sub{display:none}}
+@media (max-width:900px){
+  .shell-main{padding-left:0}
+  .sn{width:280px;transform:translateX(-102%);box-shadow:24px 0 60px -24px rgba(0,0,0,.5);z-index:45}.sn.open{transform:none}
+  .sn-scrim{display:block;position:fixed;inset:0;z-index:44;background:rgba(6,11,20,.5);opacity:0;pointer-events:none;transition:opacity .2s}
+  .sn-scrim.on{opacity:1;pointer-events:auto}
+  .sn-tog{display:none}
+  .ap{left:0;width:min(360px,100vw);z-index:47}.ap-scrim{left:0;z-index:46}
+  .sn-burger{display:flex;align-items:center;justify-content:center;flex:0 0 38px;height:38px;border:1px solid var(--b2);border-radius:9px;background:var(--s2);color:var(--t1)}
+  .th-ic{display:none}
+}
 @media (max-width:640px){.auth-page .feats,.auth-page .hero-fine{display:none}.hero-p{font-size:13.5px}.hero{gap:10px}.top{gap:8px 12px;padding-top:8px}.top .hd-bell-wrap{margin-left:auto}.asof{order:4}.dp{order:4;margin-left:0;width:100%}.dp-btn{width:100%;justify-content:center}.dp-pop{left:0;right:auto;width:100%}.fbar{position:static}.reset{margin-left:0}.hide-sm{display:none}.asof{margin-left:0;width:100%}.grid2{grid-template-columns:1fr}.m-row{grid-template-columns:76px minmax(0,1fr) 104px}.m-row .dirtag{display:none}.t-tools .search{width:100%}}
 `;
 

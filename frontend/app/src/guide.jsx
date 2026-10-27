@@ -31,10 +31,16 @@ const SECTIONS = [
   { id: "welcome", t: "Welcome", body: <>
     <p><b>Hyperplane</b> shows you, in one screen, <b>which way Indian stocks are trending and how strong that trend is</b> — stock by
       stock, and also for every <b>sector</b> and <b>industry</b>. It helps you find good candidates quickly and avoid weak ones.</p>
-    <p>The <b>Control Tower</b> is the main page — filters, summary tiles, sector and industry charts, and the full stock list.
-      Click the <b>Hyperplane</b> logo (top left) to come back to it from anywhere. The menu under <b>your name</b> (top right) has:</p>
+    <p><b>The side menu on the left</b> lists the applications on your plan — <b>Research view</b> (the Control Tower: filters, summary
+      tiles, sector and industry charts and the full stock list), <b>Simplified view (AI Mode)</b> and <b>AI Portfolio Analyser</b> — and,
+      below them, <b>Docs</b> and <b>Helpdesk</b>. It starts narrow — each icon with its name underneath. Press <b>☰</b> at the top of the
+      menu to open it wider, and <b>«</b> to make it narrow again. Your choice is remembered on this device. The menu shows up to
+      <b> 6 pinned apps</b>; <b>More apps</b> at the bottom lists every app on your plan — search them, open one, or press the pin to put it
+      in the menu (or take it out). Your pins are saved to your account. On a phone, tap <b>☰</b> (top left) to open
+      the menu. If an application is missing from your menu, it is not part of your plan — ask us in the Helpdesk. The menu under
+      <b> your name</b> (top right) has:</p>
     <ul>
-      <li><b>Account</b> — your details and how long your access lasts.</li>
+      <li><b>Account</b> — your details, your plan, its applications and how long your access lasts.</li>
       <li><b>Helpdesk</b> — ask us anything; our replies arrive there and on the 🔔 bell.</li>
       <li><b>Docs</b> — this page. Sections <b className="g-gold">9</b> and <b className="g-gold">10</b> are a must-read.</li>
       <li><b>Appearance</b> — switch between the dark and the light screen. Your choice is remembered on this device.</li>
@@ -255,7 +261,7 @@ const SECTIONS = [
   </> },
 
   { id: "simple", t: "Simplified view (AI Mode) & the overall trend meter", body: <>
-    <p>Switch to <b>Simplified view (AI Mode)</b> at the top of the page. Type a company name or ticker, pick it from the list, and the page shows:</p>
+    <p>Open <b>Simplified view (AI Mode)</b> in the side menu on the left. Type a company name or ticker, pick it from the list, and the page shows:</p>
     <ul>
       <li><b>Trading mode</b> — Balanced, Swing or Investing. It is the same setting as the Research view; changing it in one changes both.</li>
       <li><b>Hyperplane AI summary</b> — one verdict and a short paragraph in plain words, then four tiles:
@@ -303,7 +309,7 @@ const SECTIONS = [
   </> },
 
   { id: "portfolio", t: "AI Portfolio · Hyperplane AI by QuantFriday", body: <>
-    <p>Open <b>AI Portfolio Analyser</b> at the top. Add the stocks you own one by one. No quantities are needed, and you can add as many as
+    <p>Open <b>AI Portfolio Analyser</b> in the side menu on the left. Add the stocks you own one by one. No quantities are needed, and you can add as many as
       you like. When your list is ready, press <b>Analyse my portfolio</b>. You can add more stocks or edit the list at any time.</p>
     <p><b>Private to you:</b> your stock list is visible only to you, the account holder. It is never visible to other users or to
       the admin, as per SEBI norms. We take the privacy of your investments seriously.</p>
@@ -362,7 +368,7 @@ const SECTIONS = [
       <dt>Why can't I find a stock?</dt><dd>Check your filters (press <b>Reset</b>). Indices and ETFs are not listed — only stocks.</dd>
       <dt>Why is a stock strong on Daily but weak on Yearly?</dt><dd>Different timeframes look at different periods. A short-term rise can happen inside a long-term fall — see golden rule 3.</dd>
       <dt>What does “—” mean?</dt><dd>Not enough data for that timeframe yet (for example a recently listed stock).</dd>
-      <dt>What is the Simplified view?</dt><dd>Switch at the top between <b>Research view</b> (this full page) and <b>Simplified view (AI Mode)</b>. In the Simplified view you type a company name, pick it from the list, and read it in plain words: an <b>overall trend meter</b> (down ← sideways → up; see <b>Simplified view &amp; the overall trend meter</b> above for how it is worked out), and a <b>Hyperplane AI summary</b>: one overall verdict plus four tiles — the stock, its sector and its industry (each as a percentage), and the stock's historical reliability (High / Medium / Low). Hyperplane AI is built on our own quant algorithms (fixed rules on the same data) — no outside AI service.</dd>
+      <dt>What is the Simplified view?</dt><dd>Switch in the side menu between <b>Research view</b> (the full Control Tower) and <b>Simplified view (AI Mode)</b>. In the Simplified view you type a company name, pick it from the list, and read it in plain words: an <b>overall trend meter</b> (down ← sideways → up; see <b>Simplified view &amp; the overall trend meter</b> above for how it is worked out), and a <b>Hyperplane AI summary</b>: one overall verdict plus four tiles — the stock, its sector and its industry (each as a percentage), and the stock's historical reliability (High / Medium / Low). Hyperplane AI is built on our own quant algorithms (fixed rules on the same data) — no outside AI service.</dd>
       <dt>Can I look at an earlier day?</dt><dd>When it is available, click <b>Data as of</b> at the top, pick a date, then <b>Day open</b> or <b>Day end</b>. The button turns yellow and says <b>Viewing</b> while you look at a past day — open it again and press <b>↺ Latest data</b> to return.</dd>
       <dt>Do the bubble charts follow my filters?</dt><dd>They follow the <b>Timeframe</b> and they filter the list when you click them. They always show the whole market, so you can compare every group.</dd>
       <dt>Is this a recommendation?</dt><dd>No. It is trend information for education — see below.</dd>
