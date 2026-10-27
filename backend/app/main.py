@@ -13,6 +13,8 @@ Hyperplane API.
                             customers (the /app accounts) and publishing the customer view
   /api/auth/check           used by Caddy: the dashboard files are only served to logged-in users
   /api/helpdesk/*           queries and conversations (users: their own; admins: everyone's, incl. customers)
+  /api/admin/access, roles, modules     Access manager — roles and applications of the customer app (RBAC)
+  /api/admin/activity/*     Activity log — sign-ins, devices, applications used and minutes per application
 """
 import hmac
 import os
@@ -22,12 +24,13 @@ import time as _time
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
+from . import activity as act
 from . import config
 from . import helpdesk as hd
 from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
@@ -39,6 +42,7 @@ from .store import save_snapshot, taken_at_from_filename, workbook_to_sheets
 
 app = FastAPI(title="Hyperplane", docs_url=None, redoc_url=None)
 COOKIE = "hp_session"
+DEV_COOKIE = "hp_dev"                               # one id per browser / system (Activity log)
 EXCEL_DIR = os.path.join(config.DATA_DIR, "excel")
 
 
@@ -83,6 +87,15 @@ class LoginIn(BaseModel):
     password: str
 
 
+def _user_log(request: Request, event, name=None, known=True, **detail):
+    """Dashboard (config.ini) sign-ins in the Activity log."""
+    dev = request.cookies.get(DEV_COOKIE) or ""
+    with pool.connection() as c:
+        act.log(c, actor_kind="user", actor_id=name if known else None, actor_name=name, app="admin", event=event,
+                device_id=dev if act.DEV_RE.match(dev) else None, device=act.device_label(request.headers.get("user-agent")),
+                ip=_client_ip(request), detail=detail or None)
+
+
 @app.post("/api/login")
 def login(body: LoginIn, request: Request, response: Response):
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
@@ -93,14 +106,18 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(429, "Too many attempts — wait 5 minutes")
     name = body.username.strip()
     fails, locked = _user_fails.get(name, (0, 0))
-    if locked > _time.time():
-        raise HTTPException(429, "Too many attempts — wait 15 minutes")
     u = config.users().get(name)
+    if locked > _time.time():
+        _user_log(request, "login_failed", name[:60], bool(u), reason="locked")
+        raise HTTPException(429, "Too many attempts — wait 15 minutes")
     ok = bool(u) and hmac.compare_digest(u["password"].encode(), body.password.encode())
     if not ok:
         q.append(_time.time())
         fails += 1
         _user_fails[name] = (0, _time.time() + USER_LOCK_SECONDS) if fails >= USER_MAX_FAILS else (fails, 0)
+        _user_log(request, "login_failed", name[:60], bool(u), reason="wrong_password" if u else "unknown_user")
+        if u and fails >= USER_MAX_FAILS:
+            _user_log(request, "locked", name, minutes=USER_LOCK_SECONDS // 60)
         _time.sleep(0.6)                           # slows down password guessing
         raise HTTPException(401, "Wrong user ID or password")
     q.clear()
@@ -109,11 +126,22 @@ def login(body: LoginIn, request: Request, response: Response):
     secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
     response.set_cookie(COOKIE, token, max_age=config.session_hours() * 3600, httponly=True,
                         samesite="strict", secure=secure, path="/")
+    dev, _ = act.device_id(request, DEV_COOKIE)
+    act.set_device_cookie(request, response, DEV_COOKIE, dev, "/")
+    with pool.connection() as c:
+        act.log(c, actor_kind="user", actor_id=name, actor_name=name, app="admin", event="login", device_id=dev,
+                device=act.device_label(request.headers.get("user-agent")), ip=_client_ip(request),
+                detail={"admin": bool(u["admin"])})
     return {"name": body.username.strip(), "admin": u["admin"]}
 
 
 @app.post("/api/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    try:
+        u = current_user(request)
+        _user_log(request, "logout", u["name"])
+    except HTTPException:
+        pass
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
 
@@ -445,7 +473,21 @@ def set_customer_history(body: HistoryIn, user=Depends(admin_user)):
 @app.get("/api/admin/customers")
 def list_customers(user=Depends(admin_user)):
     with pool.connection() as c:
-        return [_cust(r) for r in c.execute(f"SELECT {CUSTOMER_COLS} FROM customers ORDER BY created_at DESC").fetchall()]
+        return [_cust(r) for r in c.execute(
+            f"SELECT {CUSTOMER_COLS}, ARRAY(SELECT role_id FROM customer_roles r WHERE r.customer_id = customers.id ORDER BY role_id) AS roles, "
+            "(SELECT count(*) FROM customer_sessions s WHERE s.customer_id = customers.id AND s.ended_at IS NULL "
+            " AND s.created_at > now() - interval '7 days') AS devices "
+            "FROM customers ORDER BY created_at DESC").fetchall()]
+
+
+def _end_sessions(c, cid, reason, by, event=None, name=None):
+    """Sign a customer out on every device (their session rows end; the cookie check refuses them)."""
+    n = c.execute("UPDATE customer_sessions SET ended_at = now(), end_reason = %s WHERE customer_id = %s AND ended_at IS NULL",
+                  (reason, cid)).rowcount
+    if event:
+        act.log(c, actor_kind="customer", actor_id=cid, actor_name=name, app="customer", event=event,
+                detail={"by": by, "devices": n})
+    return n
 
 
 @app.post("/api/admin/customers")
@@ -488,6 +530,8 @@ def update_customer(cid: int, body: CustomerPatch, user=Depends(admin_user)):
         raise HTTPException(422, "Nothing to change")
     with pool.connection() as c:
         r = c.execute(f"UPDATE customers SET {', '.join(sets)} WHERE id = %s RETURNING {CUSTOMER_COLS}", (*args, cid)).fetchone()
+        if r and body.status in ("blocked", "pending"):
+            _end_sessions(c, cid, "blocked", user["name"], "blocked" if body.status == "blocked" else None, r["name"])
     if not r:
         raise HTTPException(404, "Customer not found")
     return _cust(r)
@@ -498,7 +542,9 @@ def reset_customer_password(cid: int, body: PasswordIn, user=Depends(admin_user)
     _check_pw(body.password)
     with pool.connection() as c:
         r = c.execute("UPDATE customers SET pw_hash = %s, session_ver = session_ver + 1, failed_logins = 0, locked_until = NULL "
-                      "WHERE id = %s RETURNING id", (hash_password(body.password), cid)).fetchone()
+                      "WHERE id = %s RETURNING id, name", (hash_password(body.password), cid)).fetchone()
+        if r:
+            _end_sessions(c, cid, "password_reset", user["name"], "password_reset", r["name"])
     if not r:
         raise HTTPException(404, "Customer not found")
     return {"ok": True}
@@ -511,6 +557,499 @@ def delete_customer(cid: int, user=Depends(admin_user)):
     if not r:
         raise HTTPException(404, "Customer not found")
     return {"ok": True}
+
+
+# ─────────────────────────────── Access manager (RBAC, customer app only) ───────────────────────────────
+# Applications = the customer app's modules (fixed catalogue); roles group applications; a customer holds one or more
+# roles and may open the union of their applications. Exactly one role is the default (given to every new customer).
+ROLE_NAME_MAX, ROLE_DESC_MAX = 40, 200
+
+
+class RoleIn(BaseModel):
+    name: str
+    description: str = ""
+    modules: list[str] = []
+    is_default: bool = False
+
+
+class RolePatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    modules: list[str] | None = None
+    is_default: bool | None = None
+
+
+class ModulePatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+
+
+class CustomerRolesIn(BaseModel):
+    role_ids: list[int]
+
+
+class BulkRolesIn(BaseModel):
+    customer_ids: list[int]
+    add: list[int] = []
+    remove: list[int] = []
+
+
+def _iso(v):
+    return v.astimezone(TZ).isoformat() if v else None
+
+
+def _modules_all(c):
+    return c.execute("SELECT key, name, description, sort, enabled FROM app_modules ORDER BY sort, key").fetchall()
+
+
+def _roles_all(c):
+    rows = c.execute(
+        "SELECT r.id, r.name, r.description, r.is_default, r.is_system, r.created_at, r.updated_at, r.updated_by, "
+        "ARRAY(SELECT rm.module FROM role_modules rm JOIN app_modules m ON m.key = rm.module WHERE rm.role_id = r.id ORDER BY m.sort) AS modules, "
+        "(SELECT count(*) FROM customer_roles cr WHERE cr.role_id = r.id) AS users "
+        "FROM roles r ORDER BY r.is_system DESC, r.is_default DESC, lower(r.name)").fetchall()
+    return [{**r, "created_at": _iso(r["created_at"]), "updated_at": _iso(r["updated_at"])} for r in rows]
+
+
+def _access(c):
+    return {"modules": _modules_all(c), "roles": _roles_all(c)}
+
+
+def _clean_modules(c, mods):
+    known = {m["key"] for m in _modules_all(c)}
+    out = [m for m in dict.fromkeys(mods) if m in known]
+    if len(out) != len(set(mods)):
+        raise HTTPException(422, "Unknown application")
+    return out
+
+
+def _clean_role_name(c, name, rid=None):
+    name = " ".join((name or "").split())
+    if not 2 <= len(name) <= ROLE_NAME_MAX:
+        raise HTTPException(422, f"Role name must be 2–{ROLE_NAME_MAX} characters")
+    if c.execute("SELECT 1 FROM roles WHERE lower(name) = lower(%s) AND id IS DISTINCT FROM %s", (name, rid)).fetchone():
+        raise HTTPException(409, f"A role called “{name}” already exists")
+    return name
+
+
+def _set_modules(c, rid, mods):
+    c.execute("DELETE FROM role_modules WHERE role_id = %s", (rid,))
+    for m in mods:
+        c.execute("INSERT INTO role_modules (role_id, module) VALUES (%s, %s)", (rid, m))
+
+
+def _admin_log(c, user, event, **detail):
+    act.log(c, actor_kind="user", actor_id=user["name"], actor_name=user["name"], app="admin", event=event, detail=detail)
+
+
+def _role_or_404(c, rid):
+    r = c.execute("SELECT * FROM roles WHERE id = %s", (rid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "Role not found")
+    return r
+
+
+@app.get("/api/admin/access")
+def access_overview(user=Depends(admin_user)):
+    with pool.connection() as c:
+        return _access(c)
+
+
+@app.post("/api/admin/roles")
+def create_role(body: RoleIn, user=Depends(admin_user)):
+    with pool.connection() as c:
+        name = _clean_role_name(c, body.name)
+        mods = _clean_modules(c, body.modules)
+        if body.is_default and not mods:
+            raise HTTPException(422, "The default role needs at least one application")
+        if body.is_default:
+            c.execute("UPDATE roles SET is_default = false WHERE is_default")
+        rid = c.execute("INSERT INTO roles (name, description, is_default, updated_by) VALUES (%s,%s,%s,%s) RETURNING id",
+                        (name, body.description.strip()[:ROLE_DESC_MAX], body.is_default, user["name"])).fetchone()["id"]
+        _set_modules(c, rid, mods)
+        _admin_log(c, user, "role_created", role=name, modules=mods, default=body.is_default)
+        return {**_access(c), "id": rid}
+
+
+@app.patch("/api/admin/roles/{rid}")
+def update_role(rid: int, body: RolePatch, user=Depends(admin_user)):
+    with pool.connection() as c:
+        r = _role_or_404(c, rid)
+        name = _clean_role_name(c, body.name, rid) if body.name is not None else r["name"]
+        mods = _clean_modules(c, body.modules) if body.modules is not None else None
+        if body.is_default is False and r["is_default"]:
+            raise HTTPException(422, "There must always be a default role — make another role the default instead")
+        will_default = r["is_default"] or body.is_default
+        if will_default and mods is not None and not mods:
+            raise HTTPException(422, "The default role needs at least one application")
+        if body.is_default and not r["is_default"]:
+            has = mods if mods is not None else [x["module"] for x in c.execute("SELECT module FROM role_modules WHERE role_id = %s", (rid,))]
+            if not has:
+                raise HTTPException(422, "The default role needs at least one application")
+            c.execute("UPDATE roles SET is_default = false WHERE is_default")
+        c.execute("UPDATE roles SET name = %s, description = %s, is_default = %s, updated_at = now(), updated_by = %s WHERE id = %s",
+                  (name, (body.description if body.description is not None else r["description"]).strip()[:ROLE_DESC_MAX],
+                   bool(will_default), user["name"], rid))
+        if mods is not None:
+            _set_modules(c, rid, mods)
+        _admin_log(c, user, "role_updated", role=name, **({"modules": mods} if mods is not None else {}),
+                   **({"renamed_from": r["name"]} if name != r["name"] else {}), **({"default": True} if body.is_default and not r["is_default"] else {}))
+        return _access(c)
+
+
+@app.post("/api/admin/roles/{rid}/duplicate")
+def duplicate_role(rid: int, user=Depends(admin_user)):
+    with pool.connection() as c:
+        r = _role_or_404(c, rid)
+        name, n = f"{r['name'][:ROLE_NAME_MAX - 7]} (copy)", 2
+        while c.execute("SELECT 1 FROM roles WHERE lower(name) = lower(%s)", (name,)).fetchone():
+            name = f"{r['name'][:ROLE_NAME_MAX - 10]} (copy {n})"; n += 1
+        new = c.execute("INSERT INTO roles (name, description, updated_by) VALUES (%s,%s,%s) RETURNING id",
+                        (name, r["description"], user["name"])).fetchone()["id"]
+        c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, module FROM role_modules WHERE role_id = %s", (new, rid))
+        _admin_log(c, user, "role_created", role=name, copied_from=r["name"])
+        return {**_access(c), "id": new}
+
+
+@app.delete("/api/admin/roles/{rid}")
+def delete_role(rid: int, user=Depends(admin_user)):
+    with pool.connection() as c:
+        r = _role_or_404(c, rid)
+        if r["is_system"]:
+            raise HTTPException(422, f"“{r['name']}” is the built-in role and cannot be deleted (you can edit it)")
+        if r["is_default"]:
+            raise HTTPException(422, "This is the default role — make another role the default first")
+        # customers who would be left with no role get the default role
+        moved = c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) "
+                          "SELECT cr.customer_id, d.id, %s FROM customer_roles cr CROSS JOIN (SELECT id FROM roles WHERE is_default) d "
+                          "WHERE cr.role_id = %s AND NOT EXISTS (SELECT 1 FROM customer_roles o WHERE o.customer_id = cr.customer_id AND o.role_id <> %s) "
+                          "ON CONFLICT DO NOTHING", (f"{user['name']} (role deleted)", rid, rid)).rowcount
+        c.execute("DELETE FROM roles WHERE id = %s", (rid,))
+        _admin_log(c, user, "role_deleted", role=r["name"], moved_to_default=moved)
+        return {**_access(c), "moved": moved}
+
+
+@app.patch("/api/admin/modules/{key}")
+def update_module(key: str, body: ModulePatch, user=Depends(admin_user)):
+    with pool.connection() as c:
+        m = c.execute("SELECT * FROM app_modules WHERE key = %s", (key,)).fetchone()
+        if not m:
+            raise HTTPException(404, "Application not found")
+        name = " ".join((body.name if body.name is not None else m["name"]).split())
+        if not 2 <= len(name) <= 60:
+            raise HTTPException(422, "Application name must be 2–60 characters")
+        c.execute("UPDATE app_modules SET name = %s, description = %s, enabled = %s WHERE key = %s",
+                  (name, (body.description if body.description is not None else m["description"]).strip()[:200],
+                   m["enabled"] if body.enabled is None else body.enabled, key))
+        _admin_log(c, user, "app_updated", app=key, **({"enabled": body.enabled} if body.enabled is not None else {}),
+                   **({"renamed_from": m["name"]} if name != m["name"] else {}))
+        return _access(c)
+
+
+def _assign(c, cid, role_ids, user, valid):
+    before = [r["role_id"] for r in c.execute("SELECT role_id FROM customer_roles WHERE customer_id = %s ORDER BY role_id", (cid,))]
+    after = sorted(set(role_ids))
+    if before == after:
+        return False
+    c.execute("DELETE FROM customer_roles WHERE customer_id = %s AND NOT (role_id = ANY(%s))", (cid, after))
+    for rid in after:
+        c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
+                  (cid, rid, user["name"]))
+    name = c.execute("SELECT name FROM customers WHERE id = %s", (cid,)).fetchone()["name"]
+    act.log(c, actor_kind="customer", actor_id=cid, actor_name=name, app="customer", event="roles_changed",
+            detail={"by": user["name"], "before": [valid[x] for x in before if x in valid], "after": [valid[x] for x in after]})
+    return True
+
+
+@app.put("/api/admin/customers/{cid}/roles")
+def set_customer_roles(cid: int, body: CustomerRolesIn, user=Depends(admin_user)):
+    with pool.connection() as c:
+        if not c.execute("SELECT 1 FROM customers WHERE id = %s", (cid,)).fetchone():
+            raise HTTPException(404, "Customer not found")
+        valid = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM roles")}
+        if not body.role_ids:
+            raise HTTPException(422, "A customer needs at least one role (block the account to stop all access)")
+        if any(r not in valid for r in body.role_ids):
+            raise HTTPException(404, "Role not found")
+        _assign(c, cid, body.role_ids, user, valid)
+        return {"roles": sorted(set(body.role_ids))}
+
+
+@app.post("/api/admin/roles/bulk")
+def bulk_roles(body: BulkRolesIn, user=Depends(admin_user)):
+    """Add and / or remove roles for many customers. A removal that would leave someone with no role is skipped."""
+    if not body.customer_ids or not (body.add or body.remove):
+        raise HTTPException(422, "Pick customers and a role to add or remove")
+    if len(body.customer_ids) > 5000:
+        raise HTTPException(422, "Too many customers at once")
+    changed = skipped = 0
+    with pool.connection() as c:
+        valid = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM roles")}
+        if any(r not in valid for r in body.add + body.remove):
+            raise HTTPException(404, "Role not found")
+        have = {}
+        for r in c.execute("SELECT customer_id, role_id FROM customer_roles WHERE customer_id = ANY(%s)", (body.customer_ids,)):
+            have.setdefault(r["customer_id"], set()).add(r["role_id"])
+        exist = {r["id"] for r in c.execute("SELECT id FROM customers WHERE id = ANY(%s)", (body.customer_ids,))}
+        for cid in dict.fromkeys(body.customer_ids):
+            if cid not in exist:
+                continue
+            new = (have.get(cid, set()) | set(body.add)) - set(body.remove)
+            if not new:
+                skipped += 1
+                continue
+            changed += _assign(c, cid, list(new), user, valid)
+    return {"changed": changed, "skipped": skipped}
+
+
+# ─────────────────────────────── Activity log ───────────────────────────────
+ACTIVE_MINUTES = 5                                  # "active now" = seen in the last 5 minutes
+SESSION_DAYS = 7                                    # customer sessions last 7 days (portal.SESSION_SECONDS)
+RETENTION_CHOICES = (30, 90, 180, 365, 730)
+
+
+def _range(date_from: date | None, date_to: date | None):
+    """IST calendar days, inclusive → UTC instants. Default: the last 7 days."""
+    today = now().date()
+    d2 = min(date_to or today, today)
+    d1 = date_from or (d2 - timedelta(days=6))
+    if d1 > d2:
+        d1, d2 = d2, d1
+    if (d2 - d1).days > 800:
+        d1 = d2 - timedelta(days=800)
+    start = datetime.combine(d1, datetime.min.time(), TZ)
+    end = datetime.combine(d2 + timedelta(days=1), datetime.min.time(), TZ)
+    return d1, d2, start, end
+
+
+def _session_status(s, at):
+    if s["ended_at"]:
+        return {"signed_out": "signed_out", "revoked": "revoked", "blocked": "blocked", "password_reset": "password_reset"}.get(s["end_reason"], "signed_out")
+    if s["created_at"] < at - timedelta(days=SESSION_DAYS):
+        return "expired"
+    return "active" if s["last_seen"] > at - timedelta(minutes=ACTIVE_MINUTES) else "idle"
+
+
+@app.get("/api/admin/activity/summary")
+def activity_summary(date_from: date | None = None, date_to: date | None = None, user=Depends(admin_user)):
+    d1, d2, start, end = _range(date_from, date_to)
+    with pool.connection() as c:
+        k = c.execute(
+            "SELECT "
+            f"(SELECT count(DISTINCT customer_id) FROM customer_sessions WHERE ended_at IS NULL AND last_seen > now() - interval '{ACTIVE_MINUTES} minutes') AS active_now, "
+            f"(SELECT count(*) FROM customer_sessions WHERE ended_at IS NULL AND created_at > now() - interval '{SESSION_DAYS} days') AS devices_signed_in, "
+            "(SELECT count(*) FROM activity_log WHERE app = 'customer' AND event = 'login' AND at >= %(s)s AND at < %(e)s) AS signins, "
+            "(SELECT count(*) FROM activity_log WHERE app = 'customer' AND event = 'signup' AND at >= %(s)s AND at < %(e)s) AS signups, "
+            "(SELECT count(*) FROM activity_log WHERE app = 'customer' AND event IN ('login_failed', 'locked') AND at >= %(s)s AND at < %(e)s) AS failed, "
+            "(SELECT count(*) FROM activity_log WHERE app = 'admin' AND event = 'login' AND at >= %(s)s AND at < %(e)s) AS admin_signins, "
+            "(SELECT count(*) FROM activity_log WHERE app = 'admin' AND event IN ('login_failed', 'locked') AND at >= %(s)s AND at < %(e)s) AS admin_failed, "
+            "(SELECT count(DISTINCT customer_id) FROM customer_sessions WHERE last_seen >= %(s)s AND created_at < %(e)s) AS people, "
+            "(SELECT count(*) FROM (SELECT customer_id FROM customer_sessions WHERE last_seen >= %(s)s AND created_at < %(e)s "
+            "  GROUP BY customer_id HAVING count(DISTINCT device_id) >= 3) x) AS multi_device, "
+            "(SELECT COALESCE(sum(minutes), 0) FROM module_usage WHERE day BETWEEN %(d1)s AND %(d2)s) AS minutes",
+            {"s": start, "e": end, "d1": d1, "d2": d2}).fetchone()
+        mods = _modules_all(c)
+        use = {r["module"]: r for r in c.execute(
+            "SELECT module, count(DISTINCT customer_id) AS people, count(DISTINCT session_id) AS sessions, sum(minutes) AS minutes "
+            "FROM module_usage WHERE day BETWEEN %s AND %s GROUP BY module", (d1, d2))}
+        opens = {r["module"]: r["n"] for r in c.execute(
+            "SELECT module, count(*) AS n FROM activity_log WHERE event = 'open' AND at >= %s AND at < %s GROUP BY module", (start, end))}
+        daily_use = {r["day"]: r for r in c.execute(
+            "SELECT day, count(DISTINCT customer_id) AS people, sum(minutes) AS minutes FROM module_usage "
+            "WHERE day BETWEEN %s AND %s GROUP BY day", (d1, d2))}
+        daily_in = {r["day"]: r for r in c.execute(
+            "SELECT (at AT TIME ZONE 'Asia/Kolkata')::date AS day, count(*) FILTER (WHERE event = 'login') AS signins, "
+            "count(*) FILTER (WHERE event IN ('login_failed', 'locked')) AS failed "
+            "FROM activity_log WHERE app = 'customer' AND at >= %s AND at < %s GROUP BY 1", (start, end))}
+        hours = [0] * 24
+        for r in c.execute("SELECT extract(hour FROM at AT TIME ZONE 'Asia/Kolkata')::int AS h, count(*) AS n FROM activity_log "
+                           "WHERE app = 'customer' AND event IN ('login', 'open') AND at >= %s AND at < %s GROUP BY 1", (start, end)):
+            hours[r["h"]] = r["n"]
+        top = c.execute(
+            "SELECT u.customer_id AS id, c.name, c.email, sum(u.minutes) AS minutes, "
+            "array_agg(DISTINCT u.module) AS modules, max(u.last_at) AS last_at, "
+            "(SELECT count(DISTINCT device_id) FROM customer_sessions s WHERE s.customer_id = u.customer_id AND s.last_seen >= %s) AS devices "
+            "FROM module_usage u JOIN customers c ON c.id = u.customer_id WHERE u.day BETWEEN %s AND %s "
+            "GROUP BY u.customer_id, c.name, c.email ORDER BY minutes DESC LIMIT 10", (start, d1, d2)).fetchall()
+    days, d = [], d1
+    while d <= d2:
+        u, i = daily_use.get(d) or {}, daily_in.get(d) or {}
+        days.append({"day": d.isoformat(), "people": u.get("people", 0), "minutes": u.get("minutes", 0) or 0,
+                     "signins": i.get("signins", 0), "failed": i.get("failed", 0)})
+        d += timedelta(days=1)
+    return {"from": d1.isoformat(), "to": d2.isoformat(), "kpis": k,
+            "modules": [{"key": m["key"], "name": m["name"], "enabled": m["enabled"], "opens": opens.get(m["key"], 0),
+                         **{x: int((use.get(m["key"]) or {}).get(x) or 0) for x in ("people", "sessions", "minutes")}} for m in mods],
+            "days": days, "hours": hours,
+            "top": [{**t, "last_at": _iso(t["last_at"])} for t in top]}
+
+
+@app.get("/api/admin/activity/events")
+def activity_events(date_from: date | None = None, date_to: date | None = None, app_: str | None = Query(None, alias="app"), event: str | None = None,
+                    module: str | None = None, q: str | None = None, actor: str | None = None,
+                    limit: int = 100, offset: int = 0, user=Depends(admin_user)):
+    _, _, start, end = _range(date_from, date_to)
+    where, args = ["a.at >= %s", "a.at < %s"], [start, end]
+    if app_ in ("customer", "admin"):
+        where.append("a.app = %s"); args.append(app_)
+    if event:
+        evs = [e for e in event.split(",") if e]
+        where.append("a.event = ANY(%s)"); args.append(evs)
+    if module:
+        where.append("a.module = %s"); args.append(module)
+    if actor and ":" in actor:                                    # customer:12 | user:admin
+        kind, aid = actor.split(":", 1)
+        where.append("a.actor_kind = %s AND a.actor_id = %s"); args += [kind, aid]
+    if q and q.strip():
+        like = f"%{q.strip()[:80]}%"
+        where.append("(a.actor_name ILIKE %s OR c.email ILIKE %s OR a.ip ILIKE %s OR a.device ILIKE %s)"); args += [like] * 4
+    sql_from = ("FROM activity_log a LEFT JOIN customers c ON a.actor_kind = 'customer' AND c.id::text = a.actor_id "
+                "WHERE " + " AND ".join(where))
+    limit, offset = max(1, min(limit, 5000)), max(0, offset)
+    with pool.connection() as c:
+        total = c.execute(f"SELECT count(*) AS n {sql_from}", args).fetchone()["n"]
+        rows = c.execute(f"SELECT a.id, a.at, a.actor_kind, a.actor_id, a.actor_name, c.email, a.app, a.module, a.event, "
+                         f"a.device, a.ip, a.session_id, a.device_id, a.detail {sql_from} ORDER BY a.at DESC, a.id DESC LIMIT %s OFFSET %s",
+                         [*args, limit, offset]).fetchall()
+    return {"total": total, "rows": [{**r, "at": _iso(r["at"])} for r in rows]}
+
+
+@app.get("/api/admin/activity/sessions")
+def activity_sessions(date_from: date | None = None, date_to: date | None = None, user=Depends(admin_user)):
+    """People & devices: every customer seen in the range (or still signed in), each device and each session."""
+    _, _, start, end = _range(date_from, date_to)
+    at = now()
+    with pool.connection() as c:
+        rows = c.execute(
+            "SELECT s.id, s.customer_id, s.device_id, s.device, s.ip, s.last_ip, s.created_at, s.last_seen, s.ended_at, s.end_reason, "
+            "c.name, c.email, c.status, "
+            "(SELECT COALESCE(sum(minutes), 0) FROM module_usage u WHERE u.session_id = s.id) AS minutes, "
+            "ARRAY(SELECT DISTINCT module FROM module_usage u WHERE u.session_id = s.id) AS modules "
+            "FROM customer_sessions s JOIN customers c ON c.id = s.customer_id "
+            "WHERE (s.last_seen >= %s AND s.created_at < %s) OR (s.ended_at IS NULL AND s.created_at > now() - interval '7 days') "
+            "ORDER BY s.last_seen DESC LIMIT 5000", (start, end)).fetchall()
+    people = {}
+    for s in rows:
+        p = people.setdefault(s["customer_id"], {"id": s["customer_id"], "name": s["name"], "email": s["email"], "status": s["status"],
+                                                 "sessions": [], "devices": set(), "ips": set(), "last_seen": s["last_seen"], "minutes": 0})
+        st = _session_status(s, at)
+        p["sessions"].append({"id": s["id"], "device_id": s["device_id"], "device": s["device"], "ip": s["ip"], "last_ip": s["last_ip"],
+                              "created_at": _iso(s["created_at"]), "last_seen": _iso(s["last_seen"]), "ended_at": _iso(s["ended_at"]),
+                              "status": st, "minutes": s["minutes"], "modules": s["modules"]})
+        p["devices"].add(s["device_id"] or s["id"])
+        p["ips"].update(x for x in (s["ip"], s["last_ip"]) if x)
+        p["minutes"] += s["minutes"]
+    out = []
+    for p in people.values():
+        live = [x for x in p["sessions"] if x["status"] in ("active", "idle")]
+        out.append({**p, "devices": len(p["devices"]), "ips": len(p["ips"]), "last_seen": _iso(p["last_seen"]),
+                    "signed_in": len(live), "active": sum(x["status"] == "active" for x in live)})
+    out.sort(key=lambda p: (p["active"] > 0, p["signed_in"] > 0, p["last_seen"] or ""), reverse=True)
+    return {"people": out}
+
+
+@app.get("/api/admin/activity/users")
+def activity_users(date_from: date | None = None, date_to: date | None = None, user=Depends(admin_user)):
+    """Dashboard users (config.ini): sign-ins, failures and devices in the range."""
+    _, _, start, end = _range(date_from, date_to)
+    with pool.connection() as c:
+        rows = c.execute(
+            "SELECT actor_name AS name, bool_or(actor_id IS NOT NULL) AS known, "
+            "count(*) FILTER (WHERE event = 'login') AS signins, count(*) FILTER (WHERE event IN ('login_failed', 'locked')) AS failed, "
+            "max(at) FILTER (WHERE event = 'login') AS last_login, count(DISTINCT device_id) AS devices, count(DISTINCT ip) AS ips, "
+            "array_agg(DISTINCT device) FILTER (WHERE device IS NOT NULL) AS device_names "
+            "FROM activity_log WHERE app = 'admin' AND event IN ('login', 'login_failed', 'locked', 'logout') AND at >= %s AND at < %s "
+            "GROUP BY actor_name ORDER BY max(at) DESC", (start, end)).fetchall()
+    users = config.users()
+    return {"users": [{**r, "last_login": _iso(r["last_login"]), "admin": bool(users.get(r["name"], {}).get("admin")),
+                       "exists": r["name"] in users} for r in rows]}
+
+
+@app.get("/api/admin/activity/person/{cid}")
+def activity_person(cid: int, user=Depends(admin_user)):
+    """Everything about one customer: profile, roles, applications, devices, minutes per application and recent events."""
+    at = now()
+    with pool.connection() as c:
+        r = c.execute(f"SELECT {CUSTOMER_COLS} FROM customers WHERE id = %s", (cid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "Customer not found")
+        roles = c.execute("SELECT r.id, r.name, cr.assigned_at, cr.assigned_by FROM customer_roles cr JOIN roles r ON r.id = cr.role_id "
+                          "WHERE cr.customer_id = %s ORDER BY r.name", (cid,)).fetchall()
+        apps = c.execute("SELECT m.key, m.name FROM app_modules m WHERE m.enabled AND EXISTS (SELECT 1 FROM customer_roles cr "
+                         "JOIN role_modules rm ON rm.role_id = cr.role_id WHERE cr.customer_id = %s AND rm.module = m.key) ORDER BY m.sort",
+                         (cid,)).fetchall()
+        sessions = c.execute(
+            "SELECT s.*, (SELECT COALESCE(sum(minutes), 0) FROM module_usage u WHERE u.session_id = s.id) AS minutes "
+            "FROM customer_sessions s WHERE customer_id = %s ORDER BY last_seen DESC LIMIT 200", (cid,)).fetchall()
+        usage = c.execute("SELECT module, sum(minutes) AS minutes, count(DISTINCT day) AS days, max(last_at) AS last_at "
+                          "FROM module_usage WHERE customer_id = %s GROUP BY module", (cid,)).fetchall()
+        daily = c.execute("SELECT day, sum(minutes) AS minutes FROM module_usage WHERE customer_id = %s AND day > current_date - 30 "
+                          "GROUP BY day ORDER BY day", (cid,)).fetchall()
+        events = c.execute("SELECT id, at, app, module, event, device, ip, detail FROM activity_log "
+                           "WHERE actor_kind = 'customer' AND actor_id = %s ORDER BY at DESC LIMIT 150", (str(cid),)).fetchall()
+    devices = {}
+    for s in sessions:
+        d = devices.setdefault(s["device_id"] or s["id"], {"device_id": s["device_id"], "device": s["device"], "first_seen": s["created_at"],
+                                                           "last_seen": s["last_seen"], "sessions": 0, "ips": set(), "live": 0, "minutes": 0})
+        d["sessions"] += 1; d["minutes"] += s["minutes"]
+        d["first_seen"] = min(d["first_seen"], s["created_at"]); d["last_seen"] = max(d["last_seen"], s["last_seen"])
+        d["ips"].update(x for x in (s["ip"], s["last_ip"]) if x)
+        d["live"] += _session_status(s, at) in ("active", "idle")
+    return {
+        "customer": _cust(r), "roles": [{**x, "assigned_at": _iso(x["assigned_at"])} for x in roles], "apps": apps,
+        "devices": sorted([{**d, "ips": sorted(d["ips"]), "first_seen": _iso(d["first_seen"]), "last_seen": _iso(d["last_seen"])}
+                           for d in devices.values()], key=lambda d: d["last_seen"], reverse=True),
+        "sessions": [{"id": s["id"], "device": s["device"], "device_id": s["device_id"], "ip": s["ip"], "last_ip": s["last_ip"],
+                      "created_at": _iso(s["created_at"]), "last_seen": _iso(s["last_seen"]), "ended_at": _iso(s["ended_at"]),
+                      "status": _session_status(s, at), "minutes": s["minutes"]} for s in sessions],
+        "usage": [{**u, "last_at": _iso(u["last_at"])} for u in usage],
+        "daily": [{"day": d["day"].isoformat(), "minutes": d["minutes"]} for d in daily],
+        "events": [{**e, "at": _iso(e["at"])} for e in events],
+    }
+
+
+@app.post("/api/admin/activity/sessions/{sid}/revoke")
+def revoke_session(sid: str, user=Depends(admin_user)):
+    with pool.connection() as c:
+        s = c.execute("UPDATE customer_sessions s SET ended_at = now(), end_reason = 'revoked' FROM customers c "
+                      "WHERE s.id = %s AND s.ended_at IS NULL AND c.id = s.customer_id RETURNING s.customer_id, s.device, s.device_id, c.name",
+                      (sid,)).fetchone()
+        if not s:
+            raise HTTPException(404, "This device is already signed out")
+        act.log(c, actor_kind="customer", actor_id=s["customer_id"], actor_name=s["name"], session_id=sid, device_id=s["device_id"],
+                device=s["device"], app="customer", event="session_revoked", detail={"by": user["name"]})
+    return {"ok": True}
+
+
+@app.post("/api/admin/customers/{cid}/signout-all")
+def signout_all(cid: int, user=Depends(admin_user)):
+    with pool.connection() as c:
+        r = c.execute("UPDATE customers SET session_ver = session_ver + 1 WHERE id = %s RETURNING name", (cid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "Customer not found")
+        n = _end_sessions(c, cid, "revoked", user["name"], "signed_out_all", r["name"])
+    return {"ok": True, "devices": n}
+
+
+class RetentionIn(BaseModel):
+    days: int
+
+
+@app.get("/api/admin/activity/retention")
+def activity_retention(user=Depends(admin_user)):
+    with pool.connection() as c:
+        oldest = c.execute("SELECT min(at) AS a, count(*) AS n FROM activity_log").fetchone()
+    return {"days": int(get_settings()["activity_retention_days"]), "choices": RETENTION_CHOICES,
+            "oldest": _iso(oldest["a"]), "events": oldest["n"]}
+
+
+@app.put("/api/admin/activity/retention")
+def set_activity_retention(body: RetentionIn, user=Depends(admin_user)):
+    if body.days not in RETENTION_CHOICES:
+        raise HTTPException(422, "Pick one of the offered periods")
+    put_settings({"activity_retention_days": body.days})
+    return activity_retention(user)
 
 
 # ─────────────────────────────── publishing the customer view ───────────────────────────────

@@ -7,6 +7,7 @@ import {
   InfoTip, classifySignal, TF_WEIGHT, AlgoEditor, prebuiltAlgos, exprText,
 } from "./dashboard.jsx";
 import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../shared/helpdesk.jsx";
+import { AccessTab, ActivityTab } from "./access.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 let onUnauthorized = () => {};
@@ -700,7 +701,7 @@ const EMPTY_CUST = { name: "", email: "", phone: "", country: "India", state: ""
 // (status filter + search applied; "All" = every customer).
 const CUST_EXPORT = [
   ["Name", c => c.name], ["Email", c => c.email], ["WhatsApp", c => c.phone || ""], ["City", c => c.city || ""], ["State", c => c.state || ""],
-  ["Country", c => c.country || ""], ["Status", (c, today) => c.status === "approved" ? (c.expires_on && c.expires_on < today ? "expired" : "active") : c.status],
+  ["Country", c => c.country || ""], ["Plan (roles)", c => (c.role_names || []).join(", ")], ["Status", (c, today) => c.status === "approved" ? (c.expires_on && c.expires_on < today ? "expired" : "active") : c.status],
   ["Access until", c => c.expires_on || ""], ["Joined", c => c.created_at ? fmtDT(c.created_at) : ""], ["Approved on", c => c.approved_at ? fmtDT(c.approved_at) : ""],
   ["Last login", c => c.last_login ? fmtDT(c.last_login) : ""], ["Logins", c => c.login_count ?? 0],
   ["Locked until", c => c.locked_until && new Date(c.locked_until) > new Date() ? fmtDT(c.locked_until) : ""],
@@ -732,8 +733,9 @@ function CustomersTab({ snaps, notify }) {
   const [signup, setSignup] = useState(null);
   const [hist, setHist] = useState(null);
   const load = useCallback(async () => {
-    const [l, p, m, h] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish"), api("/api/admin/signup-mode"), api("/api/admin/customer-history")]);
-    setList(l); setPub(p); setSignup(m); setHist(h);
+    const [l, p, m, h, a] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish"), api("/api/admin/signup-mode"), api("/api/admin/customer-history"), api("/api/admin/access")]);
+    const roleName = Object.fromEntries(a.roles.map(r => [r.id, r.name]));
+    setList(l.map(c => ({ ...c, role_names: (c.roles || []).map(id => roleName[id]).filter(Boolean) }))); setPub(p); setSignup(m); setHist(h);
   }, []);
   useEffect(() => { load().catch(e => notify(e.message, "err")); }, [load]);
   const act = async (fn, okMsg) => { try { await fn(); if (okMsg) notify(okMsg); await load(); } catch (e) { notify(e.message, "err"); } };
@@ -748,7 +750,7 @@ function CustomersTab({ snaps, notify }) {
 
   if (!list || !pub || !signup || !hist) return <div style={{ padding: 30, color: "var(--t3)" }}>Loading customers…</div>;
   const counts = { all: list.length, pending: 0, approved: 0, blocked: 0 }; list.forEach(c => { counts[c.status]++; });
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());   // Indian date, not UTC
   const shown = list.filter(c => (statusF === "all" || c.status === statusF) && (!q || `${c.name} ${c.email} ${c.phone} ${c.state} ${c.country} ${c.city}`.toLowerCase().includes(q.toLowerCase())));
   const last = pub.history[0];
   const TH = { position: "sticky", top: 0, background: "var(--s2)", borderBottom: "1px solid var(--b1)", padding: "6px 8px", fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", color: "var(--t3)", textAlign: "left", whiteSpace: "nowrap", zIndex: 1 };
@@ -870,7 +872,7 @@ function CustomersTab({ snaps, notify }) {
         )}
         <div style={{ overflow: "auto", maxHeight: 520 }} className="tower-scroll">
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>{["Name", "Contact", "Location", "Status", "Access until", "Joined", "Last login", "Logins", ""].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Name", "Contact", "Location", "Status", "Plan", "Access until", "Joined", "Last login", "Logins", ""].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
             <tbody>
               {shown.map(c => {
                 const expired = c.expires_on && c.expires_on < today;
@@ -881,6 +883,8 @@ function CustomersTab({ snaps, notify }) {
                     <td style={TD}>{c.email}{c.phone && <div style={{ fontSize: 10.5, color: "var(--t3)" }} title="WhatsApp number (community invite)">WhatsApp {c.phone}</div>}</td>
                     <td style={TD}>{[c.city, c.state].filter(Boolean).join(", ")}<div style={{ fontSize: 10.5, color: "var(--t3)" }}>{c.country}</div></td>
                     <td style={{ ...TD, color: CUST_STATUS_C[c.status], fontWeight: 700 }}>{c.status === "approved" ? (expired ? "expired" : "active") : c.status}{locked && <div style={{ fontSize: 9.5, color: "var(--short)" }}>locked (wrong passwords)</div>}</td>
+                    <td style={TD} title="Change in ⚙ Admin → 🔐 Access manager">{(c.role_names || []).map(n => <span key={n} style={{ display: "inline-block", fontSize: 10.5, fontWeight: 600, padding: "1px 7px", marginRight: 3, borderRadius: 999, border: "1px solid var(--b2)", background: "var(--s2)" }}>{n}</span>)}
+                      {c.devices > 0 && <div style={{ fontSize: 9.5, color: "var(--t3)", marginTop: 2 }}>signed in on {c.devices} device{c.devices > 1 ? "s" : ""}</div>}</td>
                     <td style={TD}>
                       <input type="date" value={c.expires_on || ""} onChange={e => patch(c.id, e.target.value ? { expires_on: e.target.value } : { clear_expiry: true }, "Access date saved")} style={{ ...input, padding: "2px 5px", color: expired ? "var(--short)" : "var(--t1)" }} title="Leave empty for no end date" />
                     </td>
@@ -902,7 +906,7 @@ function CustomersTab({ snaps, notify }) {
                   </tr>
                 );
               })}
-              {!shown.length && <tr><td colSpan={9} style={{ padding: 16, textAlign: "center", color: "var(--t3)" }}>No customers here yet.</td></tr>}
+              {!shown.length && <tr><td colSpan={10} style={{ padding: 16, textAlign: "center", color: "var(--t3)" }}>No customers here yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -911,7 +915,7 @@ function CustomersTab({ snaps, notify }) {
   );
 }
 
-// ─── ADMIN AREA: settings + customers (admins only) ──────────────────────────
+// ─── ADMIN AREA: settings, customers, activity log, access manager (admins only) ───
 function AdminArea({ snaps, notify, ...adminProps }) {
   const [sub, setSub] = useState(() => pref("hp_admin_sub", "system"));
   const [pending, setPending] = useState(0);
@@ -926,8 +930,13 @@ function AdminArea({ snaps, notify, ...adminProps }) {
       <div style={{ display: "flex", gap: 4, padding: "10px 22px 0", borderBottom: "1px solid var(--b1)" }}>
         {tab("system", "⚙ System & settings")}
         {tab("customers", "👥 Customers", pending > 0 && <span title="Waiting for approval" style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: "var(--mixed)", color: "#111", fontSize: 10, fontWeight: 800, lineHeight: "18px", textAlign: "center" }}>{pending}</span>)}
+        {tab("activity", "📜 Activity log")}
+        {tab("access", "🔐 Access manager")}
       </div>
-      {sub === "customers" ? <CustomersTab snaps={snaps} notify={notify} /> : <AdminTab snaps={snaps} notify={notify} {...adminProps} />}
+      {sub === "customers" ? <CustomersTab snaps={snaps} notify={notify} />
+        : sub === "activity" ? <ActivityTab api={api} notify={notify} />
+        : sub === "access" ? <AccessTab api={api} notify={notify} />
+        : <AdminTab snaps={snaps} notify={notify} {...adminProps} />}
     </div>
   );
 }

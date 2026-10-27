@@ -256,6 +256,15 @@ def cleanup():
             shutil.rmtree(d, ignore_errors=True)
     with pool.connection() as c:
         c.execute("DELETE FROM jobs WHERE created_at < now() - interval '120 days'")
+    # Activity log: events, finished sessions and minutes per application older than the Activity log setting
+    keep = max(30, int(s.get("activity_retention_days") or 180))
+    with pool.connection() as c:
+        n = c.execute("DELETE FROM activity_log WHERE at < now() - make_interval(days => %s)", (keep,)).rowcount
+        c.execute("DELETE FROM module_usage WHERE day < current_date - %s", (keep,))
+        c.execute("DELETE FROM customer_sessions WHERE last_seen < now() - make_interval(days => %s) "
+                  "AND (ended_at IS NOT NULL OR created_at < now() - interval '7 days')", (keep,))
+    if n:
+        print(f"🧹 Activity log: removed {n} events older than {keep} days")
 
 
 def main():

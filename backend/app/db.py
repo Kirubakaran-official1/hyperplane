@@ -186,6 +186,112 @@ CREATE TABLE IF NOT EXISTS customer_portfolio (
 );
 REVOKE ALL ON FUNCTION customers_auto_approve() FROM PUBLIC;
 CREATE INDEX IF NOT EXISTS hd_images_uploader ON hd_images (uploader, created_at);
+
+-- Access manager (RBAC for the customer app only, owner 2026-10-27). Applications = the customer app's modules (fixed
+-- catalogue — each one is code); roles group applications; a customer may hold several roles (applications = union).
+-- Exactly one role is the default: every new customer gets it (trigger below).
+CREATE TABLE IF NOT EXISTS app_modules (
+    key          TEXT PRIMARY KEY,                    -- research | simple | portfolio
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    sort         INT  NOT NULL DEFAULT 0,
+    enabled      BOOLEAN NOT NULL DEFAULT true        -- off = hidden from everyone (maintenance)
+);
+INSERT INTO app_modules (key, name, description, sort) VALUES
+    ('research',  'Research view',              'Control Tower: every stock with filters, sectors, industries and the stock card', 1),
+    ('simple',    'Simplified view (AI Mode)',  'Search one stock and read the AI verdict in plain words', 2),
+    ('portfolio', 'AI Portfolio Analyser',      'The customer''s own stock list with strength, trend map and the PDF report', 3)
+ON CONFLICT (key) DO NOTHING;
+CREATE TABLE IF NOT EXISTS roles (
+    id           BIGSERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    is_default   BOOLEAN NOT NULL DEFAULT false,
+    is_system    BOOLEAN NOT NULL DEFAULT false,      -- the built-in "Customer" role: editable, never deleted
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by   TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS roles_name ON roles (lower(name));
+CREATE UNIQUE INDEX IF NOT EXISTS roles_one_default ON roles (is_default) WHERE is_default;
+CREATE TABLE IF NOT EXISTS role_modules (
+    role_id      BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    module       TEXT   NOT NULL REFERENCES app_modules(key) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, module)
+);
+CREATE TABLE IF NOT EXISTS customer_roles (
+    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    role_id      BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    assigned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    assigned_by  TEXT,
+    PRIMARY KEY (customer_id, role_id)
+);
+CREATE INDEX IF NOT EXISTS customer_roles_role ON customer_roles (role_id);
+CREATE OR REPLACE FUNCTION customers_default_role() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    INSERT INTO customer_roles (customer_id, role_id, assigned_by)
+        SELECT NEW.id, id, 'default role' FROM roles WHERE is_default ON CONFLICT DO NOTHING;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS customers_default_role ON customers;
+CREATE TRIGGER customers_default_role AFTER INSERT ON customers FOR EACH ROW EXECUTE FUNCTION customers_default_role();
+REVOKE ALL ON FUNCTION customers_default_role() FROM PUBLIC;
+
+-- Activity log (Admin → Activity log): one session row per customer sign-in (device = the browser's qf_dev cookie),
+-- events for customers and dashboard users, and minutes per customer-app module (heartbeat while the page is visible).
+CREATE TABLE IF NOT EXISTS customer_sessions (
+    id           TEXT PRIMARY KEY,                    -- random, carried in the signed cookie
+    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    device_id    TEXT,
+    device       TEXT,                                -- "Chrome · Windows"
+    user_agent   TEXT,
+    ip           TEXT,
+    last_ip      TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ended_at     TIMESTAMPTZ,
+    end_reason   TEXT                                 -- signed_out | revoked | blocked | password_reset
+);
+CREATE INDEX IF NOT EXISTS customer_sessions_cust ON customer_sessions (customer_id, last_seen DESC);
+CREATE INDEX IF NOT EXISTS customer_sessions_seen ON customer_sessions (last_seen DESC);
+CREATE TABLE IF NOT EXISTS activity_log (
+    id           BIGSERIAL PRIMARY KEY,
+    at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actor_kind   TEXT NOT NULL,                       -- customer | user  (user = dashboard login from config.ini)
+    actor_id     TEXT,                                -- customers.id as text / user name; NULL = unknown email
+    actor_name   TEXT,
+    session_id   TEXT,
+    device_id    TEXT,
+    device       TEXT,
+    ip           TEXT,
+    app          TEXT NOT NULL,                       -- customer | admin
+    module       TEXT,
+    event        TEXT NOT NULL,                       -- signup | login | login_failed | locked | logout | open | ...
+    detail       JSONB
+);
+CREATE INDEX IF NOT EXISTS activity_log_at ON activity_log (at DESC);
+CREATE INDEX IF NOT EXISTS activity_log_actor ON activity_log (actor_kind, actor_id, at DESC);
+CREATE INDEX IF NOT EXISTS activity_log_event ON activity_log (event, at DESC);
+CREATE TABLE IF NOT EXISTS module_usage (
+    session_id   TEXT   NOT NULL,
+    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    module       TEXT   NOT NULL,
+    day          DATE   NOT NULL,
+    first_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    minutes      INT    NOT NULL DEFAULT 1,
+    PRIMARY KEY (session_id, module, day)
+);
+CREATE INDEX IF NOT EXISTS module_usage_day ON module_usage (day, module);
+-- Customer app side menu: the applications the customer pinned to the rail (max 6; the rest are under "More apps").
+-- NULL row = never chose → the first 6 of their applications.
+CREATE TABLE IF NOT EXISTS customer_prefs (
+    customer_id  BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+    pins         TEXT[]      NOT NULL DEFAULT '{}',
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS module_usage_cust ON module_usage (customer_id, day);
 """
 
 # The customer service logs in as this role: it can read the published view and its own customer rows, nothing else.
@@ -212,6 +318,7 @@ DEFAULT_SETTINGS = {
     "tech": {tf: dict(TECH_TF_DEFAULT) for tf in "DWMQY"},
     "algos": None,                          # Technical Quant algorithms (admin-managed); None = the ready-made set
     "publish_mode": "manual",               # customer view: manual (admin presses Publish) | auto (after each collection)
+    "activity_retention_days": 180,         # Activity log: events, sessions and minutes per module older than this go
 }
 
 
@@ -220,7 +327,22 @@ def init_db():
     with pool.connection() as c:
         c.execute("SELECT pg_advisory_xact_lock(727001)")     # api and worker start together: one at a time
         c.execute(SCHEMA)
+        _seed_roles(c)
         _setup_portal_role(c)
+
+
+def _seed_roles(c):
+    """First start with the Access manager: the built-in default role "Customer" with every application, given to every
+    existing customer (new customers get the default role from the customers_default_role trigger)."""
+    if c.execute("SELECT 1 FROM roles WHERE is_system").fetchone():
+        return
+    rid = c.execute("INSERT INTO roles (name, description, is_default, is_system, updated_by) VALUES "
+                    "('Customer', 'Standard plan: every application', NOT EXISTS (SELECT 1 FROM roles WHERE is_default), true, 'system') "
+                    "RETURNING id").fetchone()["id"]
+    c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, key FROM app_modules ON CONFLICT DO NOTHING", (rid,))
+    c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) "
+              "SELECT id, %s, 'default role' FROM customers c WHERE NOT EXISTS (SELECT 1 FROM customer_roles r WHERE r.customer_id = c.id)",
+              (rid,))
 
 
 def _setup_portal_role(c):
@@ -252,9 +374,24 @@ def _setup_portal_role(c):
     c.execute("DROP POLICY IF EXISTS portal_own ON customer_portfolio")
     c.execute(sql.SQL("CREATE POLICY portal_own ON customer_portfolio TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
                       "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
+    # side-menu pins: same rule as the portfolio — each customer reads and writes only their own row
+    c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, pins, updated_at), UPDATE (pins, updated_at) ON customer_prefs TO {}").format(role))
+    c.execute("ALTER TABLE customer_prefs ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON customer_prefs")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON customer_prefs TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
+                      "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     c.execute("ALTER TABLE customer_history ENABLE ROW LEVEL SECURITY")
     c.execute("DROP POLICY IF EXISTS portal_history ON customer_history")
     c.execute(sql.SQL("CREATE POLICY portal_history ON customer_history FOR SELECT TO {} USING (portal_history_enabled())").format(role))
+    # Access manager: read-only (roles are changed in Admin only). Activity: the service records sessions, events and
+    # minutes per module but can never read the log back or change who holds which role.
+    c.execute(sql.SQL("GRANT SELECT ON app_modules, roles, role_modules, customer_roles TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT, INSERT (id, customer_id, device_id, device, user_agent, ip, last_ip) ON customer_sessions TO {}").format(role))
+    c.execute(sql.SQL("GRANT UPDATE (last_seen, last_ip, ended_at, end_reason) ON customer_sessions TO {}").format(role))
+    c.execute(sql.SQL("GRANT INSERT (actor_kind, actor_id, actor_name, session_id, device_id, device, ip, app, module, event, detail) "
+                      "ON activity_log TO {}").format(role))
+    c.execute(sql.SQL("GRANT USAGE ON SEQUENCE activity_log_id_seq TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT, INSERT (session_id, customer_id, module, day), UPDATE (last_at, minutes) ON module_usage TO {}").format(role))
     # Helpdesk: only the columns a customer needs, and row-level security on top — the service sets
     # hp.cid (the signed-in customer) per transaction, and the database itself hides every other row.
     for stmt in (

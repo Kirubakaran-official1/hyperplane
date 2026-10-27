@@ -473,7 +473,8 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
 `snapshots` (taken_at, trade_date, slot, source scheduled|manual|import, label, stocks, signals, sheets[], data_gz,
 size_bytes, excel_path) · `snapshot_stocks` (per stock summary, PK snapshot_id+symbol) · `jobs` (queued/running/done/
 failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSONB key/values incl. `worker_heartbeat`) ·
-`customers` · `published` · `hd_tickets` / `hd_messages` / `hd_images` (helpdesk).
+`customers` · `published` · `hd_tickets` / `hd_messages` / `hd_images` (helpdesk) · `app_modules` / `roles` /
+`role_modules` / `customer_roles` (Access manager) · `customer_sessions` / `activity_log` / `module_usage` (Activity log).
 
 ### Settings (Admin tab; defaults in `db.DEFAULT_SETTINGS`)
 schedule_times ["09:45","14:30"] · weekdays_only true · skip_dates [] (NSE holidays) · catch_up_minutes 180 ·
@@ -499,6 +500,64 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
 
 - Customer app theme: LIGHT is the default (owner, 2026-10-20); dark only when the customer picked it (`qf_theme` =
   "dark" in localStorage). The admin dashboard keeps its own default.
+
+### Access manager (RBAC, customer app only) + Activity log + side nav (owner, 2026-10-27)
+- **Applications** = the customer app's modules, fixed catalogue `app_modules` (research | simple | portfolio; admin can
+  rename / describe / switch one off for everyone). **Roles** (`roles`, `role_modules`) group applications; a customer
+  holds 1+ roles (`customer_roles`) and may open the UNION. Exactly one role `is_default` (partial unique index); trigger
+  `customers_default_role` gives it to every new customer (sign-up or admin-created). Built-in role "Customer"
+  (`is_system`, all 3 apps) is seeded once by `db._seed_roles` and given to every existing customer; it can be edited,
+  never deleted. Rules (API-enforced): the default role needs ≥1 application; un-defaulting only by making another role
+  the default; deleting a role moves customers left with no role to the default; a customer needs ≥1 role (block the
+  account to stop all access); bulk removals that would leave 0 roles are skipped.
+- **Enforcement (portal.py):** `customer()` returns `modules` (enabled apps of the customer's roles, read each request
+  → role changes apply live, no re-login). `need(*apps)`: /data + /history need any data app, /portfolio needs
+  `portfolio`, /activity only modules held → 403 + header `X-Access: denied` (the app shows "not part of your plan",
+  never signs out). Research vs Simplified read the same data, so that split is UI-only. `/me` adds `apps` + `roles`.
+  hp_portal can only READ the RBAC tables (verified: cannot change roles/assignments/apps or read the log).
+- **Sessions / devices:** every customer sign-in = row in `customer_sessions` (random id carried in the signed cookie as
+  `s`; device = 400-day httponly cookie `qf_dev`, label "Chrome · Windows" from `activity.device_label`). The cookie
+  check refuses ended sessions (revoked / signed_out / blocked / password_reset). Old cookies without `s` get one
+  deterministic `legacy-<sha>` row and a new cookie on /me. `last_seen` updates at most once a minute.
+  Admin: sign out one device, or all (also bumps session_ver); block / password reset end every session.
+- **Activity log** (`activity_log`): customer events signup · login · login_failed (reason) · locked · logout · open
+  (once per app per 10 min) · session_revoked · signed_out_all · roles_changed · blocked · password_reset; dashboard
+  users (config.ini): login · login_failed · locked · logout (device cookie `hp_dev`); admin changes role_created /
+  role_updated / role_deleted / app_updated. `module_usage` = minutes per session × app × IST day (app pings every 60 s
+  while visible; +1 at most every 50 s). `activity.log()` runs in a savepoint and never breaks a request.
+  Retention setting `activity_retention_days` (30/90/180/365/730, default 180) — worker `cleanup()` daily.
+- **Admin UI** (`frontend/src/access.jsx`, tabs in AdminArea: ⚙ System · 👥 Customers · 📜 Activity log · 🔐 Access
+  manager). Activity log: range Today/7/30/90/custom, "⟳ Refresh log" button (loads the newest data now; range,
+  filters and open rows stay — nothing is reset) + "Last updated HH:MM · auto every minute" (also reloads itself every
+  60 s while visible), 7 KPIs (active now = seen ≤5 min, 3+ devices = possible shared
+  account), usage by application, people per day + busiest hours, most active, views People & devices (expand →
+  sessions, sign out device / all) · Event log (filters, search, paging 100, Copy / Excel up to 5000) · Dashboard
+  sign-ins; person drawer (plan, devices, minutes per app, 30-day bars, timeline). Dates use `istDay()` (Intl en-CA in
+  Asia/Kolkata — never toISOString, which is a day behind between 00:00 and 05:30 IST).
+  Access manager (owner 2026-10-28): its own inner side nav (`am-snav`, remembered in `hp_access_sec`) with three
+  sections — **Roles** (role list + editor: create / edit / duplicate / delete / default, applications as cards with
+  Select all / Clear all), **User access mapping** (search, role filter, multi-select bulk add/remove, per-customer
+  role picker; applications shown as "N of M" + icons so it scales), **Application manager** (name, description,
+  on/off, which roles include it, how many active customers can open it). No permission matrix and no
+  "applications → roles → customers" strip (both removed: they grow with the number of applications). Every change
+  reloads roles + customers (counts stay right). Customers table has a Plan column (+ "Plan (roles)" in Copy / Excel).
+- **Customer app side nav** (`SideNav` in main.jsx), owner's reference image 2026-10-28: a DARK rail in both themes,
+  COLLAPSED by default (76 px: icon with its 9.5 px name underneath, up to 3 lines), the open / close toggle at the TOP
+  under the logo (☰ when closed, « when open), open = 208 px with 12.5 px names beside the icons (long names wrap, never
+  cut). No "Your plan" box in the menu (owner 2026-10-28: the plan is in the Account window) (`qf_nav` = full|min,
+  default min). Items: the customer's PINNED applications (max 6, `MAX_PINS` in portal.py), Docs, Helpdesk (unread dot /
+  badge) and **More apps** at the bottom (owner 2026-10-28, reference image): a panel beside the rail with search, every
+  application on the plan (Pinned / More apps groups), pin / unpin per row (pins disabled once 6 are pinned), click =
+  open. Pins live on the account: table `customer_prefs` (customer_id, pins[]; RLS like customer_portfolio), `/me` returns
+  `pins` (null = never chose → the first 6 in catalogue order) + `max_pins`, `PUT /app/api/pins` (≤6, only apps on the
+  plan). More apps is highlighted while an unpinned app is open. Test: `rbac_ui_moreapps.py` (adds 5 temporary apps).
+  ≤900 px: off-canvas drawer opened by ☰ in the top bar (scrim / Esc / picking an item closes it). Top bar = current
+  page icon + name + description, Data as of, quick guide, bell, account (Account window shows Plan + Applications).
+  Stored `qf_face` outside the plan falls back to the first allowed app; no apps = empty state pointing to the
+  Helpdesk. The plan refreshes when the tab regains focus (≥60 s apart). One-row filter bar breakpoints account for
+  the nav (1615 px open / 1480 px collapsed).
+- Tests (scratchpad): `rbac_api_test.py` (103 API checks incl. DB-role permissions), `rbac_ui_customer.py`,
+  `rbac_ui_admin.py` (Selenium).
 
 ## 8. Develop and test
 
