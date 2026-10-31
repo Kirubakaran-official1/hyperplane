@@ -1,6 +1,7 @@
 // Docs tab of the customer edition (file kept as guide.jsx): how to use Hyperplane and how to think with it, in plain words.
 // It explains what every part MEANS — never how anything is calculated (the method stays private).
 import React, { useEffect, useRef, useState } from "react";
+import { addCss } from "./core.jsx";
 
 const Bars = ({ v, d = "up" }) => {
   const lit = Math.max(1, Math.min(5, Math.ceil(v / 20)));
@@ -27,7 +28,7 @@ function Quadrants() {
   );
 }
 
-const SECTIONS = [
+const ALL_SECTIONS = [
   { id: "welcome", t: "Welcome", body: <>
     <p><b>Hyperplane</b> shows you, in one screen, <b>which way Indian stocks are trending and how strong that trend is</b> — stock by
       stock, and also for every <b>sector</b> and <b>industry</b>. It helps you find good candidates quickly and avoid weak ones.</p>
@@ -372,6 +373,40 @@ const SECTIONS = [
       SEBI-registered adviser.</Tip>
   </> },
 
+  { id: "builder", app: "builder", t: "AI Portfolio Builder · Hyperplane AI", body: <>
+    <p>The <b>AI Portfolio Builder</b> turns an amount into a ready list of stocks, with how many shares of each to buy. It uses the
+      same engine as the AI Portfolio Analyser. It is part of the <b>AI Portfolio Builder</b> plan.</p>
+    <ol className="g-steps">
+      <li><b>Amount to invest.</b> Type it, or pick ₹1 L, ₹5 L, ₹10 L, ₹25 L or ₹1 Cr.</li>
+      <li><b>Number of stocks.</b> 20, 30 or 50, or <b>Custom</b> for any number from 5 to 250. The page shows about how much
+        goes into each stock.</li>
+      <li><b>Market cap and cash.</b> Pick a starting mix, then move the sliders to make it your own. <b>Large cap</b>: 70% large,
+        10% mid, 10% small, 10% cash. <b>Mid cap</b>: 20% large, 50% mid, 20% small, 10% cash. <b>Small cap</b>: 15% large, 15% mid,
+        60% small, 10% cash. <b>Multi cap</b>: 25% each, with 25% cash. Cash never goes below 5%: it pays for charges and rounding,
+        and lets you buy on dips. The plan keeps the cash you chose.</li>
+      <li><b>Reliability.</b> High is always used. You can add Medium. Low is never used: those stocks once fell more than 70%.</li>
+      <li><b>More options</b> (optional): the most money one sector may get (25% by default), and whether every stock gets the
+        same money or stronger stocks get a little more.</li>
+    </ol>
+    <p>Press <b>Build my portfolio</b>. In a moment you get the shopping list: each stock with its price, the number of whole
+      shares, the money and the reasons it was picked, grouped by market cap, plus where the money goes and the cash kept.</p>
+    <h3>How Hyperplane AI picks</h3>
+    <ul>
+      <li>Only stocks whose <b>long-term regime is up</b> and whose long-term trend is strong. If there are not enough, it adds
+        stocks whose trend is still building and marks them <b>Building</b>.</li>
+      <li>Stocks that have <b>already run up a lot</b> are left out (very fast gains in the last few months, or 3 times in a
+        year): most of their move has already happened.</li>
+      <li>At least 3 years of price history, and no sector or industry gets too big a share.</li>
+      <li>If fewer stocks pass the checks than you asked for, each stock that passed gets a bigger share, so your cash stays
+        as you chose. No stock gets more than 10% of the money, and the page tells you when that limit leaves extra cash.</li>
+    </ul>
+    <p><b>Download (Excel)</b> saves the list and <b>Ticker copy</b> copies the tickers for TradingView. <b>Send to AI Portfolio
+      Analyser</b> puts the stocks in your Analyser list so you can follow them: choose <b>Add to my list</b> to keep the stocks
+      already there, or <b>Replace my list</b> to start again with only these.</p>
+    <Tip kind="warn" title="A model portfolio, not advice">The builder uses fixed rules on our trend data. Prices change during
+      the day, so check each price before you buy. It is for education only: decide with your own research or a SEBI-registered adviser.</Tip>
+  </> },
+
   { id: "helpdesk", t: "Helpdesk & notifications", body: <>
     <ol className="g-steps">
       <li>Open the menu under <b>your name</b> (top right) → <b>Helpdesk</b>, and press <b>New query</b>.</li>
@@ -397,7 +432,9 @@ const SECTIONS = [
   </> },
 ];
 
-export default function Guide({ disclaimer }) {
+export default function Guide({ disclaimer, apps = null }) {
+  // a section tied to an application (e.g. the builder) shows only when the customer's plan has it
+  const SECTIONS = ALL_SECTIONS.filter(s => !s.app || !apps || apps.includes(s.app));
   const [active, setActive] = useState(SECTIONS[0].id);
   const refs = useRef({});
   useEffect(() => {
@@ -480,3 +517,5 @@ export const GUIDE_CSS = `
 @media (max-width:900px){.guide{grid-template-columns:1fr}.g-toc{position:static;flex-direction:row;flex-wrap:wrap}.g-toc-t{width:100%}
   .g-defs>div{grid-template-columns:1fr;gap:4px}.g-table td:first-child{white-space:normal;width:auto}.g-sec{padding:16px}}
 `;
+
+addCss("guide", GUIDE_CSS);                         // Docs is loaded on demand and brings its own styles

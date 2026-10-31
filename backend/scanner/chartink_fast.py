@@ -662,7 +662,8 @@ capital_urls = {
 }
 
 # NEW: Master stock data table - ONLY this scanner uses the "Copy table" button
-# (Sr, Stock Name, Symbol, Close, %change, Volume, Sector, Industry, Marketcap)
+# (Sr, Stock Name, Symbol, Close, %change, Daily / Weekly / Monthly volume, Sector, Industry, Marketcap — volumes added
+# 2026-11-01: the AI Portfolio Builder checks big positions against normal trading)
 # Every other scanner (zone_urls, nr_urls, capital_urls) keeps using "Copy symbols" as before.
 master_data_urls = {
     'All_Stocks_Master': 'https://chartink.com/screener/all-data-of-the-stock-2'
@@ -1006,15 +1007,20 @@ def parse_symbols_from_clipboard(clipboard_data, key, output_list, stock_signal_
 def _row_to_record(cells):
     """
     Map one master-table row to a dict.
-    Expected column order: Sr, Stock Name, Symbol, Close, %change, Volume, Sector, Industry, Marketcap
+    Column order (owner, 2026-11-01 — volumes added to the screener):
+      Sr, Stock Name, Symbol, Close, %change, Daily_volume, Weekly_Volume, Monthly_volume, Sector, Industry, Marketcap
+    The older 9-column layout (one Volume column) is still read.
     """
     cells = list(cells)
-    if len(cells) < 8:
-        return None
-    if len(cells) < 9:
-        cells.append('Unknown')
-
-    sr, stock_name, symbol, price, change_pct, volume, sector, industry, marketcap = cells[:9]
+    weekly = monthly = None
+    if len(cells) >= 11:
+        sr, stock_name, symbol, price, change_pct, volume, weekly, monthly, sector, industry, marketcap = cells[:11]
+    else:
+        if len(cells) < 8:
+            return None
+        if len(cells) < 9:
+            cells.append('Unknown')
+        sr, stock_name, symbol, price, change_pct, volume, sector, industry, marketcap = cells[:9]
 
     symbol = symbol.strip().upper()
     if not symbol:
@@ -1045,6 +1051,8 @@ def _row_to_record(cells):
         'Price': to_float(price),
         'Change_Pct': to_float(change_pct),
         'Volume': to_int(volume),
+        'Weekly_Volume': to_int(weekly) if weekly is not None else None,      # this week's candle (week so far)
+        'Monthly_Volume': to_int(monthly) if monthly is not None else None,   # this month's candle (month so far)
         'Sector': clean_label(sector),
         'Industry': clean_label(industry),
         'Marketcap': clean_label(marketcap),
@@ -1103,7 +1111,7 @@ def parse_master_table_clipboard(clipboard_data):
     filtered = filtered[start:]
 
     best_records = []
-    for chunk_size in (9, 8):
+    for chunk_size in (11, 9, 8):
         records = []
         broken = False
         for i in range(0, len(filtered) - chunk_size + 1, chunk_size):

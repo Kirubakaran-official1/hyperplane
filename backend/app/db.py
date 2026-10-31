@@ -200,7 +200,8 @@ CREATE TABLE IF NOT EXISTS app_modules (
 INSERT INTO app_modules (key, name, description, sort) VALUES
     ('research',  'Research view',              'Control Tower: every stock with filters, sectors, industries and the stock card', 1),
     ('simple',    'Simplified view (AI Mode)',  'Search one stock and read the AI verdict in plain words', 2),
-    ('portfolio', 'AI Portfolio Analyser',      'The customer''s own stock list with strength, trend map and the PDF report', 3)
+    ('portfolio', 'AI Portfolio Analyser',      'The customer''s own stock list with strength, trend map and the PDF report', 3),
+    ('builder',   'AI Portfolio Builder',       'Builds a model portfolio from an amount, stock count, market-cap mix and reliability', 4)
 ON CONFLICT (key) DO NOTHING;
 CREATE TABLE IF NOT EXISTS roles (
     id           BIGSERIAL PRIMARY KEY,
@@ -331,18 +332,32 @@ def init_db():
         _setup_portal_role(c)
 
 
+CUSTOMER_APPS = ("research", "simple", "portfolio")     # the default "Customer" plan (owner, 2026-10-27)
+BUILDER_APPS = CUSTOMER_APPS + ("builder",)             # "AI Portfolio Builder" plan: every dashboard + the builder
+
+
 def _seed_roles(c):
-    """First start with the Access manager: the built-in default role "Customer" with every application, given to every
-    existing customer (new customers get the default role from the customers_default_role trigger)."""
-    if c.execute("SELECT 1 FROM roles WHERE is_system").fetchone():
-        return
-    rid = c.execute("INSERT INTO roles (name, description, is_default, is_system, updated_by) VALUES "
-                    "('Customer', 'Standard plan: every application', NOT EXISTS (SELECT 1 FROM roles WHERE is_default), true, 'system') "
-                    "RETURNING id").fetchone()["id"]
-    c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, key FROM app_modules ON CONFLICT DO NOTHING", (rid,))
-    c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) "
-              "SELECT id, %s, 'default role' FROM customers c WHERE NOT EXISTS (SELECT 1 FROM customer_roles r WHERE r.customer_id = c.id)",
-              (rid,))
+    """First start with the Access manager: the built-in default role "Customer" (Research, AI Mode, AI Portfolio
+    Analyser), given to every existing customer (new customers get the default role from the customers_default_role
+    trigger). Once: the role "AI Portfolio Builder" (every customer dashboard + the builder; owner 2026-10-31: a separate
+    role, given to nobody — the owner assigns it later; deleting it later does not bring it back)."""
+    if not c.execute("SELECT 1 FROM roles WHERE is_system").fetchone():
+        rid = c.execute("INSERT INTO roles (name, description, is_default, is_system, updated_by) VALUES "
+                        "('Customer', 'Standard plan: Research view, AI Mode and AI Portfolio Analyser', "
+                        "NOT EXISTS (SELECT 1 FROM roles WHERE is_default), true, 'system') RETURNING id").fetchone()["id"]
+        c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, key FROM app_modules WHERE key = ANY(%s) ON CONFLICT DO NOTHING",
+                  (rid, list(CUSTOMER_APPS)))
+        c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) "
+                  "SELECT id, %s, 'default role' FROM customers c WHERE NOT EXISTS (SELECT 1 FROM customer_roles r WHERE r.customer_id = c.id)",
+                  (rid,))
+    if not c.execute("SELECT 1 FROM settings WHERE key = 'builder_role_seeded'").fetchone():
+        r = c.execute("INSERT INTO roles (name, description, updated_by) VALUES ('AI Portfolio Builder', "
+                      "'Every customer dashboard plus the Hyperplane AI Portfolio Builder', 'system') "
+                      "ON CONFLICT DO NOTHING RETURNING id").fetchone()
+        if r:
+            c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, key FROM app_modules WHERE key = ANY(%s) ON CONFLICT DO NOTHING",
+                      (r["id"], list(BUILDER_APPS)))
+        c.execute("INSERT INTO settings (key, value) VALUES ('builder_role_seeded', 'true'::jsonb) ON CONFLICT DO NOTHING")
 
 
 def _setup_portal_role(c):

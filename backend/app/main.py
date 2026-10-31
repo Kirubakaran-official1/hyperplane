@@ -692,7 +692,10 @@ def update_role(rid: int, body: RolePatch, user=Depends(admin_user)):
                   (name, (body.description if body.description is not None else r["description"]).strip()[:ROLE_DESC_MAX],
                    bool(will_default), user["name"], rid))
         if mods is not None:
+            holders = [x["customer_id"] for x in c.execute("SELECT customer_id FROM customer_roles WHERE role_id = %s", (rid,))]
+            had = _mods_of(c, holders)
             _set_modules(c, rid, mods)
+            _pin_new_apps(c, had, holders)                  # an application added to the role is pinned for its holders
         _admin_log(c, user, "role_updated", role=name, **({"modules": mods} if mods is not None else {}),
                    **({"renamed_from": r["name"]} if name != r["name"] else {}), **({"default": True} if body.is_default and not r["is_default"] else {}))
         return _access(c)
@@ -747,15 +750,50 @@ def update_module(key: str, body: ModulePatch, user=Depends(admin_user)):
         return _access(c)
 
 
+MAX_PINS = 6                                         # same as portal.MAX_PINS (applications pinned to the side menu)
+_MODS_OF = ("SELECT cr.customer_id, array_agg(DISTINCT rm.module) AS mods FROM customer_roles cr "
+            "JOIN role_modules rm ON rm.role_id = cr.role_id JOIN app_modules m ON m.key = rm.module AND m.enabled "
+            "WHERE cr.customer_id = ANY(%s) GROUP BY cr.customer_id")
+
+
+def _mods_of(c, cids):
+    """customer id -> the enabled applications their roles give them."""
+    return {r["customer_id"]: set(r["mods"]) for r in c.execute(_MODS_OF, (list(cids),))}
+
+
+def _pin_new_apps(c, before, cids):
+    """An application a customer has just gained (e.g. the AI Portfolio Builder role) is pinned to their side menu
+    (owner, 2026-11-01). Saved pins: the new apps are added while there is room; a full menu gives its last place to the
+    first new app. No saved pins: nothing is written — the menu shows the first MAX_PINS apps in catalogue order, and
+    the builder is 4th."""
+    after = _mods_of(c, cids)
+    order = [r["key"] for r in c.execute("SELECT key FROM app_modules WHERE enabled ORDER BY sort, key")]
+    for cid in cids:
+        new = [k for k in order if k in after.get(cid, set()) - before.get(cid, set())]
+        row = new and c.execute("SELECT pins FROM customer_prefs WHERE customer_id = %s", (cid,)).fetchone()
+        if not row:
+            continue
+        pins = [k for k in row["pins"] if k in after[cid]]
+        add = [k for k in new if k not in pins]
+        if not add:
+            continue
+        room = MAX_PINS - len(pins)
+        pins = pins + add[:room] if room > 0 else pins[:MAX_PINS - 1] + add[:1]
+        c.execute("INSERT INTO customer_prefs (customer_id, pins, updated_at) VALUES (%s, %s, now()) "
+                  "ON CONFLICT (customer_id) DO UPDATE SET pins = EXCLUDED.pins, updated_at = now()", (cid, pins))
+
+
 def _assign(c, cid, role_ids, user, valid):
     before = [r["role_id"] for r in c.execute("SELECT role_id FROM customer_roles WHERE customer_id = %s ORDER BY role_id", (cid,))]
     after = sorted(set(role_ids))
     if before == after:
         return False
+    had = _mods_of(c, [cid])
     c.execute("DELETE FROM customer_roles WHERE customer_id = %s AND NOT (role_id = ANY(%s))", (cid, after))
     for rid in after:
         c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
                   (cid, rid, user["name"]))
+    _pin_new_apps(c, had, [cid])
     name = c.execute("SELECT name FROM customers WHERE id = %s", (cid,)).fetchone()["name"]
     act.log(c, actor_kind="customer", actor_id=cid, actor_name=name, app="customer", event="roles_changed",
             detail={"by": user["name"], "before": [valid[x] for x in before if x in valid], "after": [valid[x] for x in after]})

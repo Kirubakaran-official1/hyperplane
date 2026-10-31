@@ -25,7 +25,7 @@ import gzip
 import json
 import math
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from .db import get_meta, get_settings, pool, set_meta, TECH_TF_DEFAULT
 from .zone_engine import read_all as zone_read_all, apply_regime as zone_apply_regime
@@ -219,6 +219,25 @@ def _zone_step(z, tf, earlier):
     return 1 if shift >= ZONE_STEP else -1 if shift <= -ZONE_STEP else 0
 
 
+def _weekdays_so_far(d):
+    """(trading days elapsed this week, this month) up to and including d — weekdays, holidays ignored."""
+    week = min(d.weekday(), 4) + 1
+    month = sum(1 for k in range(1, d.day + 1) if date(d.year, d.month, k).weekday() < 5)
+    return week, max(month, 1)
+
+
+def avg_volume(m, d):
+    """Average shares traded per day (owner, 2026-11-01: daily / weekly / monthly volume added to the master screener).
+    The weekly and monthly candles are "so far", so each is divided by the days elapsed; the LOWER of the two is used
+    (one spike day must not make a stock look easy to buy). Falls back to the day's volume."""
+    w, mo = _weekdays_so_far(d)
+    est = [v / n for v, n in ((_num(m.get("Weekly_Volume")), w), (_num(m.get("Monthly_Volume")), mo)) if v]
+    if est:
+        return min(est)
+    v = _num(m.get("Volume"))
+    return v or None
+
+
 def build_public(sheets, settings, as_of, earlier=None):
     flat = sheets.get("Flat_Data_For_Slicers", [])
     zl = {_sym(r.get("Symbol")): r for r in sheets.get("Zone_Levels", [])}
@@ -229,6 +248,10 @@ def build_public(sheets, settings, as_of, earlier=None):
     tech = {_sym(r.get("Symbol")): r for r in sheets.get("Technicals", [])} if settings.get("tech_enabled") else {}
     zv = zone_read_all(sheets)                   # AI Portfolio zone engine codes (empty for collections without Zone_History)
     reg = regimes(sheets)                        # regime analyser: symbol -> (weekly, daily)
+    try:                                         # the collection's trading day (IST) — for the average daily volume
+        day = datetime.fromisoformat(str(as_of)).astimezone(timezone(timedelta(hours=5, minutes=30))).date()
+    except (TypeError, ValueError):
+        day = date.today()
     prev = (earlier or {}).get("R")              # previous trading day's weekly regime ("regime shifted")
     mc = {_sym(r.get("Symbol")): [_num(r.get(f"M{k}_Close")) for k in range(1, 5)] for r in sheets.get("Zone_History", [])}
     m3 = {k: v[2] for k, v in mc.items()}                                                              # close 3 months ago
@@ -306,6 +329,8 @@ def build_public(sheets, settings, as_of, earlier=None):
                        "sec": str(m.get("Sector") or z.get("Sector") or "Other") or "Other",
                        "ind": str(m.get("Industry") or z.get("Industry") or "Other") or "Other",
                        "cap": cap, "f": 1 if str(z.get("Is_FNO") or "") == "Yes" else 0,
+                       # average shares traded per day (AI Portfolio Builder: can a position be bought without moving the price)
+                       **({"av": round(av)} if (av := avg_volume(m, day)) else {}),
                        "p": round(price, 2), "c": _num(m.get("Change_Pct") if m else z.get("Change_Pct")),
                        "r": rating, "sc": sc, "os": overall_sc, "o": overall,
                        # background (Price_Health): S = Healthy, M = Weak or unrated (as the Control Tower), W = Poor

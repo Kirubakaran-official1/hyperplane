@@ -541,7 +541,7 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
   "dark" in localStorage). The admin dashboard keeps its own default.
 
 ### Access manager (RBAC, customer app only) + Activity log + side nav (owner, 2026-10-27)
-- **Applications** = the customer app's modules, fixed catalogue `app_modules` (research | simple | portfolio; admin can
+- **Applications** = the customer app's modules, fixed catalogue `app_modules` (research | simple | portfolio | builder; admin can
   rename / describe / switch one off for everyone). **Roles** (`roles`, `role_modules`) group applications; a customer
   holds 1+ roles (`customer_roles`) and may open the UNION. Exactly one role `is_default` (partial unique index); trigger
   `customers_default_role` gives it to every new customer (sign-up or admin-created). Built-in role "Customer"
@@ -597,6 +597,101 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
   the nav (1615 px open / 1480 px collapsed).
 - Tests (scratchpad): `rbac_api_test.py` (103 API checks incl. DB-role permissions), `rbac_ui_customer.py`,
   `rbac_ui_admin.py` (Selenium).
+
+### Customer app = shell + micro-frontends (owner, 2026-11-01: "not a monolithic single file … load fast, consume what we use")
+- `frontend/app/src/main.jsx` = 13-line entry (theme, shell styles, render). `shell.jsx` = sign-in, side menu, top bar,
+  past-days picker, data loading and `APP_MODULES` (React.lazy). `core.jsx` = shared vocabulary / helpers / small
+  components (+ `addCss(id, css)`). `apps/research.jsx` · `apps/simple.jsx` · `apps/portfolio.jsx` · `apps/builder.jsx`
+  = one lazily loaded chunk per application, each with its own `*.css.js` (added on first load); `apps/portfolio-engine.jsx`
+  = the long-term engine shared by the Analyser and the Research stock card's Investment Summary. `guide.jsx` (Docs) is
+  lazy and adds its own CSS. `shell.css.js` = shared styles. A NEW application = a new `apps/<key>.jsx` (default export)
+  + an entry in `APP_MODULES` + its row in `app_modules`; never import an app module from the shell statically.
+- Kept alive: an opened application stays mounted (hidden) while the customer moves between apps → inputs, results,
+  filters and scroll position stay ("I have to go where I left"); scroll per app restored on return. The Builder also
+  keeps its last plan in sessionStorage `qf_builder_res` (survives a reload in the tab).
+- Data on demand: `/app/api/data` + `/history` load only once Research / AI Mode / Analyser is opened (Builder, Docs,
+  Helpdesk never fetch it). `/app/api/data` sends `ETag W/"p<published id>"` (history `W/"h<snapshot>"`) → 304 when the
+  browser already holds it. Caddy: `/app/assets/*` `Cache-Control: public, max-age=31536000, immutable` (hashed names),
+  everything else under /app `no-cache`.
+- The split was made by a script from the old single file (CSS split by which module uses a class; shared rules that
+  came after an app rule touching the same element are copied into that app's CSS to keep the cascade). Verified by a
+  17-screen pixel comparison before / after (identical except an animated glow) + all test suites. Sizes (gzip): shell
+  ~94 KB (mostly React) · research 12 · simple 5 · portfolio 11 + engine 5 · builder 14 · docs 15 (was one 134 KB file).
+
+### Hyperplane AI Portfolio Builder (owner, 2026-10-31) — app key `builder`, its own role
+- **Access:** application `builder` (4th in `app_modules`). NOT in the default "Customer" role (`db.CUSTOMER_APPS` =
+  research / simple / portfolio — `_seed_roles` no longer gives the Customer role "every application", so a fresh
+  production DB is right too). Role **"AI Portfolio Builder"** = every customer dashboard + builder (`BUILDER_APPS`),
+  seeded ONCE (settings key `builder_role_seeded`, so deleting it later does not bring it back), given to NOBODY — the
+  owner assigns it in Access manager. NEW ACCESS IS PINNED (owner 2026-11-01): `main._pin_new_apps` runs on every role
+  assignment (`_assign`) and when apps are added to a role (`update_role`): a customer with SAVED pins gets the newly
+  gained apps added while there is room (a full menu gives its last place to the first new app); no saved pins = no
+  write (the default menu shows the first 6 in catalogue order; builder is 4th). `POST /app/api/builder` = `need("builder")` → 403 + `X-Access: denied` otherwise;
+  rate 30/min per customer. `builder` is also a DATA_APP.
+- **Engine** `backend/app/builder.py` (pure, runs in the customer service on the LATEST published view, parsed once per
+  publish; ~5–40 ms). Inputs: amount ₹10,000…₹100 Cr · stocks 5…250 (UI presets 20/30/50 + Custom) · mix Large / Mid
+  / Small / Cash summing 100 with Cash ≥ 5 % (`CASH_MIN`, the buffer). Presets (owner 2026-11-01): Large 70/10/10/10 ·
+  Mid 20/50/20/10 (owner wrote 20/50/10/10 = 90 %; small set to 20 — confirm) · Small 15/15/60/10 · Multi 25 each) · reliability High always, + Medium optional, Low refused (422) · sector limit 15/20/25/30/40/100 (default 25 %)
+  · money split equal | strength. Eligible: AI Portfolio view `zv`, ≥3 years history, a Large/Mid/Small cap, chosen
+  reliability, LONG-TERM REGIME UP (`rp[0] == 1`; skipped only if the collection has no regime at all), NOT already
+  run up (stretched `x`, or `r3` > 30 % in 3 months). Tier 1 = zone engine green ("Doing well"); tier 2 ("Building",
+  marked) = strength ≥ +10 and quarter ≥ 0, used only after tier 1 runs out in that group. Conviction = long-term
+  strength ± weekly regime (+6 / −10) + High reliability 5 + quarterly up-streak 1.5×(≤4) + industry/sector long-term
+  strength tie-breaks − already above this month's zone 4 − 0.5 per % of r3 above 20. Build: stocks per group by the
+  mix (largest remainder); round-robin best-first; skip when one share > its slice, the sector would pass its limit
+  (money) or the industry already holds max(2, 10 % of N); whole shares; top-up pass (≤ +15 % of a stock's slice);
+  a group with fewer picks than asked SHARES its money among the picks it has (owner 2026-11-01: "I kept 10 % cash, the
+  plan kept 50 %" — the earlier "missing stocks' money stays cash" rule was wrong): `_fill` water-fills each group's
+  money by weight with one stock ≤ `STOCK_MAX` 10 % of the amount (or the plan's own slice if bigger) and every sector
+  ≤ its limit; stocks first skipped as too costly get a second chance with the bigger slice; top-up buys stay within
+  both caps. Cash ends at the customer's choice (tests: ±2 points at ₹10 L+); when the caps leave extra, a note says so. Weights stay server-side; customers see plan + reasons.
+- **UI** (`BuilderView`, now `apps/builder.jsx`): landing = only the inputs (amount with Indian commas + chips, count, style
+  cards + 4 sliders/number boxes where a stock group can only eat cash down to 5 % and the cash slider rescales the
+  groups, reliability chips with Low locked, "More options"), last inputs in localStorage `qf_builder` (validated on
+  load). Result: KPIs (amount, invested, cash kept, stocks, average strength), where-the-money-goes bar + table (chose
+  vs plan — `MixBar`: one 100 % bar per row, 2 px gaps, % printed on parts ≥ 9 %, cash = hatched grey with a solid
+  label chip; colours = dataviz reference slots 1–3 `--mx-l/m/s` per theme, validated with validate_palette.js, cash
+  `--mx-c` neutral), sector bars, notes, "What to buy" grouped by cap (price, quantity, amount, weight, strength, why chips,
+  "Building" tag, cash row), how-it-picked + disclaimer; Edit inputs · Ticker copy · Download (Excel = CSV with BOM) ·
+  Send to AI Portfolio Analyser (only when the plan has portfolio): shows how many stocks the list holds and asks
+  "Add to my list" (keep them, add the new) or "Replace my list" (erase, keep only the plan's) — `addToPf(syms, mode)`.
+  Docs section `builder` shows only for customers holding it (`Guide apps=`). Admin Access manager icon added.
+- 2026-11-01 v2 (owner: "more powerful … up to 1000 stocks … ₹10,000 to ₹10,000 crore … more fields … quant: zones
+  with the regime"): limits 5–1,000 stocks, ₹10,000–₹10,000 Cr. `opts` (POST body, all optional): horizon long (M20 Q50
+  Y30 = engine weights) | medium (M45 Q40 Y15) blends the zone engine's per-timeframe strengths; quality strong (≥40) |
+  good (≥24) | building (≥24, then ≥10 fill, default); confirmed (weekly regime up too); stock_max 5/10/15/20/25 %;
+  run_up 20/30/50/0 (3-month rise cut; stretched 3x always out); fno_only; exclude [sectors]. Ranking adds zone
+  stepping (3 × quarterly zone trend code + 1.5 × yearly ± 3 quarter-on-quarter zone step). Notes: price-too-high per
+  slice, liquidity (per-stock ₹ above LIQ_WARN Large 50 Cr / Mid 10 Cr / Small 2 Cr → buy over several days), left-out
+  sectors. `POST /app/api/builder/preview` (need builder, 120/min): counts per cap (strong / building) + sector list —
+  counts only, no names — drives the live "N stocks pass every check today" on the form. Today: ~230–305 pass, so a
+  1,000-stock ask returns what passes and keeps the cash share (notes say so).
+- UI v2: allocation table (segment + index definition, slim slider, −/+ stepper, ₹ amount, cash row "at least 5%",
+  thin summary bar, "100% allocated"); market caps in ONE blue in three shades (large = most contrast; reversed in dark;
+  owner: "why green for small cap — it confuses"), cash hatched grey; diversification check `spreadCheck` (guide ranges
+  by amount: ≤2 L 8–20 · ≤10 L 15–40 · ≤50 L 20–60 · ≤2 Cr 30–80 · ≤10 Cr 40–150 · ≤100 Cr 60–250 · above 80–500;
+  "Less diversified" below, "Spread too thin" under ₹10,000 per stock, "A very wide spread" above; one-click "Use N
+  stocks") on the form and the plan; sector list = every sector, scrolls in its card, click / dropdown filters the
+  "What to buy" table. More options: horizon, trend quality, regime, run-up, stock limit, F&O only, leave out sectors,
+  sector limit, money split ("N changed" in the summary).
+- 2026-11-01 v3 — TRADING VOLUME: the master screener `all-data-of-the-stock-2` now has Daily / Weekly / Monthly volume
+  (11 columns: Sr, Stock Name, Symbol, close, %_change, Daily_volume, Weekly_Volume, Monthly_volume, sector, industry,
+  marketcapname; `_row_to_record` still reads the old 9-column layout; flattened copy chunks 11/9/8) → Master_Stock_Data
+  `Volume`, `Weekly_Volume`, `Monthly_Volume`. publish `avg_volume` → per stock `av` (shares/day) = the LOWER of
+  weekly ÷ weekdays elapsed this week and monthly ÷ weekdays elapsed this month (candles are "so far"; a spike day must
+  not make a stock look easy); falls back to the day's volume. Builder: LIQ_PART 10 % of a normal day, LIQ_DAYS 5.
+  Every pick carries `days` (= qty ÷ (10 % × av)); option `by_volume` (owner: "volume for the suggestion, not the
+  quantity — give a yes / no option"): No (default) = suggestions only (note + "Days to buy" column, amber > 5 days);
+  Yes = each stock's cap = min(single-stock limit, 5 days × 10 % × av × price) in selection, water filling and top-up.
+  Sector limits now 5/10/15/20/25/30/40/none. UI: option names Leaders only / Proven trends / Proven + emerging,
+  Uptrend regime / Confirmed uptrend, Size by trading volume No / Yes (cards with a one-line explanation); amount chips
+  from ₹10 K and ₹50 K; big money on the plan via `money()` / `<Money>` ("₹7,500 Cr", full figure on hover) and
+  quantities via `qtyTxt` ("21.79 L"); spread advice suggests the HIGHER end (owner: "9 stocks for ₹1 L → go with 20"):
+  below the middle of the range → "Could be more diversified · Use <top>", min ₹2,500 per stock, ≤₹50 K 5–10; on the
+  plan only when it holds what was asked. Class names `is-warn / is-info / is-ok` (a bare `info` clashed with the shared
+  ⓘ style — the 1,000-stock note collapsed).
+- Tests (scratchpad): `builder_api_test.py` (role, refusals, 5 input sets × every rule, speed, determinism),
+  `builder_ui_test.py` (Selenium: menu by role, defaults, mix rules, build, Excel, add to Analyser, phone, dark).
 
 ## 8. Develop and test
 

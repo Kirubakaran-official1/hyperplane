@@ -49,6 +49,12 @@
 	# Customer edition: its own small bundle (contains none of the dashboard code)
 	handle /app* {
 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		# every application is its own file with its content hash in the name: cache it for good; the page itself is
+		# always re-checked, so a deploy reaches customers at once (each app downloads only when first opened)
+		@appassets path /app/assets/*
+		header @appassets Cache-Control "public, max-age=31536000, immutable"
+		@apppage not path /app/assets/*
+		header @apppage Cache-Control "no-cache"
 		root * /srv
 		try_files {path} /app/index.html
 		file_server

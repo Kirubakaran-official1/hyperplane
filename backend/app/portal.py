@@ -9,7 +9,9 @@ Access manager: what a customer may open comes from their roles (Admin → 🔐 
 them. Each sign-in is a row in customer_sessions (Admin can sign a device out); events and minutes per application go
 to the activity log, which this service can write but never read.
 """
+import gzip
 import hashlib
+import json
 import os
 import re
 import time
@@ -25,6 +27,7 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel
 
 from . import activity as act
+from . import builder
 from . import helpdesk as hd
 from .security import DUMMY_HASH, hash_password, verify_password
 
@@ -35,7 +38,7 @@ SECRET = os.environ.get("PORTAL_SECRET_KEY", "")
 COOKIE, SESSION_SECONDS = "qf_session", 7 * 24 * 3600
 DEV_COOKIE = "qf_dev"                                   # one id per browser / system (Activity log: devices per account)
 SEEN_EVERY = 60                                         # seconds between session "last active" updates
-DATA_APPS = ("research", "simple", "portfolio")         # applications that read the published data
+DATA_APPS = ("research", "simple", "portfolio", "builder")   # applications that read the published data
 NO_ACCESS = "This application is not part of your plan. Please contact QuantFriday through the Helpdesk."
 MAX_FAILS, LOCK_MINUTES = 5, 15
 
@@ -425,18 +428,25 @@ def data(request: Request, date: str | None = None, part: str | None = None, c=D
             if not conn.execute("SELECT portal_history_enabled() AS v").fetchone()["v"]:
                 raise HTTPException(403, "Past days are not available right now.")
             row = _history_days(conn).get(date, {}).get(part)
+            if row and request.headers.get("if-none-match") == f'W/"h{row["snapshot_id"]}"':
+                return Response(status_code=304, headers={"ETag": f'W/"h{row["snapshot_id"]}"', "Cache-Control": "private, no-cache"})
             r = row and conn.execute("SELECT data_gz FROM customer_history WHERE snapshot_id = %s", (row["snapshot_id"],)).fetchone()
         if not r:
             raise HTTPException(404, "No data for that day — markets may have been closed.")
         return Response(content=bytes(r["data_gz"]), media_type="application/json",
-                        headers={"Content-Encoding": "gzip", "Cache-Control": "private, no-store"})
+                        headers={"Content-Encoding": "gzip", "ETag": f'W/"h{row["snapshot_id"]}"', "Cache-Control": "private, no-cache"})
+    # latest view: a browser that already holds this publish gets "304 Not Modified" (no 180 KB download again)
     with pool.connection() as conn:
-        r = conn.execute("SELECT data_gz, published_at FROM published ORDER BY id DESC LIMIT 1").fetchone()
-    if not r:
-        raise HTTPException(404, "No data has been published yet — please check back soon.")
+        head = conn.execute("SELECT id, published_at FROM published ORDER BY id DESC LIMIT 1").fetchone()
+        if not head:
+            raise HTTPException(404, "No data has been published yet — please check back soon.")
+        etag = f'W/"p{head["id"]}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "private, no-cache"})
+        r = conn.execute("SELECT data_gz FROM published WHERE id = %s", (head["id"],)).fetchone()
     return Response(content=bytes(r["data_gz"]), media_type="application/json",
-                    headers={"Content-Encoding": "gzip", "X-Published-At": r["published_at"].isoformat(),
-                             "Cache-Control": "private, no-cache"})
+                    headers={"Content-Encoding": "gzip", "X-Published-At": head["published_at"].isoformat(),
+                             "ETag": etag, "Cache-Control": "private, no-cache"})
 
 
 PF_MAX = 500                                          # stocks per portfolio ("any number" — capped against abuse)
@@ -479,6 +489,55 @@ def portfolio_put(body: PortfolioIn, request: Request, c=Depends(need("portfolio
         conn.execute("INSERT INTO customer_portfolio (customer_id, symbols, updated_at) VALUES (%s, %s, now()) "
                      "ON CONFLICT (customer_id) DO UPDATE SET symbols = EXCLUDED.symbols, updated_at = now()", (c["id"], syms))
     return {"symbols": syms}
+
+
+class BuilderIn(BaseModel):
+    amount: float
+    count: int
+    alloc: dict
+    reliability: list[str]
+    sector_max: int = 25
+    weighting: str = "equal"
+    opts: dict = {}                                       # "More options": horizon, quality, confirmed, stock_max, …
+
+
+class PreviewIn(BaseModel):
+    reliability: list[str] = ["S"]
+    opts: dict = {}
+
+
+_latest = {"id": None, "data": None}                   # the latest published view, parsed once per publish
+
+
+def _latest_view():
+    with pool.connection() as conn:
+        r = conn.execute("SELECT id FROM published ORDER BY id DESC LIMIT 1").fetchone()
+        if not r:
+            raise HTTPException(404, "No data has been published yet — please check back soon.")
+        if r["id"] != _latest["id"]:
+            g = conn.execute("SELECT data_gz FROM published WHERE id = %s", (r["id"],)).fetchone()
+            _latest.update(id=r["id"], data=json.loads(gzip.decompress(bytes(g["data_gz"]))))
+    return _latest["data"]
+
+
+@app.post("/app/api/builder")
+def portfolio_builder(body: BuilderIn, request: Request, c=Depends(need("builder"))):
+    """Hyperplane AI Portfolio Builder: a model portfolio from the latest published data (builder.py)."""
+    _rate("builder", str(c["id"]), 30, 60)
+    try:
+        return builder.build(_latest_view(), body.amount, body.count, body.alloc, body.reliability, body.sector_max, body.weighting, body.opts)
+    except builder.BuildError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/app/api/builder/preview")
+def portfolio_builder_preview(body: PreviewIn, c=Depends(need("builder"))):
+    """Live count for the form: how many stocks pass every check today (per market cap) + the sector list."""
+    _rate("builder-preview", str(c["id"]), 120, 60)
+    try:
+        return builder.preview(_latest_view(), body.reliability, body.opts)
+    except builder.BuildError as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/app/api/health")
