@@ -3196,7 +3196,7 @@ const EVENT_META = {
   FLAG:      { kind:"TRIGGER", w:0.9,  label:"Flag Break" },
   STATE:     { kind:"STATE",   w:0.6,  label:"Holding Zone" },
   PULLBACK:  { kind:"PULLBACK",w:0.5,  label:"Pullback" },
-  RECLAIM:   { kind:"TRIGGER", w:0.7,  label:"Back to NR" },
+  RECLAIM:   { kind:"TRIGGER", w:0,    label:"Back to NR" },   // failed breakdown: ignored in the strength (owner, 2026-10-31)
   NEAR:      { kind:"SETUP",   w:0.35, label:"Near Level" },
   TECH:      { kind:"TECH",    w:1.0,  label:"Technicals" },
 };
@@ -3228,7 +3228,7 @@ function classifySignal(row) {
     else if (type === "Breakdown")  { event="BREAKDOWN"; dir=-1; }
     else if (type === "Near High")  { event="NEAR";      dir=1; }
     else if (type === "Near Low")   { event="NEAR";      dir=-1; }
-    else if (type === "Back to NR") { event="RECLAIM";   dir=1; }
+    else if (type === "Back to NR") { event="RECLAIM";   dir=0; }   // no direction, no points (owner, 2026-10-31)
   } else if (nl.includes("virgin")) {
     tf = nl.includes("year") ? "Y" : nl.includes("quarter") ? "Q" : nl.includes("month") ? "M" : "W";
     event = "VIRGIN"; dir = nl.includes("breakout") ? 1 : -1;

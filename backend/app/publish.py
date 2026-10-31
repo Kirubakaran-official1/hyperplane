@@ -10,6 +10,15 @@ Per stock and timeframe (D W M Q Y) the rating is Good / Moderate / Weak:
     minus = downtrend strength; |value| < 24 (score between −0.5 and 0.5) = sideways. Same cut as Good / Weak.
 Sector / industry numbers per timeframe = the Control Tower's (`sector_stats`, a port of tfSectorIndustry): the
 scanner's sheets for "All", recomputed per D..Y (and for "All" too when technicals are on).
+Regime analyser (owner, 2026-10-31: "without the trend nothing is great"): the Weekly Supertrend sets the regime for
+EVERY timeframe (zones, NR, technicals and the AI Portfolio zone engine) — price above it = upward regime, below =
+downward. A timeframe strength that points against the regime, however strong, is squeezed into the sideways band
+(× REGIME_SQUEEZE, so +96 → +22: shown as sideways, the order between stocks is kept). The Daily Supertrend never
+blocks; it only warns ("regime shifting downwards" = daily turned down while the weekly is still up). A weekly flip
+since the previous collection = "regime shifted downwards / upwards". No Supertrend data = no regime, nothing changes.
+Sector / industry: a stock's bullish signals count only outside a downward regime, its bearish ones only outside an
+upward regime. The AI Portfolio (long-term) is one step longer (owner, 2026-10-31): the MONTHLY Supertrend decides
+for its zone engine and the weekly only warns. Customers see the regime words only — never the indicator's name.
 Only labels and these numbers leave this module — never signals, signal names or the method.
 """
 import gzip
@@ -19,12 +28,12 @@ import re
 from datetime import date, timedelta
 
 from .db import get_meta, get_settings, pool, set_meta, TECH_TF_DEFAULT
-from .zone_engine import read_all as zone_read_all
+from .zone_engine import read_all as zone_read_all, apply_regime as zone_apply_regime
 
 TFS = "DWMQY"
 TF_WEIGHT = {"D": 1, "W": 2, "M": 3, "Q": 4, "Y": 5}
 EVENT_W = {"BREAKOUT": 1.0, "BREAKDOWN": 1.0, "CROSS": 1.0, "VIRGIN": 1.2, "FLAG": 0.9, "STATE": 0.6,
-           "PULLBACK": 0.5, "RECLAIM": 0.7, "NEAR": 0.35}
+           "PULLBACK": 0.5, "RECLAIM": 0.0, "NEAR": 0.35}          # RECLAIM (Back to NR) = 0: owner, 2026-10-31
 TF_WORDS = {"daily": "D", "weekly": "W", "monthly": "M", "quarterly": "Q", "quaterly": "Q", "yearly": "Y"}
 POS_SCORE = {"ABOVE_TOP": 1.0, "IN_TOP_BAND": 0.5, "INSIDE": 0.0, "IN_BOTTOM_BAND": -0.5, "BELOW_BOTTOM": -1.0}
 _TF_RE = re.compile(r"(daily|weekly|monthly|quarterly|quaterly|yearly)|(?:^|_)([dwmqy])_?z(?=_|$|[hl])")
@@ -36,7 +45,9 @@ KEEP_PUBLISHED = 30
 # previous month / quarter. Middle of the zone moved up by ≥ ZONE_STEP × the earlier zone's width = stepping up (1), down
 # by as much = stepping down (−1), else level (0); None = no collection stored in the previous period.
 ZONE_STEP = 0.10
+REGIME_SQUEEZE = 0.23                   # against the regime: strength × 0.23 → always inside the sideways band (|v| < 24)
 _zone_cache = {}
+_regime_cache = {}
 
 
 def _sym(v):
@@ -63,7 +74,9 @@ def classify(row):
         tf = {"Daily": "D", "Weekly": "W", "Monthly": "M", "Quarterly": "Q", "Yearly": "Y"}.get(row.get("Timeframe")) \
             or (nl[:1].upper() if nl[:1].upper() in TFS else "D")
         ev = {"Breakout": ("BREAKOUT", 1), "Breakdown": ("BREAKDOWN", -1), "Near High": ("NEAR", 1),
-              "Near Low": ("NEAR", -1), "Back to NR": ("RECLAIM", 1)}.get(typ, ("STATE", 0))
+              # Back to NR = a failed breakdown (closed below the mother Low, now back inside): ignored in the
+              # strength — direction 0, no points (owner, 2026-10-31: "it's a false breakout, give 0")
+              "Near Low": ("NEAR", -1), "Back to NR": ("RECLAIM", 0)}.get(typ, ("STATE", 0))
         return tf, ev[1], EVENT_W[ev[0]]
     if "virgin" in nl:
         tf = "Y" if "year" in nl else "Q" if "quarter" in nl else "M" if "month" in nl else "W"
@@ -111,6 +124,53 @@ def _tech_net(row, tf, price, c):
     return sum(dirs) / (6 + (rsi70 is not None) + (atr is not None))
 
 
+def _side(price, line):
+    return None if price is None or line is None else (1 if price > line else -1 if price < line else 0)
+
+
+def regimes(sheets):
+    """symbol -> (weekly, daily, monthly) regime from the Supertrend: 1 price above · −1 below · 0 on it · None no value.
+    Stocks without a weekly value are left out (no regime = no gating). The AI Portfolio uses (monthly, weekly)."""
+    zl = {_sym(r.get("Symbol")): r for r in sheets.get("Zone_Levels", [])}
+    out = {}
+    for r in sheets.get("Technicals", []) or []:
+        sym = _sym(r.get("Symbol"))
+        price = _num((zl.get(sym) or {}).get("Price"))
+        if price is None:
+            price = _num(r.get("Price"))
+        w = _side(price, _num(r.get("W_Supertrend")))
+        if sym and w is not None:
+            out[sym] = (w, _side(price, _num(r.get("D_Supertrend"))), _side(price, _num(r.get("M_Supertrend"))))
+    return out
+
+
+def squeeze(v, w):
+    """(value, held back?) — a strength pointing against the weekly regime w goes into the sideways band."""
+    if v is None or not w or v * w >= 0:
+        return v, False
+    return round(v * REGIME_SQUEEZE), True
+
+
+def _earlier_regime(trade_date):
+    """{"date": ISO day, "w": symbol -> weekly regime, "m": symbol -> monthly regime} of the newest collection from an
+    EARLIER trading day (None = none)."""
+    with pool.connection() as c:
+        r = c.execute("SELECT id, trade_date FROM snapshots WHERE trade_date < %s ORDER BY trade_date DESC, taken_at DESC LIMIT 1",
+                      (trade_date,)).fetchone()
+    if not r:
+        return None
+    if r["id"] not in _regime_cache:
+        with pool.connection() as c:
+            g = c.execute("SELECT data_gz FROM snapshots WHERE id = %s", (r["id"],)).fetchone()
+        sheets = json.loads(gzip.decompress(bytes(g["data_gz"])))
+        if len(_regime_cache) >= 6:
+            _regime_cache.pop(next(iter(_regime_cache)))
+        reg = regimes(sheets)
+        _regime_cache[r["id"]] = {"w": {k: v[0] for k, v in reg.items()}, "m": {k: v[2] for k, v in reg.items()}}
+    got = _regime_cache[r["id"]]
+    return {"date": r["trade_date"].isoformat(), **got} if got["w"] else None
+
+
 def _zone_mids(snapshot_id):
     """symbol -> {"M": (middle, width), "Q": (middle, width)} of one stored collection (small cache: a history rebuild
     asks for the same earlier collection many times)."""
@@ -146,6 +206,7 @@ def earlier_zones(trade_date):
             r = c.execute("SELECT id FROM snapshots WHERE trade_date >= %s AND trade_date < %s ORDER BY taken_at DESC LIMIT 1",
                           (_period_start(start - timedelta(days=1), months), start)).fetchone()
         out[tf] = _zone_mids(r["id"]) if r else None
+    out["R"] = _earlier_regime(trade_date)          # regime of the previous trading day's collection ("regime shifted")
     return out
 
 
@@ -167,6 +228,8 @@ def build_public(sheets, settings, as_of, earlier=None):
     years = {_sym(r.get("Symbol")): _num(r.get("Years_Of_History")) for r in sheets.get("Price_Health", [])}
     tech = {_sym(r.get("Symbol")): r for r in sheets.get("Technicals", [])} if settings.get("tech_enabled") else {}
     zv = zone_read_all(sheets)                   # AI Portfolio zone engine codes (empty for collections without Zone_History)
+    reg = regimes(sheets)                        # regime analyser: symbol -> (weekly, daily)
+    prev = (earlier or {}).get("R")              # previous trading day's weekly regime ("regime shifted")
     mc = {_sym(r.get("Symbol")): [_num(r.get(f"M{k}_Close")) for k in range(1, 5)] for r in sheets.get("Zone_History", [])}
     m3 = {k: v[2] for k, v in mc.items()}                                                              # close 3 months ago
 
@@ -209,7 +272,8 @@ def build_public(sheets, settings, as_of, earlier=None):
             continue
         if not sym or price is None:
             continue
-        rating, raw_total, sc = "", 0.0, []
+        rating, raw_total, sc, held = "", 0.0, [], ""
+        rw, rd, rm = reg.get(sym, (None, None, None))
         for tf in TFS:
             pos = POS_SCORE.get(str(z.get(f"{tf}_Position") or ""))
             s_net = sig.get(sym, {}).get(tf)
@@ -219,15 +283,25 @@ def build_public(sheets, settings, as_of, earlier=None):
                 sc.append(None)
                 continue
             score = max(-2.0, min(2.0, s_net or 0.0)) + (pos or 0.0) + (t_net or 0.0)
+            v, h = squeeze(round(100 * math.tanh(score / 2)), rw)
+            if h:                                # against the regime → sideways
+                held += tf
+                score *= REGIME_SQUEEZE
             raw_total += score * TF_WEIGHT[tf]
-            sc.append(round(100 * math.tanh(score / 2)))
-            rating += "G" if score >= 0.5 else "W" if score <= -0.5 else "M"
+            sc.append(v)
+            rating += "M" if h else "G" if score >= 0.5 else "W" if score <= -0.5 else "M"
         have = [(TF_WEIGHT[tf], v) for tf, v in zip(TFS, sc) if v is not None]
         overall_sc = round(sum(w * v for w, v in have) / sum(w for w, _ in have)) if have else None
         g, w = rating.count("G"), rating.count("W")
         overall = ("Strong" if g >= 4 and w == 0 else "Weak" if w >= 4 and g == 0
                    else "Leaning strong" if g > w else "Leaning weak" if w > g else "Mixed")
         cap = CAP.get(str(m.get("Marketcap") or "").replace(" ", "").lower(), "")
+        # AI Portfolio = long-term regime (owner, 2026-10-31): the MONTHLY Supertrend decides, the weekly only warns
+        zone, zheld = zone_apply_regime(zv.get(sym), rm)
+        pw = (prev or {}).get("w", {}).get(sym) if prev else None
+        flip = rw if rw and pw and pw != rw else None
+        pm = (prev or {}).get("m", {}).get(sym) if prev else None
+        mflip = rm if rm and pm and pm != rm else None
         stocks.append({"s": sym, "n": str(m.get("Stock_Name") or z.get("Stock_Name") or sym)[:80],
                        "sec": str(m.get("Sector") or z.get("Sector") or "Other") or "Other",
                        "ind": str(m.get("Industry") or z.get("Industry") or "Other") or "Other",
@@ -243,7 +317,14 @@ def build_public(sheets, settings, as_of, earlier=None):
                        # zone step vs the previous month / quarter: [M, Q] each 1 up · 0 level · −1 down · None unknown
                        "zs": [_zone_step(z, "M", earlier), _zone_step(z, "Q", earlier)],
                        # zone engine result: [colour, score, [M], [Q], [Y]] — see zone_engine.py (codes only)
-                       **({"zv": zv[sym]} if sym in zv else {}),
+                       **({"zv": zone} if zone else {}),
+                       # regime analyser: rg [weekly, daily] 1 up · −1 down · 0 flat · None; rh = timeframes of sc held
+                       # back as sideways; rx = weekly regime flipped since the previous trading day (1 up · −1 down).
+                       # AI Portfolio (long-term): rp [monthly, weekly], rz = zv timeframes held back, rpx = monthly flip
+                       **({"rg": [rw, rd]} if rw is not None else {}), **({"rh": held} if held else {}),
+                       **({"rx": flip} if flip else {}),
+                       **({"rp": [rm, rw]} if rm is not None else {}), **({"rz": zheld} if zheld else {}),
+                       **({"rpx": mflip} if mflip else {}),
                        # price change since the close 3 months ago, % (AI Portfolio "last 3 months"); a move beyond
                        # −95 % … +400 % is treated as unadjusted data (e.g. a share consolidation) and left out
                        **({"r3": r3} if (r3 := (round((price / m3[sym] - 1) * 100, 1) if m3.get(sym) else None)) is not None
@@ -260,9 +341,10 @@ def build_public(sheets, settings, as_of, earlier=None):
             s["c"] = round(s["c"], 2)
     stocks.sort(key=lambda s: s["s"])
     sectors, industries = sector_stats(sheets, flat, master, zl, sig_types(flat), tech, tech_cfg, tech_w,
-                                       bool(settings.get("tech_enabled")), index_syms)
+                                       bool(settings.get("tech_enabled")), index_syms, reg)
     return {"v": 3, "as_of": as_of, "stocks": stocks, "top": [sym for _, _, sym in scored[:10]],
-            "sectors": sectors, "industries": industries}
+            "sectors": sectors, "industries": industries,
+            **({"rd": prev["date"]} if prev and reg else {})}         # day the "regime shifted" flags compare with
 
 
 # ─── sector / industry strength per timeframe (same as the Control Tower) ─────────────────
@@ -295,9 +377,11 @@ def _attach_strength(rows):
     return rows
 
 
-def sector_stats(sheets, flat, master, zl, types, tech, tech_cfg, tech_w, tech_on, index_syms):
+def sector_stats(sheets, flat, master, zl, types, tech, tech_cfg, tech_w, tech_on, index_syms, reg=None):
     """{"A"|"D".."Y": [rows]} for sectors and industries. Row: k (name), sec (industries), st (strength 0–100),
-    nb (net bias), n (stocks), sig (signals), adv, dec, avg (average % move)."""
+    nb (net bias), n (stocks), sig (signals), adv, dec, avg (average % move). reg (regime analyser): a stock's bullish
+    signals count only when its weekly regime is not down, its bearish ones only when it is not up."""
+    reg = reg or {}
     sec_of, ind_of = {}, {}
     for sym, m in master.items():
         sec_of[sym], ind_of[sym] = str(m.get("Sector") or "Unknown") or "Unknown", str(m.get("Industry") or "Unknown") or "Unknown"
@@ -340,13 +424,15 @@ def sector_stats(sheets, flat, master, zl, types, tech, tech_cfg, tech_w, tech_o
                 n_ch += 1; tot_ch += c
                 adv += c > 0; dec += c < 0
             per = types.get(sym, {})
+            w = reg.get(sym, (None,))[0]
+            up_ok, dn_ok = w != -1, w != 1            # regime analyser: signals against the regime are not counted
             for t in (TFS if tf == "A" else tf):
                 k = per.get(t, {})
-                bull += k.get("LONG", 0) + k.get("Breakout", 0)
-                bear += k.get("SHORT", 0) + k.get("Breakdown", 0)
+                bull += (k.get("LONG", 0) + k.get("Breakout", 0)) * up_ok
+                bear += (k.get("SHORT", 0) + k.get("Breakdown", 0)) * dn_ok
                 total += sum(k.values())
             tb, tr = tech_bias(sym, tf)
-            bull += tb; bear += tr
+            bull += tb * up_ok; bear += tr * dn_ok
         return {"n": len(group), "sig": int(total), "adv": adv, "dec": dec,
                 "avg": round(tot_ch / n_ch, 2) if n_ch else 0.0,
                 "ad": round(adv / (adv + dec), 3) if adv + dec else 0.5, "nb": round(bull - bear, 1)}
@@ -370,7 +456,7 @@ def sector_stats(sheets, flat, master, zl, types, tech, tech_cfg, tech_w, tech_o
         ind_groups.setdefault((sec_of[sym], ind_of[sym]), []).append(sym)
     sectors, industries = {}, {}
     for tf in ("A",) + tuple(TFS):
-        if tf == "A" and not tech_on and sheets.get("Sector_Analysis"):
+        if tf == "A" and not tech_on and not reg and sheets.get("Sector_Analysis"):
             sectors[tf] = from_sheet(sheets.get("Sector_Analysis", []), False)
             industries[tf] = from_sheet(sheets.get("Industry_Analysis", []), True)
             continue

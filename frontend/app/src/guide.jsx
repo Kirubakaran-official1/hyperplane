@@ -87,6 +87,21 @@ const SECTIONS = [
     </div>
     <Tip kind="warn" title="Strength is NOT a price target">“84%” means the trend is very strong and clean right now. It does
       <b> not</b> mean the price will rise 84%, and it is not a probability. Price changes are shown separately, e.g. “+2.1% today”.</Tip>
+    <h3>Regime analyser — is the current regime of the stock up or down?</h3>
+    <p>The <b>regime</b> tells you whether the stock is in an up phase or a down phase right now. Hyperplane trusts a trend only
+      when it goes the same way as the regime. If the regime is down, a rise is <b>not trusted yet</b>: it is shown as
+      <Tag k="side">◆ Sideways</Tag>, even if it looks strong. This applies to every timeframe and to all three applications.</p>
+    <div className="g-defs">
+      <div><span className="rgtag good"><i>▲</i>Regime up</span><span>The current regime of the stock is up.</span></div>
+      <div><span className="rgtag mid"><i>↘</i>Regime turning down</span><span>The regime is still up, but it has started changing from up to down. A complete change to down is expected soon.</span></div>
+      <div><span className="rgtag bad"><i>▼</i>Regime changed to down</span><span>The change from up to down is complete (since the previous trading day).</span></div>
+      <div><span className="rgtag bad"><i>▼</i>Regime down</span><span>The current regime of the stock is down. Any rise is not trusted until it turns up.</span></div>
+      <div><span className="rgtag mid"><i>↗</i>Regime turning up (not confirmed)</span><span>The regime is down, but recently it has started changing towards up. It is not confirmed and can turn down again at any time, so monitor it for a few more days.</span></div>
+      <div><span className="rgtag good"><i>▲</i>Regime changed to up</span><span>The change from down to up is complete (since the previous trading day).</span></div>
+    </div>
+    <p>Next to the regime, Hyperplane also tells you what it means for the stock itself. For example, "the stock is falling
+      along with it, stay away until the regime turns up", or "the stock is still rising, but this rise may not last, protect
+      your gains". The Research view shows every stock's regime in the <b>Regime</b> column, with a filter above the stock list.</p>
     <h3>Timeframes — how far you are looking</h3>
     <table className="g-table"><tbody>
       <tr><td><b>Daily</b></td><td>Short term — the last days to a few weeks. For short-term traders.</td></tr>
@@ -338,6 +353,12 @@ const SECTIONS = [
     <p>These give a strength for each period and one <b>stock strength</b> from −100% to +100%. The quarter counts most, then the
       year, then the month. Daily and weekly moves are left out. The sector and industry are shown on each card for reference only
       (see its ⓘ); they are never used in the strength and never change a colour.</p>
+    <p><b>The long-term regime</b> comes first. It works like the regime in <i>Key words explained</i>, but over a longer
+      period, because the AI Portfolio Analyser is for holding stocks. If the month, quarter or year goes against the long-term
+      regime, it is not trusted yet and is shown as <b>sideways</b>. So a stock whose long-term regime is down cannot be
+      <b> Doing well</b>. Each card shows the long-term regime, and the reasons say when it has <b>started changing</b> or has
+      <b> changed</b>. The month, quarter and year tiles show the <b>strength</b> of each trend from <b>−100 to +100</b> (minus =
+      downtrend, plus = uptrend). This is how strong the trend is, not how much the price moved.</p>
     <table className="g-table"><tbody>
       <tr><td><b>Doing well</b></td><td>Stock strength +24% or more, and the quarterly view is not negative.</td></tr>
       <tr><td><b>Keep an eye on</b></td><td>Stock strength between −24% and +24% (moving sideways), or strong but with a negative

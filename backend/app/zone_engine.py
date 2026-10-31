@@ -20,6 +20,8 @@ strength, streak direction, streak length] (streak = periods in a row the zone m
 "going down for the last 3 quarters"); the steps, weights and formula stay here. Cost: a few arithmetic operations per stock, once per publish —
 no extra work when customers load the app.
 Constants are Claude's proposal on the owner's request ("decide the best output") — owner may tune.
+Regime analyser (publish.py, owner 2026-10-31): apply_regime squeezes a timeframe that points against the weekly regime
+into sideways before the stock strength and colour are worked out.
 """
 
 RECENCY = (0.4, 0.3, 0.2, 0.1)          # weight of the latest step … the oldest
@@ -91,7 +93,7 @@ def read_stock(zl, zh):
     if not zl or not zh:
         return None
     price = _num(zl.get("Price"))
-    per, parts = {}, []
+    per = {}
     for tf in "MQY":
         sh = shifts([(_num(zh.get(f"{tf}{k}_Bottom")), _num(zh.get(f"{tf}{k}_Top"))) for k in range(5)])
         t = trend(None, sh)
@@ -105,12 +107,34 @@ def read_stock(zl, zh):
             continue
         s = round(100 * (TREND_W * t + POS_W * p))
         per[tf] = [trend_code(t), pcode, s, *streak(sh)]          # + streak: "going down for the last 3 quarters"
-        parts.append((TF_W[tf], s))
     if per["Q"] is None:
         return None
+    return _finish(per)
+
+
+def _finish(per):
+    """[colour, strength, [M], [Q], [Y]] from the timeframe results (each [.., .., strength, ..] or None)."""
+    parts = [(TF_W[tf], per[tf][2]) for tf in "MQY" if per[tf] is not None]
     strength = round(sum(w * s for w, s in parts) / sum(w for w, _ in parts))
     colour = 1 if strength >= CUT and per["Q"][2] >= 0 else -1 if strength <= -CUT else 0
     return [colour, strength, per["M"], per["Q"], per["Y"]]
+
+
+REGIME_SQUEEZE = 0.23                   # same as publish.py: against the regime → inside the sideways band
+
+
+def apply_regime(v, w):
+    """Regime analyser (owner, 2026-10-31): a timeframe strength pointing against the long-term (monthly) regime w (1 / −1) is squeezed
+    into sideways; the stock strength and colour are recomputed. → (result, held timeframes e.g. "MQ")."""
+    if not v or not w:
+        return v, ""
+    per, held = {}, ""
+    for tf, t in zip("MQY", v[2:]):
+        if t is not None and t[2] * w < 0:
+            t = [t[0], t[1], round(t[2] * REGIME_SQUEEZE), *t[3:]]
+            held += tf
+        per[tf] = t
+    return (_finish(per), held) if held else (v, "")
 
 
 def read_all(sheets):

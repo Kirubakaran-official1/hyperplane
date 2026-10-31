@@ -251,8 +251,8 @@ export function downloadReport(m) {
       font(9, "bold", C.sub); text("Recently listed", M + 10, cy0 + 6.5); font(8, "normal", C.mute); text("No view yet", M + 10, cy0 + 11.5);
     } else {
       font(7, "bold", C.mute); doc.setCharSpace(0.5); text("STOCK STRENGTH", M + 6, cy0 + 1); doc.setCharSpace(0);
-      font(18, "bold", C[toneOf(st.v)]); text(`${sgn(st.v)}%`, M + 6, cy0 + 9.5);
-      const vw = doc.getTextWidth(`${sgn(st.v)}%`); font(9, "bold", C[toneOf(st.v)]); text(st.word, M + 9 + vw, cy0 + 9);
+      font(18, "bold", C[toneOf(st.v)]); text(sgn(st.v), M + 6, cy0 + 9.5);
+      const vw = doc.getTextWidth(sgn(st.v)); font(9, "bold", C[toneOf(st.v)]); text(st.word, M + 9 + vw, cy0 + 9);
       const barY = cy0 + 13, bx0 = M + 6, bw0 = LW, mid = bx0 + bw0 / 2;
       doc.setFillColor(C.line); doc.roundedRect(bx0, barY, bw0, 2.4, 1.2, 1.2, "F");
       const fw = bw0 / 2 * Math.min(100, Math.abs(st.v)) / 100;
@@ -263,9 +263,9 @@ export function downloadReport(m) {
       st.tfs.forEach((f, i) => {
         const x = M + 6 + i * (boxW + 2), yy = cy0 + 22;
         doc.setFillColor(C.panel); doc.setDrawColor(C.line); doc.setLineWidth(0.25); doc.roundedRect(x, yy, boxW, 17, 1.6, 1.6, "FD");
-        font(6.3, "bold", C.mute); doc.setCharSpace(0.4); text(f.label.toUpperCase(), x + 2.5, yy + 4.2); doc.setCharSpace(0);
-        font(11, "bold", f.v == null ? C.mute : C[toneOf(f.v)]); text(f.v == null ? "No data" : f.v === 0 ? "Sideways" : `${sgn(f.v)}%`, x + 2.5, yy + 10);
-        font(5.9, "normal", C.sub); if (f.v != null && f.v !== 0) text(f.word, x + 2.5, yy + 14.4);
+        font(6.3, "bold", C.mute); doc.setCharSpace(0.4); text(`${f.label} strength`.toUpperCase(), x + 2.5, yy + 4.2); doc.setCharSpace(0);
+        font(11, "bold", f.v == null ? C.mute : C[toneOf(f.v)]); text(f.v == null ? "No data" : sgn(f.v), x + 2.5, yy + 10);
+        font(5.9, "normal", C.sub); if (f.v != null) text(f.word, x + 2.5, yy + 14.4);
         else if (f.v == null && f.note) text(f.note, x + 2.5, yy + 14.4);
       });
     }

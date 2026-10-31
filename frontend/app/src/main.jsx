@@ -140,6 +140,75 @@ function combinedView(od, bi, sec, ind, os = null, stretched = false) {
   return { tone: v[0], title: v[1], text: v[2] };
 }
 
+// ─── Regime analyser (owner, 2026-10-31: "without the trend nothing is great") ───
+// The server decides it: the weekly regime sets which direction counts on EVERY timeframe; a strength pointing against it
+// is already squeezed into sideways there (s.rh = those timeframes of s.sc, s.rz = of the AI Portfolio view). The daily
+// regime only warns. s.rg = [weekly, daily] 1 up · −1 down · 0 flat; s.rx = the weekly regime flipped since the previous
+// trading day (data.rd). This only turns those codes into words — customers never see how the regime is measured.
+const TF_FULL = { D:"Daily", W:"Weekly", M:"Monthly", Q:"Quarterly", Y:"Yearly" };
+// Customer wording (owner, 2026-10-31): plain and professional. The regime is an uptrend or a downtrend; a daily reading
+// against it = "has started fading recently". Never "weekly" / "daily" regime, never the indicator's name.
+// lt = the AI Portfolio's LONG-TERM regime (owner, 2026-10-31): s.rp = [monthly, weekly], s.rpx = monthly flip, s.rz = held
+function regimeOf(s, rd, lt = false) {
+  const rg = s && (lt ? s.rp : s.rg);
+  if (!rg) return null;
+  const [w, d] = rg, rx = lt ? s.rpx : s.rx, since = rd ? ` since ${fmtDay(rd)}` : "";
+  const R = lt ? "long-term regime" : "regime", RC = lt ? "long-term regime" : "current regime", wait = lt ? "weeks" : "days";
+  // [key, tone, icon, label, short label, what the regime is]
+  const L = t => lt ? `Long-term regime ${t}` : `Regime ${t}`;
+  const r = rx === -1 ? ["sdn", "bad", "▼", L("changed to down"), "Changed to down", `The ${R} of the stock has changed from up to down${since}.`]
+    : rx === 1 ? ["sup", "good", "▲", L("changed to up"), "Changed to up", `The ${R} of the stock has changed from down to up${since}.`]
+    : w === 1 && d === -1 ? ["dn-soon", "mid", "↘", L("turning down"), "Turning down", `The ${RC} of the stock is up, but it has started changing from up to down. A complete change to down is expected soon.`]
+    : w === -1 && d === 1 ? ["up-soon", "mid", "↗", L("turning up (not confirmed)"), "Turning up?", `The ${RC} of the stock is down. Recently it has started changing towards up, but this is not confirmed yet and it can turn down again at any time. Monitor it for a few more ${wait} for a complete change.`]
+    : w === 1 ? ["up", "good", "▲", L("up"), "Up", `The ${RC} of the stock is up.`]
+    : w === -1 ? ["down", "bad", "▼", L("down"), "Down", `The ${RC} of the stock is down.`]
+    : ["flat", "side", "◆", L("not clear"), "Not clear", `The ${RC} of the stock is not clear.`];
+  const [key, tone, icon, word, short, base] = r;
+  return { key, tone, icon, word, short, base, text: base, w, d, held: ((lt ? s.rz : s.rh) || "").split("").filter(Boolean).map(k => TF_FULL[k]) };
+}
+// What the regime means for the stock's OWN direction (1 rising · 0 sideways · −1 falling) — every combination
+const RG_STORY = {
+  up:        { 1: "The stock is rising along with it, which is a healthy sign.",
+               0: "The stock itself is moving sideways for now. A rise from here would have the regime behind it.",
+              [-1]: "The stock itself is still weak. Wait for it to pick up." },
+  "dn-soon": { 1: "The stock is still rising, but this rise may not last. Protect your gains.",
+               0: "The stock has already lost its strength. If the regime turns down fully, it may start to fall.",
+              [-1]: "The stock is already weak, which supports the change to down." },
+  down:      { 1: "Its rise is not trusted until the regime turns up.",
+               0: "The stock is moving sideways. Any rise is not trusted until the regime turns up.",
+              [-1]: "The stock is falling along with it. Stay away until the regime turns up." },
+  "up-soon": { 1: "Its rise is not trusted until the change is confirmed.",
+               0: "The stock is trying to steady itself. Wait for the change to be confirmed.",
+              [-1]: "The stock is still falling, so do not act yet." },
+  sdn:       { 1: "Its rise is not trusted until the regime turns up again.",
+               0: "Any rise is not trusted until the regime turns up again.",
+              [-1]: "The stock has started falling with it. Avoid fresh buying." },
+  sup:       { 1: "The stock has started rising with it.",
+               0: "A rise from here would have the regime behind it.",
+              [-1]: "The stock itself is still weak. Wait for it to pick up." },
+};
+const regimeStory = (r, dir) => (r && dir != null && RG_STORY[r.key] && RG_STORY[r.key][dir]) || "";
+const regimeFull = (r, dir) => [r.base, regimeStory(r, dir)].filter(Boolean).join(" ");
+// Research table "Regime" filter: by the regime, or the stocks whose regime is fading / has turned
+const RG_FILTER = [["all", "All regimes"], ["up", "▲ Regime up"], ["down", "▼ Regime down"],
+  ["sdn", "↘ Turning or changed to down"], ["sup", "↗ Turning or changed to up"]];
+const regimeMatch = (s, k) => k === "all" || (!!s.rg && (k === "up" ? s.rg[0] === 1 : k === "down" ? s.rg[0] === -1
+  : k === "sdn" ? s.rx === -1 || (s.rg[0] === 1 && s.rg[1] === -1) : s.rx === 1 || (s.rg[0] === -1 && s.rg[1] === 1)));
+const RG_INFO = "Regime analyser: tells you whether the current regime of the stock is up or down, and when it starts changing. A trend that goes against the regime is not trusted yet, so it is shown as Sideways.";
+const RegimeTag = ({ r, sm }) => !r ? <span className="dim">—</span>
+  : <span className={`rgtag ${r.tone} ${sm ? "sm" : ""}`} title={`${r.word}. ${r.text}`}><i aria-hidden="true">{r.icon}</i>{sm ? r.short : r.word}</span>;
+// stock card and Simplified view: the regime in one line and the timeframes it holds back
+function RegimeBox({ s, rd, strip = false }) {
+  const r = regimeOf(s, rd);
+  if (!r) return null;
+  return (
+    <div className={`rgbox ${r.tone} ${strip ? "strip" : ""}`} id="regime-box">
+      <div className="rg-h"><span className="lbl">Regime analyser <Info text={RG_INFO}/></span><RegimeTag r={r}/></div>
+      <p className="rg-t">{regimeFull(r, dirVal(s.os))}</p>
+    </div>
+  );
+}
+
 // ─── theme (light default for customers — owner, 2026-10-20; dark optional; a customer's own choice is remembered) ───
 const THEME_KEY = "qf_theme";
 const getTheme = () => { try { return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; } };
@@ -230,15 +299,17 @@ function applyMode(data, mode) {
 
 // "AI insights" on the stock card: three short lines (good · watch out · focus) written by rules from the published
 // numbers of the stock, its industry and its sector. Information, never a buy / sell call.
-function insightsOf(s, od, bi, sec, ind, view, indRank, indCount) {
+function insightsOf(s, od, bi, sec, ind, view, indRank, indCount, rg = null) {
   const names = ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
   const sc = s.sc || [];
   const ups = names.filter((_, i) => dirTf(s, i) === 1), dns = names.filter((_, i) => dirTf(s, i) === -1);
   const good = [], bad = [];
-  if (od === 1 && ups.length) {
-    const best = sc.reduce((b, v, i) => (v != null && dirTf(s, i) === 1 && (b < 0 || v > sc[b]) ? i : b), -1);
-    good.push(`Uptrend on ${ups.length} of 5 timeframes${best >= 0 ? `, strongest on ${names[best]} (${Math.abs(sc[best])}%)` : ""}`);
-  }
+  // regime analyser first: it decides which trends count at all
+  if (rg && (rg.key === "up" || rg.key === "sup")) good.push(rg.key === "sup" ? "regime has changed from down to up" : "current regime is up");
+  if (rg && rg.key === "sdn") bad.push(`regime has changed from up to down${rg.held.length ? `, so the rise on ${rg.held.join(", ")} is not trusted yet` : ""}`);
+  else if (rg && rg.key === "down") bad.push(`current regime is down${rg.held.length ? `, so the rise on ${rg.held.join(", ")} is not trusted yet` : ""}`);
+  else if (rg && rg.key === "up-soon") bad.push("regime is down; the turn to up is not confirmed yet");
+  else if (rg && rg.key === "dn-soon") bad.push("regime has started changing from up to down");
   if (s.h === "S") good.push("strong reliability");
   if (groupState(ind) === "up") good.push(`industry ranks #${ind.rank} of ${ind.of}`);
   if (groupState(sec) === "up") good.push(`sector ranks #${sec.rank} of ${sec.of}`);
@@ -254,7 +325,10 @@ function insightsOf(s, od, bi, sec, ind, view, indRank, indCount) {
     bad.push(`short term cooling — Daily ${Math.abs(sc[0])}% vs Weekly ${Math.abs(sc[1])}%`);
   const weakGroup = wk.find(([, , g]) => groupState(g) === "down") || wk[0];
   const tone = view ? view.tone : "mid";
-  const focus = s.x && od === 1 ? "Don't chase. Wait for it to cool down or build a base — the Daily strength turning up again is the first sign."
+  const focus = rg && rg.key === "up-soon" ? "The regime may be turning up, but it is not confirmed. Monitor it for a few more days before acting."
+    : rg && rg.w === -1 && od !== -1 ? "The current regime is down, so any rise is not trusted yet. Wait for the regime to turn up before acting."
+    : rg && rg.key === "dn-soon" && od !== -1 ? "The regime has started changing from up to down. Protect your gains and avoid fresh buying for now."
+    : s.x && od === 1 ? "Don't chase. Wait for it to cool down or build a base — the Daily strength turning up again is the first sign."
     : tone === "good" ? "Plan your entry and stop-loss on the chart; the Daily trend is the one to watch for timing."
     : tone === "warn" ? `Watch ${weakGroup ? `the ${weakGroup[1]} ${weakGroup[0]}` : "its group"} — the idea improves only when it turns strong. Until then, wait.`
     : tone === "watch" && od === 1 ? "Keep it on your watch list and act when the stock's own trend turns strong on your timeframe."
@@ -380,24 +454,35 @@ function SideNav({ apps, pins, face, view, onFace, onDocs, onHelpdesk, unread, m
 
 const dirKey = d => d === 1 ? "up" : d === -1 ? "down" : "side";
 const dirWord = d => d === 1 ? "uptrend" : d === -1 ? "downtrend" : "sideways";
-function Meter({ v, d, label = "" }) {                     // ▂▃▅▆█ 84%  (bars lit = strength, colour = direction)
+function Meter({ v, d, label = "", held = false }) {       // ▂▃▅▆█ 84%  (bars lit = strength, colour = direction)
   if (v == null) return <span className="meter none">—</span>;
   const a = Math.abs(v), lit = Math.max(1, Math.min(5, Math.ceil(a / 20)));
-  return <span className={`meter ${dirKey(d)}`} title={`${label ? label + ": " : ""}${dirWord(d)} · trend strength ${a}% (not a price move)`}>
+  return <span className={`meter ${dirKey(d)} ${held ? "held" : ""}`} title={`${label ? label + ": " : ""}${dirWord(d)} · trend strength ${a}% (not a price move)${held ? " · goes against the overall direction, so it is shown as sideways for now" : ""}`}>
     <span className="bars" aria-hidden="true">{[1, 2, 3, 4, 5].map(i => <i key={i} className={i <= lit ? "on" : ""}/>)}</span>{a}%</span>;
 }
 const StrengthTag = ({ v, d, big }) => v == null ? <span className="stag none">No data</span>
   : <span className={`stag ${dirKey(d)} ${big ? "big" : ""}`} title={`Trend strength ${Math.abs(v)}% (${dirWord(d)}) — not a price move`}><b>{Math.abs(v)}%</b> strength</span>;
 // Diverging bar from −100 to +100 with a 0 mark in the middle (owner, 2026-10-13): an uptrend fills to the right of 0,
 // a downtrend to the left (anything below 0 is red). `scale` adds "−100 · 0 · +100" under it.
+// `scale` (owner, 2026-10-31: "hard to find where the progress is"; a round marker was rejected): coloured zones
+// (downtrend · sideways · uptrend), tick marks at −50 / 0 / +50, a value tag with a ▼ pointer above the end of the fill
+// and the numbers under their own ticks.
+const DBAR_TICKS = [-100, -50, 0, 50, 100];
 function DivBar({ v, d, scale = false, className = "" }) {
   const w = v == null ? 0 : Math.min(100, Math.abs(v)) / 2;
   const cls = v == null ? "" : v < 0 ? "down" : d === 1 ? "up" : "side";
+  const at = v == null ? 50 : 50 + Math.max(-100, Math.min(100, v)) / 2;          // position of the value, % from the left
   return (
-    <div className={`dbar ${className}`} title={v == null ? "No data" : `${v < 0 ? "−" : "+"}${Math.abs(v)} on a scale from −100 (strong downtrend) to +100 (strong uptrend)`}>
-      <div className="dbar-t"><i className="dbar-0" aria-hidden="true"/>
-        {v != null && v !== 0 && <span className={`dbar-f ${cls}`} style={v > 0 ? { left: "50%", width: `${w}%` } : { right: "50%", width: `${w}%` }}/>}</div>
-      {scale && <div className="dbar-s" aria-hidden="true"><span>−100</span><span className="z">0</span><span>+100</span></div>}
+    <div className={`dbar ${scale ? "dbar-x" : ""} ${className}`} title={v == null ? "No data" : `${v < 0 ? "−" : "+"}${Math.abs(v)} on a scale from −100 (strong downtrend) to +100 (strong uptrend)`}>
+      {scale && <div className="dbar-tr" aria-hidden="true">{v != null && <span className={`dbar-tag ${cls}`} style={{ left: `clamp(16px, ${at}%, calc(100% - 16px))` }}>{signed(v)}</span>}</div>}
+      <div className="dbar-t">
+        {scale && <><i className="dbar-z zd" aria-hidden="true"/><i className="dbar-z zs" aria-hidden="true"/><i className="dbar-z zu" aria-hidden="true"/>
+          {[-50, 50].map(t => <i key={t} className="dbar-tk" style={{ left: `${50 + t / 2}%` }} aria-hidden="true"/>)}</>}
+        <i className="dbar-0" aria-hidden="true"/>
+        {v != null && v !== 0 && <span className={`dbar-f ${cls}`} style={v > 0 ? { left: "50%", width: `${w}%` } : { right: "50%", width: `${w}%` }}/>}
+      </div>
+      {scale && <div className="dbar-s2" aria-hidden="true">{DBAR_TICKS.map(t => (
+        <span key={t} className={t === 0 ? "z" : ""} style={{ left: `${50 + t / 2}%` }}>{t > 0 ? `+${t}` : t < 0 ? `−${-t}` : "0"}</span>))}</div>}
     </div>
   );
 }
@@ -679,7 +764,7 @@ function IndustryPanel({ rows, tfLabel, sectors, selected, onPick }) {
 function StockCard({ s, data, onOpen, onClose, origin = null }) {
   useEffect(() => { const k = e => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
   const asOf = data && data.as_of;
-  const rows = TFS.map(([k, l, hint], i) => ({ k, l, hint, v:s.sc[i], d:dirTf(s, i) }));
+  const rows = TFS.map(([k, l, hint], i) => ({ k, l, hint, v:s.sc[i], d:dirTf(s, i), held:(s.rh || "").includes(k) }));
   const ups = rows.filter(r => r.d === 1), dns = rows.filter(r => r.d === -1);
   const od = dirVal(s.os), bi = isBi(s, []);
   const indPeers = useMemo(() => (data ? data.stocks : []).filter(x => x.os != null && x.sec === s.sec && x.ind === s.ind)
@@ -695,7 +780,8 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
   const extraRows = [...(showSelf ? [[s, indRank]] : []), ...(originRank > 5 ? [[indPeers[originRank - 1], originRank]] : [])].sort((a, b) => a[1] - b[1]);
   const secA = data ? ctx("A", false) : null, indA = data ? ctx("A", true) : null;
   const view = combinedView(od, bi, secA, indA, s.os, !!s.x);
-  const ai = s.os != null ? insightsOf(s, od, bi, secA, indA, view, indRank, indPeers.length) : null;
+  const rg = regimeOf(s, data && data.rd);
+  const ai = s.os != null ? insightsOf(s, od, bi, secA, indA, view, indRank, indPeers.length, rg) : null;
   const grp = (kind, name, g) => (
     <div className="cv-row cv-grp"><span className="cv-k">{kind}</span>
       <span className="cv-v"><b>{name}</b>{g
@@ -755,6 +841,7 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
         </div>
         </div>
         <div className="m-col">
+        {rg && <div className="blk blk-rg"><RegimeBox s={s} rd={data && data.rd}/></div>}
         <div className="blk blk-tf">
         <div className="m-sec-t">Trend by timeframe <Info text="The stock's trend on each timeframe and how strong it is (0–100%) — not a price move."/></div>
         <div className="m-rows">
@@ -963,6 +1050,8 @@ function SimpleView({ data, mode, setMode, sym, setSym }) {
     : od === -1 ? `${s.n} is in ${aan(lw)} ${lw} downtrend (${signed(s.os)}%).`
     : `${s.n} is moving sideways, with no clear direction (${signed(s.os)}%, leaning ${s.os < 0 ? "down" : "up"}).`);
   if (bi) parts.push("Its short- and long-term trends point in different directions.");
+  const rg = regimeOf(s, data.rd);
+  if (rg && rg.w) parts.push(rg.base);                       // what it means for the stock: the Regime analyser strip below
   if (rel) parts.push(s.h === "S" ? "Its long-term price history is reliable." : s.h === "M" ? "Its long-term price history is average." : "Its long-term price history is unreliable, with sharp falls or wild moves in the past.");
   if (s.x) parts.push("The price has risen three times or more in about a year, and moves this fast often reverse.");
   const pro = proVerdict(view, secTone === "good" && indTone === "good");
@@ -997,6 +1086,8 @@ function SimpleView({ data, mode, setMode, sym, setSym }) {
         </div>
         <div className="sx-meter"><OverallMeter os={s.os} secA={secA} indA={indA} size={250}/></div>
       </section>
+
+      {rg && <section className="card sx-rg"><RegimeBox s={s} rd={data.rd} strip/></section>}
 
       <section className="sx-stats">
         <Stat label="Stock trend strength" name={s.n} sub={s.s} value={s.os == null ? null : signed(s.os)} pct={s.os} d={od} signedBar tone={dirTone(s.os)} word={stockWord}/>
@@ -1050,6 +1141,17 @@ const streakText = (t, k) => {
   return t.sn >= 2 ? `the trend has been going ${dir} for the last ${t.sn} ${many}` : `the trend turned ${dir} this ${one}`;
 };
 const zDir = t => t.sd != null ? t.sd : Math.sign(t.tr || 0);   // latest direction: 1 up · 0 flat · −1 down
+// regime analyser line for one holding (held = the timeframes the regime holds back: s.rz for the zone view, s.rh else)
+function regimeWhy(s, data, held, dir) {
+  const r = regimeOf(s, data.rd, true);
+  if (!r || !r.w) return null;
+  const h = (held || "").split("").filter(k => "MQY".includes(k)).map(k => TF_FULL[k].toLowerCase());
+  const views = `the ${andJoin(h)} view${h.length > 1 ? "s" : ""}`;
+  // a rising view under a down regime: the story already says "not trusted" unless the stock itself is falling
+  const extra = !h.length ? "" : r.w === -1 ? (dir === -1 ? ` The rise on ${views} is not trusted yet.` : "")
+    : ` The dip on ${views} is seen as a pause.`;
+  return regimeFull(r, dir) + extra;
+}
 function analyseZone(s, data) {
   const [fin, strength, ...per] = s.zv;
   const tf = {};
@@ -1066,6 +1168,8 @@ function analyseZone(s, data) {
     why.push(s.yh != null ? `It has about ${s.yh} year${s.yh === 1 ? "" : "s"} of price history so far.` : "It has very little price history so far.");
     why.push(`The quant algorithm needs at least ${PF_MIN_YEARS} years of yearly data, so there is no view yet.`);
   } else {
+    const rw = regimeWhy(s, data, s.rz, dirVal(strength));
+    if (rw) why.push(rw);
     const line = (t, k, name) => { const tr = streakText(t, k), once = tr.endsWith(`this ${ZPERIOD[k][0]}`);
       return `${name}: ${tr}, and the price is ${ZPRICE[t.pos]}${once ? "" : ` this ${ZPERIOD[k][0]}`}.`; };
     why.push(line(Q, "Q", "Quarterly view"));
@@ -1081,7 +1185,7 @@ function analyseZone(s, data) {
     if (s.x) why.push(fin === 1 ? "It went up more than 3 times in a year, so it stays in Keep an eye on. Such fast gains often cool off."
                                 : "It went up more than 3 times in a year. Such fast gains often cool off.");
   }
-  return { s, cat, lt: tooNew ? null : strength, tf, g: groupLongTerm(data, s.sec, s.ind), why, moved: null, improving, qStep: s.zs ? s.zs[1] : null, zone: true };
+  return { s, cat, lt: tooNew ? null : strength, tf, g: groupLongTerm(data, s.sec, s.ind), why, moved: null, improving, qStep: s.zs ? s.zs[1] : null, zone: true, rg: regimeOf(s, data.rd, true) };
 }
 function analyseHolding(s, data) {
   if (s.zv) return analyseZone(s, data);
@@ -1104,6 +1208,8 @@ function analyseHolding(s, data) {
     why.push(s.yh != null ? `It has about ${s.yh} year${s.yh === 1 ? "" : "s"} of price history so far.` : "It has very little price history so far.");
     why.push(`The quant algorithm needs at least ${PF_MIN_YEARS} years of yearly data, so there is no view yet.`);
   } else {
+    const rw = regimeWhy(s, data, s.rz, dirVal(lt));
+    if (rw) why.push(rw);
     if (dQ === 1 && dY === 1) why.push("The quarterly and yearly trends are both going up.");
     else if (dQ === -1 && dY === -1) why.push("The quarterly and yearly trends are both going down.");
     else if (dQ === -1 && dY === 1) why.push("The quarterly trend has turned down, but the yearly trend is still up.");
@@ -1126,7 +1232,7 @@ function analyseHolding(s, data) {
     else if (s.h === "M") why.push("It is more than 50% below its highest price, or lower than 5 years ago.");
     if (s.x) why.push("It went up more than 3 times in a year. Such fast gains often cool off.");
   }
-  return { s, cat, lt, tf, g: groupLongTerm(data, s.sec, s.ind), why, moved, improving, qStep };
+  return { s, cat, lt, tf, g: groupLongTerm(data, s.sec, s.ind), why, moved, improving, qStep, rg: regimeOf(s, data.rd, true) };
 }
 function portfolioSummary(rows) {
   const live = rows.filter(r => r.cat !== "new");
@@ -1153,6 +1259,13 @@ function portfolioSummary(rows) {
       up.length ? `${cnt(up.length, "stock has", "stocks have")} an improving trend` : "",
       down.length ? `${cnt(down.length, "stock has", "stocks have")} a weakening one` : ""].filter(Boolean)) + "."]);
   }
+  const rk = k => live.filter(r => r.rg && r.rg.key === k);             // long-term regime of each holding
+  const shiftedDn = rk("sdn"), shiftedUp = rk("sup"), downReg = rk("down"), soon = rk("dn-soon"), upSoon = rk("up-soon");
+  if (shiftedDn.length) lines.push(["bad", `The long-term regime has changed from up to down for ${names(shiftedDn)}. Their rises are not trusted until it turns up again.`]);
+  if (downReg.length) lines.push(["bad", `The long-term regime is down for ${cnt(downReg.length, "stock", "stocks")}: ${names(downReg)}.`]);
+  if (soon.length) lines.push(["mid", `The long-term regime has started changing from up to down for ${names(soon)}. A complete change is expected soon, so watch these closely.`]);
+  if (upSoon.length) lines.push(["mid", `The long-term regime has started turning up for ${names(upSoon)}, but it is not confirmed yet. Monitor these for a few more weeks.`]);
+  if (shiftedUp.length) lines.push(["good", `The long-term regime has changed from down to up for ${names(shiftedUp)}.`]);
   const better = rows.filter(r => r.improving);
   if (better.length) lines.push(["good", `${names(better)} ${better.length === 1 ? "is" : "are"} in Look at first, but the quarterly view is turning up.`]);
   const weak = rows.filter(r => r.s.h === "W");
@@ -1179,14 +1292,14 @@ const noData = (k, lbl) => <span className="px-na px-nd">No data <Info text={k =
 function StrengthTiles({ r, label = "Stock strength" }) {
   return <>
     <div className="px-label">{label}</div>
-    <div className="px-dbig"><b className={tc(r.lt)}>{signed(r.lt)}<small>%</small></b><span className={tc(r.lt)}>{trendWordOf(r.lt)}</span></div>
+    <div className="px-dbig" title="Trend strength from −100 (strong downtrend) to +100 (strong uptrend), not a price change"><b className={tc(r.lt)}>{signed(r.lt)}</b><span className={tc(r.lt)}>{trendWordOf(r.lt)}</span></div>
     <DivBar v={r.lt} d={dirVal(r.lt)} scale className="px-dbar"/>
     <div className="px-tfs">{LT_TF.map(([k, , lbl]) => { const v = r.tf[k].v;
       return (
         <div key={k} className="px-tf">
-          <span className="px-label">{lbl}</span>
+          <span className="px-label">{lbl} strength</span>
           {v == null ? noData(k, lbl) : (() => { const x = streakShort(r, k);
-            return <><b className={`px-tfv ${tc(v)}`} title={trendWordOf(v)}>{pctTxt(v)}</b>
+            return <><b className={`px-tfv ${tc(v)}`} title={`${trendWordOf(v)} · strength from −100 to +100, not a price change`}>{signed(v)}</b>
               {x && <span className={`px-kin c-${x[1]}`} title={`${lbl}: ${x[2]}`}>{x[0]}</span>}</>; })()}
         </div>); })}</div>
   </>;
@@ -1219,6 +1332,7 @@ function HoldingItem({ r, flash }) {
         <span className={`px-pill ${tone}`}><i/>{label}</span>
         <div className="px-chips">
           {r.s.cap && <span className="px-chip">{r.s.cap} cap</span>}
+          {r.rg && !isNew && <span className="px-chip rg" title={`${r.rg.text} ${RG_INFO}`}><i className={r.rg.tone}/>{r.rg.word}</span>}
           {rel && <span className="px-chip" title={rel[2]}><i className={rel[1]}/>Reliability: {rel[0]}</span>}
           {r.improving && <span className="px-chip"><i className="good"/>Improving</span>}
           {r.s.x ? <span className="px-chip" title="Went up more than 3 times in a year"><i className="mid"/>Rose very fast</span> : null}
@@ -1317,8 +1431,9 @@ const PF_LONG = {
   new: "Less than 3 years of yearly price data, so Hyperplane AI gives no view on these yet.",
 };
 const PF_GUIDE = [
-  ["Stock strength", "A number from -100% to +100%. Above +24% is an uptrend, below -24% is a downtrend, in between is sideways. Weak, Average, Good and Strong tell how strong the trend is (up to 30%, up to 60%, up to 80%, above 80%)."],
+  ["Stock strength", "A number from -100 to +100. Above +24% is an uptrend, below -24% is a downtrend, in between is sideways. Weak, Average, Good and Strong tell how strong the trend is (up to 30%, up to 60%, up to 80%, above 80%)."],
   ["Monthly, quarterly and yearly views", "For each period Hyperplane AI checks whether the trend is going up, flat or going down and for how long (for example, going down for the last 3 quarters), and how strong today's price is for this month, quarter and year. The quarter counts most, then the year, then the month. Daily and weekly moves are left out."],
+  ["Long-term regime", "Tells you whether the long-term regime of each stock is up or down. A monthly, quarterly or yearly trend that goes against it is not trusted yet, so it is shown as sideways. Turning down means it has started changing from up to down; changed to down means the change is complete. Turning up is not confirmed until it lasts a few more weeks."],
   ["Reliability", "High, Medium or Low, from the stock's whole price history. Low means it once fell more than 70% from its highest price, which means more risk."],
   ["Rose very fast", "The price went up more than 3 times in a year. Such fast gains often cool off, so these stocks are never marked Doing well."],
   ["Trend map", "Each dot is one stock. Top right (Rising): the quarterly and yearly trends are both up. Bottom left (Falling): both down. Top left (Cooling off) and bottom right (Recovering) are mixed."],
@@ -1353,7 +1468,7 @@ function reportModel(rows, sum, data, me) {
     })(),
     stocks: [...rows].sort((a, b) => PF_ORDER[a.cat] - PF_ORDER[b.cat] || (a.lt ?? 999) - (b.lt ?? 999)).map(r => ({
       n: r.s.n, s: r.s.s, sec: r.s.sec, ind: r.s.ind, label: PF_CAT[r.cat][1], tone: PF_CAT[r.cat][2], isNew: r.cat === "new",
-      chips: [r.improving && ["Improving", "good"], r.s.cap && [`${r.s.cap} cap`, null],
+      chips: [r.rg && r.cat !== "new" && [r.rg.word, r.rg.tone], r.improving && ["Improving", "good"], r.s.cap && [`${r.s.cap} cap`, null],
         r.s.h && r.cat !== "new" && [`Reliability: ${RELIABILITY[r.s.h][0]}`, RELIABILITY[r.s.h][1]], r.s.x && ["Rose very fast", "mid"]].filter(Boolean),
       v: r.lt, word: trendWordOf(r.lt), why: r.why,
       tfs: LT_TF.map(([k, , lbl]) => ({ label: lbl, v: r.tf[k].v, word: r.tf[k].v == null ? "" : trendWordOf(r.tf[k].v),
@@ -1582,6 +1697,7 @@ function Home({ me, onOut, reloadMe }) {
   const data = useMemo(() => rawData && applyMode(rawData, mode), [rawData, mode]);
   const [f, setF] = useState(EMPTY); const [tfs, setTfs] = useState([]);
   const [q, setQ] = useState(""); const [sort, setSort] = useState("best"); const [page, setPage] = useState(0);
+  const [rgf, setRgf] = useState("all");                                         // Regime filter (master data)
   const [open, setOpenRaw] = useState(null); const [trail, setTrail] = useState([]);
   const setOpen = st => { setTrail([]); setOpenRaw(st); };                       // from the list / close
   // a peer inside the card: keep only the ORIGINAL stock to go back to (owner: back = the one I picked first)
@@ -1652,7 +1768,7 @@ function Home({ me, onOut, reloadMe }) {
       if (e.status === 401 || e.status === 403) onOut(e.message); else setErr(e.message);
     });
   }, [sel, hasApps]);
-  useEffect(() => setPage(0), [f, tfs, q, sort]);
+  useEffect(() => setPage(0), [f, tfs, q, sort, rgf]);
   const stocks = data ? data.stocks : [];
   const sectorOpts = useMemo(() => [...new Set(stocks.map(s => s.sec))].sort(), [stocks]);
   const industryOpts = useMemo(() => [...new Set(stocks.filter(s => !f.sectors.length || f.sectors.includes(s.sec)).map(s => s.ind))].sort(), [stocks, f.sectors]);
@@ -1661,7 +1777,8 @@ function Home({ me, onOut, reloadMe }) {
   const hasBg = stocks.some(s => s.h);
   const filtered = useMemo(() => { const qq = q.trim().toLowerCase();
     const ok = s => f.trend === "all" || categoryOf(s, tfs) === f.trend;
-    return base.filter(s => ok(s) && (!qq || s.s.toLowerCase().includes(qq) || s.n.toLowerCase().includes(qq))); }, [base, f.trend, tfs, q]);
+    return base.filter(s => ok(s) && regimeMatch(s, rgf) && (!qq || s.s.toLowerCase().includes(qq) || s.n.toLowerCase().includes(qq))); }, [base, f.trend, tfs, q, rgf]);
+  const hasRg = stocks.some(s => s.rg);
   const sorted = useMemo(() => {
     const v = s => focusOf(s, tfs), arr = [...filtered];
     // 0 = Strong reliability & not stretched, 1 = Moderate, 2 = Weak or stretched
@@ -1779,6 +1896,8 @@ function Home({ me, onOut, reloadMe }) {
               <div className="sub">{sorted.length.toLocaleString()} stocks · {focusLabel} · click a stock for details</div></div>
             <div className="t-tools">
               <input className="search" placeholder="Search a stock" value={q} onChange={e => setQ(e.target.value)} aria-label="Search"/>
+              {hasRg && <select value={rgf} onChange={e => setRgf(e.target.value)} aria-label="Regime" id="rg-filter" title={RG_INFO} className={rgf !== "all" ? "on" : ""}>
+                {RG_FILTER.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>}
               <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
                 <option value="best">Best uptrend first (reliable, not stretched)</option><option value="up">Strongest uptrend first</option><option value="down">Strongest downtrend first</option>
                 <option value="change">Biggest gain today</option><option value="name">Name A–Z</option>
@@ -1790,6 +1909,7 @@ function Home({ me, onOut, reloadMe }) {
             <table>
               <thead>
                 <tr><th rowSpan={2}>#</th><th rowSpan={2}>Stock</th><th rowSpan={2} className="hide-sm">Sector · Industry</th><th rowSpan={2} className="num">Price</th><th rowSpan={2}>Trend</th>
+                  {hasRg && <th rowSpan={2} title={RG_INFO}>Regime</th>}
                   <th rowSpan={2} title="How strong the trend is on the chosen timeframe(s), 0–100% — not a price move">Trend strength</th>
                   <th colSpan={5} className="hide-sm grp-h" title="How strong the trend is on each timeframe, 0–100%. Bars lit = strength, colour = direction. Not a price move.">Trend strength by timeframe <span>(0–100%)</span></th>
                   <th rowSpan={2} className="hide-sm">Ticker copy</th></tr>
@@ -1803,11 +1923,12 @@ function Home({ me, onOut, reloadMe }) {
                     <td className="hide-sm"><span className="sec" style={{ color:colorOf(s.sec) }}>● {s.sec}</span><div className="sub">{s.ind}</div></td>
                     <td className="num mono">₹{s.p}{s.c != null && <div className={`small ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}%</div>}</td>
                     <td>{cat ? <span className={`dirtag ${CAT[cat][1]}`}>{CAT[cat][0]}</span> : <span className="dim">—</span>}</td>
+                    {hasRg && <td><RegimeTag r={regimeOf(s, data.rd)} sm/></td>}
                     <td className="cur" title={v == null ? "" : `Trend strength ${Math.abs(v)}% — not a price move`}><span className={`pct ${dirKey(d)}`}>{pct(v)}</span><StrengthBar v={v} d={d}/></td>
                     {TFS.map(([k], j) => <td key={k} className={`num hide-sm ${tfs.includes(k) ? "hl" : ""}`}><Meter v={s.sc[j]} d={dirTf(s, j)} label={TFS[j][1]}/></td>)}
                     <td className="hide-sm"><CopyBtns syms={[s.s]} compact/></td>
                   </tr>); })}
-                {!sorted.length && <tr><td colSpan={13} className="empty">No stocks match these filters.</td></tr>}
+                {!sorted.length && <tr><td colSpan={14} className="empty">No stocks match these filters.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -2191,6 +2312,18 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .dbar-0{position:absolute;left:50%;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--t1);opacity:.75;z-index:1}
 .dbar-f{position:absolute;top:0;bottom:0}.dbar-f.up{background:var(--long);border-radius:0 3px 3px 0}.dbar-f.down{background:var(--short);border-radius:3px 0 0 3px}.dbar-f.side{background:#8b97ad;border-radius:0 3px 3px 0}
 .dbar-s{display:flex;justify-content:space-between;font:600 10px var(--mono);color:var(--t3);margin-top:5px}.dbar-s .z{color:var(--t2)}
+.dbar-x .dbar-t{height:10px;border-radius:5px;background:none;margin:0 0 5px}
+.dbar-z{position:absolute;top:0;bottom:0}.dbar-z.zd{left:0;width:38%;background:rgba(255,68,84,.16);border-radius:5px 0 0 5px}
+.dbar-z.zs{left:38%;width:24%;background:var(--s3)}.dbar-z.zu{left:62%;width:38%;background:rgba(0,200,150,.16);border-radius:0 5px 5px 0}
+.dbar-tk{position:absolute;top:-3px;bottom:-3px;width:1px;margin-left:-.5px;background:var(--t3);opacity:.55;z-index:1}
+.dbar-x .dbar-0{top:-5px;bottom:-5px;width:2px;margin-left:-1px;opacity:.9}
+.dbar-x .dbar-f{opacity:.9}.dbar-x .dbar-f.up{border-radius:0 5px 5px 0}.dbar-x .dbar-f.down{border-radius:5px 0 0 5px}
+.dbar-tr{position:relative;height:22px}
+.dbar-tag{position:absolute;bottom:6px;transform:translateX(-50%);font:700 10.5px/1 var(--mono);padding:3px 6px;border-radius:4px;color:#fff;background:#8b97ad;white-space:nowrap}
+.dbar-tag::after{content:"";position:absolute;left:50%;top:100%;margin-left:-5px;border:5px solid transparent;border-bottom:0;border-top-color:#8b97ad}
+.dbar-tag.up{background:var(--long)}.dbar-tag.up::after{border-top-color:var(--long)}.dbar-tag.down{background:var(--short)}.dbar-tag.down::after{border-top-color:var(--short)}
+.dbar-s2{position:relative;height:13px;margin-top:4px;font:600 10px var(--mono);color:var(--t3)}.dbar-s2 span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.dbar-s2 span:first-child{transform:none}.dbar-s2 span:last-child{transform:translateX(-100%)}.dbar-s2 .z{color:var(--t1);font-weight:700}
 .sx-dbar{margin-top:6px}.sx-dbar .dbar-t{height:9px;border-radius:5px}.sx-dbar .dbar-0{top:-5px;bottom:-5px;width:3px;margin-left:-1.5px}
 .sx-dbar .dbar-f.up{border-radius:0 5px 5px 0}.sx-dbar .dbar-f.down{border-radius:5px 0 0 5px}
 .sx-gbar{margin-top:6px}.sx-gbar .sx-sbar{height:9px;border-radius:5px;margin-top:0}.sx-gbar .sx-sbar i{border-radius:5px}
@@ -2377,6 +2510,19 @@ th.grp-h{text-align:center!important;border-bottom:1px solid var(--b1)}th.grp-h 
 @media (max-width:640px){.ai-l{grid-template-columns:1fr;gap:1px}}
 .cv-say{margin-top:4px;padding:8px 11px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);border-left:3px solid var(--b2)}.cv-say.good{border-left-color:var(--long)}.cv-say.warn{border-left-color:var(--mixed)}.cv-say.bad{border-left-color:var(--short)}.cv-say.watch{border-left-color:var(--acc)}.cv-verdict{justify-self:end;align-self:center;font-size:12.5px;font-weight:700;padding:6px 12px;border-radius:8px;border:1px solid var(--b2);background:var(--s2);color:var(--t1);white-space:nowrap}.cv-verdict.good{color:var(--long);border-color:rgba(0,200,150,.45);background:var(--longd)}.cv-verdict.warn{color:var(--mixed);border-color:rgba(255,170,0,.45);background:var(--mixedd)}.cv-verdict.bad{color:var(--short);border-color:rgba(255,68,84,.45);background:var(--shortd)}.cv-verdict.watch{color:var(--acc);border-color:var(--accb);background:var(--adim)}.cv-verdict.mid{color:var(--t2)}
 .dirtag{font:700 11px var(--mono);padding:4px 9px;border-radius:5px;white-space:nowrap}.dirtag.sm{font-size:10px;padding:3px 7px;text-align:center}
+.rgtag{display:inline-flex;align-items:center;gap:5px;font:700 11px var(--sans);padding:4px 9px;border-radius:999px;white-space:nowrap;border:1px solid var(--b2);background:var(--s2);color:var(--t2)}.rgtag i{font-style:normal;font-size:10px}
+.rgtag.sm{font-size:10.5px;padding:3px 8px}.rgtag.good{background:var(--longd);color:var(--long);border-color:rgba(0,200,150,.35)}.rgtag.bad{background:var(--shortd);color:var(--short);border-color:rgba(255,68,84,.35)}.rgtag.mid{background:var(--mixedd);color:var(--mixed);border-color:rgba(255,170,0,.4)}
+.rgbox{padding:10px 13px 11px;border-radius:10px;border:1px solid var(--b1);border-left:4px solid var(--b2);background:var(--s2);display:flex;flex-direction:column;gap:6px}
+.rgbox.good{border-left-color:var(--long)}.rgbox.bad{border-left-color:var(--short)}.rgbox.mid{border-left-color:var(--mixed)}
+.rg-h{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.rg-t{margin:0;font-size:12.5px;line-height:1.5;color:var(--t1)}
+.rg-c{display:flex;gap:6px;flex-wrap:wrap}.rg-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--t2);padding:3px 8px;border-radius:6px;border:1px solid var(--b1);background:var(--s1)}
+.rg-chip b{font-weight:700;color:var(--t1)}.rg-chip b.up{color:var(--long)}.rg-chip b.down{color:var(--short)}.rg-chip.held{border-color:rgba(255,170,0,.45)}.rg-chip.held b{color:var(--mixed)}
+.rgbox.strip{flex-direction:row;align-items:center;flex-wrap:wrap;gap:8px 16px;border:0;border-left:4px solid var(--b2);border-radius:0;background:none;padding:0 0 0 14px}.rgbox.strip.good{border-left-color:var(--long)}.rgbox.strip.bad{border-left-color:var(--short)}.rgbox.strip.mid{border-left-color:var(--mixed)}
+.rgbox.strip .rg-h{justify-content:flex-start}.rgbox.strip .rg-t{flex:1 1 320px;font-size:13.5px}
+.sx-rg{padding:12px 16px;margin-bottom:12px}.blk-rg{margin-bottom:12px}
+.rg-held{display:inline-block;margin-top:2px;font-size:9.5px;font-weight:700;letter-spacing:.02em;color:var(--mixed);text-transform:uppercase}
+.meter.held{position:relative}.meter.held::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--mixed);margin-left:-2px}
+.t-tools select.on{border-color:var(--acc);color:var(--acc)}
 .dirtag.up{background:var(--longd);color:var(--long)}.dirtag.down{background:var(--shortd);color:var(--short)}.dirtag.side{background:rgba(106,134,166,.12);color:var(--t2)}.dirtag.bi{background:var(--retd);color:var(--ret)}
 .grp-w{font-size:10.5px;color:var(--t2)}
 .m-sec-t{display:flex;align-items:center;gap:6px;margin:18px 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.9px;font-weight:700;color:var(--t2)}.m-sec-t .tcopy{margin-left:auto;text-transform:none;letter-spacing:0}

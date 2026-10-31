@@ -125,6 +125,10 @@ Zone vocabulary per timeframe (from raw-data-5): **top band** = `top_near .. top
   the body inside the mother candle, not wick".)
 - Latest close decides: **BO** close ≥ mother High · **BD** close ≤ mother Low · **HN** inside and close ≥ High×0.95
   · **LW** inside and close ≤ Low/0.95 (`NR_NEAR_RATIO = 1.9/2`) · **B2NR** bar 1 closed below Low, now back inside.
+  **Scoring (owner, 2026-10-31):** B2NR / "Back to NR" is a failed breakdown → it is still detected and counted (NR
+  charts, sector counts) but adds NOTHING to strength: direction 0, weight 0 in `publish.classify` (`EVENT_W["RECLAIM"]`)
+  and the dashboard's `classifySignal` / `EVENT_META.RECLAIM`. Was +0.7 bullish (copied from the dashboard, never
+  confirmed); on the 29 Oct collection this changed 19 stocks, 11 of them from uptrend/sideways to sideways/downtrend.
 - **No trend condition, no price filter, all stocks** (no Nifty-500 limit).
 - The owner's ChartInk NR scans contain a greyed-out "close ≤ High×2/1.9" breakout cap — it is **off**.
 
@@ -313,6 +317,41 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
   combined value) and `sectors` / `industries` {A, D..Y}: rows {k, sec, st, nb, n, sig, adv, dec, avg}
   from `sector_stats` (port of tfSectorIndustry + attachStrength; "All" = the sheets unless technicals are on;
   Indices and Unknown sectors excluded).
+- REGIME ANALYSER (owner, 2026-10-31; CUSTOMER APP ONLY — the admin dashboard is unchanged): the Weekly Supertrend
+  (`Technicals` W_Supertrend vs Zone_Levels Price) is the regime for EVERY timeframe D..Y, zones + NR + technicals and
+  the AI Portfolio zone engine. Owner choice "Weekly decides": a TF strength whose sign is against the weekly regime is
+  squeezed into sideways (`publish.squeeze`, × REGIME_SQUEEZE 0.23 → |v| ≤ 22, order kept; rating char forced "M";
+  `zone_engine.apply_regime` recomputes zv strength + colour). The Daily Supertrend never blocks, it only warns:
+  W up + D down = "Regime shifting downwards", W down + D up = "shifting upwards". `rx` = weekly regime flipped vs the
+  newest collection of an EARLIER trade_date (`earlier_zones()["R"]`, payload `rd` = that day) → "Regime shifted
+  downwards / upwards". Payload per stock: `rg` [w, d], `rh` (held TFs of sc), `rz` (held TFs of zv), `rx`. Sector /
+  industry: bullish signals + tech bias count only when w ≠ −1, bearish only when w ≠ 1 (and "A" is always recomputed
+  when regimes exist). No W_Supertrend = no regime = old behaviour. Customer words only: "Regime analyser", never the
+  indicator name (leak check: no "upertrend" in dist/app or /app/api/data). Customer wording (owner, 2026-10-31: "anyone
+  could understand, in professional words"; "as the creator I can't understand it — use simple plain English"): NEVER
+  say weekly / daily regime, never explain the rule's mechanics ("rising trends count in full" was rejected). Owner's wording (v3): "The current regime of the
+  stock is up / down"; W up + D down = "Regime turning down": "has started changing from up to down. A complete change to
+  down is expected soon"; W down + D up = "Regime turning up (not confirmed)": "recently it has started changing towards
+  up, but this is not confirmed yet and it can turn down again at any time. Monitor it for a few more days"; rx =
+  "Regime changed to down / up". `RG_STORY[regime][stock direction]` adds one plain line for EVERY combination of
+  regime × the stock's own direction (rising / sideways / falling). A held timeframe = "not trusted yet" (shown as
+  sideways); under an up regime a held dip = "seen as a pause". Side effect: with regimes, no stock can be
+  up on one TF and down on another, so "Bidirectional" is always 0. UI: Research Regime column + `#rg-filter`,
+  `RegimeBox` (label + text only) in the stock card + AI Mode strip, AI insights / focus; Docs → Key words "Regime
+  analyser". REMOVED on owner request: the "Not trusted yet: D · W · M" chip, the per-timeframe "not trusted yet" marks
+  and the amber held dots (the held timeframes simply read Sideways).
+  AI PORTFOLIO = LONG-TERM REGIME (owner, 2026-10-31: "use the weekly and monthly instead of daily and weekly"): the
+  MONTHLY Supertrend decides for the zone engine (`zone_apply_regime(zv, rm)`), the weekly only warns. Payload `rp`
+  [monthly, weekly], `rz` (held zv TFs), `rpx` (monthly flip vs the previous trading day). `regimeOf(s, rd, true)` →
+  "Long-term regime up / down / turning down / turning up (not confirmed) / changed to …" ("monitor a few more weeks").
+  Used by analyseZone / analyseHolding (also the Research card's Investment Summary), card chip, reasons, summary
+  lines, PDF chip, PF_GUIDE "Long-term regime". The Research view keeps the weekly/daily regime.
+  AI Portfolio strength display (owner: "−84% looks like a monthly price move"; a "84/100 · Strength 84/100" version
+  was REJECTED: "I need proper −100 to 100… I asked to just add the strength"): signed value WITHOUT "%" (e.g. −84),
+  tile labels "Monthly strength" / "Quarterly strength" / "Yearly strength" (app + PDF), colours as before (`tc`).
+  `DivBar scale` (AI Portfolio + AI Mode stat cards): coloured zones (down −100…−24 · sideways · up +24…+100), ticks at
+  −50 / 0 / +50, a value tag with a ▼ pointer above the end of the fill (owner picked it; a round marker was rejected),
+  labels −100 −50 0 +50 +100 under their ticks.
 - Dashboard multi-select bubbles (2026-10-03): `RotationQuadrantChart` takes `selectedKeys` (array → multi-select,
   `onSelect(key)` and the parent toggles) or legacy `selectedKey`; customer look — selected = white ring + dashed halo,
   others dimmed to .28, "N selected · click again to clear". Control Tower: `pickSecs` / `pickInds` ("Sector|Industry"
