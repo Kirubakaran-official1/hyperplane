@@ -272,6 +272,12 @@ tr.bd-open>td{border-bottom-color:transparent}
 .bd-fs:disabled{opacity:.6}
 .bd-fs:disabled button,.bd-fs:disabled input,.bd-fs:disabled select{cursor:not-allowed}
 .bd-lock{margin:8px 0 4px;padding:9px 12px;border-radius:9px;background:var(--s2);font-size:12.5px;color:var(--t1)}
+.bd-wait{padding:28px;display:flex;flex-direction:column;gap:12px;min-height:260px}
+.bd-wait p{margin:0;font-size:13px;color:var(--t2)}
+.bd-wait-bar{height:14px;border-radius:7px;background:var(--s2);width:70%;animation:bdWait 1.2s ease-in-out infinite alternate}
+.bd-wait-bar.short{width:40%}
+@keyframes bdWait{from{opacity:.45}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.bd-wait-bar{animation:none}}
 /* small positions, market tricks, long plans */
 .bd-vlight{margin:0;font-size:13px;line-height:1.55;color:var(--t1)}.bd-vlight b{color:var(--long)}
 .bd-vcard.light{padding:2px 0}

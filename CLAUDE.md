@@ -35,6 +35,9 @@ the exact trading rules, how to test, how to deploy, and how the owner wants to 
 - He works on **Windows** (`D:\Trading\...`), edits locally, pushes to GitHub, then deploys to the server (see §9).
 - He is new to Git, SSH, Docker and GitHub. When setup or deploy steps are involved, give exact commands, say
   where to run each one (his PC or the server), and explain in plain words what each step does.
+- **Access is enforced by the server, and the screen never shows more than the access allows, not even for a split
+  second.** This applies to every permission, role, limit and owner-level feature, existing or new. Follow
+  "Access rules for every feature" in §7 before adding or changing any of them.
 - He writes short messages with typos; read for intent. Reply clearly and briefly; explain trading logic in plain words.
 - UI preferences he has asked for: copy buttons everywhere (plain `A,B,C` and TradingView `NSE:A,NSE:B,`), small "i"
   info buttons instead of long text, filters on every list, bubble view by default for sector/industry, a minimal
@@ -58,6 +61,7 @@ hyperplane/
 │   ├── requirements.txt
 │   ├── app/
 │   │   ├── main.py               FastAPI: auth, collections, sync, jobs, compare, admin
+│   │   ├── route_guards.py       access audit: every route must check access (§7 "Access rules for every feature")
 │   │   ├── worker.py             scheduler + job runner (runs the scanner, stores results, retention)
 │   │   ├── store.py              xlsx → {sheet: rows} gzip JSON + snapshot_stocks rows
 │   │   ├── db.py                 psycopg pool, schema (CREATE IF NOT EXISTS), settings
@@ -542,6 +546,48 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
 - Customer app theme: LIGHT is the default (owner, 2026-10-20); dark only when the customer picked it (`qf_theme` =
   "dark" in localStorage). The admin dashboard keeps its own default.
 
+### Access rules for every feature (owner, 2026-11-01) — READ BEFORE ADDING A PERMISSION, ROLE, LIMIT OR ADMIN PAGE
+The owner found the AI Portfolio Builder drawing its full form for a split second, then hiding the buttons a
+customer may not use: "this is the wrong way … this is not only for the AI portfolio, for every access we have now
+… and for future access creation". Two layers, both required:
+
+**1. The server is the only real gate (Postman / Burp must get nothing extra).**
+- Every route checks access in FastAPI itself:
+  - admin service: `admin_user` for `/api/admin/*`, `current_user` for the rest;
+  - customer service: `need("<app>")` for an application, `need_perm("<app>:<action>")` for a single permission;
+    a level such as `builder_tier(c)` is read from `c["perms"]`.
+- Never take access from the request: no `tier`, `role`, `admin`, `plan` or limits from the body, query, headers,
+  cookies other than the session, or anything the browser stores. Pydantic models ignore extra fields; keep it so.
+- Check limits on EVERY route that uses them, not only the main one: build AND preview AND export (see
+  `builder.check_plan` + the amount / count checks in `builder.build`). Refuse with 403 and plain words ("Your
+  access allows …"); never answer with a different, quietly widened result.
+- Send only what this access may see: filter on the server. Never send everything and hide it in the browser.
+- Owner-level data also gets a database layer: the restricted `hp_portal` role + row-level security (see
+  `stock_detail`).
+- Audit after any route change; it must say "0 without an access check":
+  - `docker compose exec api python -m app.route_guards`
+  - `docker compose exec portal python -m app.route_guards portal`
+  - A new public route, or one whose check runs inside the function, must be added to `PUBLIC` / `INSIDE` in
+    `backend/app/route_guards.py`, with the reason.
+
+**2. The screen starts with nothing and only reveals: never draw first and hide after.**
+- The customer app draws nothing until `/app/api/me` answers (`App` in shell.jsx: apps, perms, pins). The admin
+  dashboard draws nothing until `/api/me` answers (the ⚙ Admin tab exists only when `user.admin`). Keep both.
+- Anything access-related fetched later must show a short "getting ready" card until it arrives, with "Try again"
+  on an error. Never fall back to "no limits" defaults while waiting. Example: the builder's `/app/api/builder/plan`
+  (`if (!plan) return …` in builder.jsx, `.bd-wait`).
+- Calls that depend on the limits wait for them too (the builder's preview starts only after the plan is known).
+- Saved inputs are clamped to the access when it arrives (amount, stock count, options).
+- Do not cache access in localStorage / sessionStorage to draw faster: a role removed by Admin would flash back.
+- Locked choices are shown as locked ("🔒 fixed for your access") or left out; customer wording never names a
+  plan or tier (memory: customer wording).
+
+**Tests for every new permission, role or limit** (scratchpad patterns: `builder_attack_test.py`, `plan_api_test.py`):
+- Hand-made requests as the lowest access: over each limit, every locked option, fake "admin" / "tier" in the body
+  and in headers, no sign-in → each one 401 / 403, and a normal request still works.
+- Screen: slow the access answer on purpose (wrap `window.fetch` with a 1.5 s delay for that URL), sample the page
+  every 100 ms, and check the unrestricted view never appears, the waiting card does, and then the restricted view.
+
 ### Adoption report (owner, 2026-11-01) — `backend/app/adoption.py` + `frontend/src/adoption.jsx`
 - Owner: "convert the activity log report to the adoption report … standard framework … output is more important than
   the glamour UI". It matters once the customer app is sold. The framework is Google HEART + the AARRR funnel, read as
@@ -981,6 +1027,9 @@ For frontend-only work: `cd frontend && npm run dev` (Vite proxies /api to :8000
 2. `cd frontend && npm run build` succeeds (frontend changes).
 3. App runs; log in; latest collection loads; Sync now completes; Admin + Compare open; no console errors.
 4. `docker compose config -q` passes (compose changes).
+4a. Access changes (routes, permissions, roles, limits): `python -m app.route_guards` (api) and
+    `python -m app.route_guards portal` (portal) report 0 without a check, plus the tests in "Access rules for every
+    feature" (§7).
 5. Shell scripts stay LF (`.gitattributes`) and are called with `bash deploy/...` (Windows loses the exec bit).
 
 ## 9. Deploy

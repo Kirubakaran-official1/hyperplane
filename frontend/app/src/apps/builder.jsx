@@ -322,8 +322,11 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const [added, setAdded] = useState("");                   // "" · "ask" · "busy" · "add" / "replace" (done) · error text
   const [pfNow, setPfNow] = useState(null);                 // how many stocks the Analyser list holds right now
   // builder plan (Access manager: builder:customer / trader / admin) — limits shown here, enforced by the server
+  // the form is drawn only once the plan is known, so a limited customer never sees options they do not have
   const [plan, setPlan] = useState(null);
+  const [planErr, setPlanErr] = useState(""), [planTry, setPlanTry] = useState(0);
   useEffect(() => {
+    setPlanErr("");
     api("/app/api/builder/plan").then(pl => {
       setPlan(pl);
       setInpRaw(p => {                                         // keep the saved inputs inside the plan
@@ -334,8 +337,8 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
         if (!pl.options) { n.opts = { ...pl.defaults.opts }; n.sector = pl.defaults.sector_max; n.weighting = pl.defaults.weighting; }
         return n;
       });
-    }).catch(e => { if (e.status === 401) onOut(e.message); });
-  }, []);
+    }).catch(e => { if (e.status === 401) onOut(e.message); else setPlanErr(e.message || "Could not load your settings."); });
+  }, [planTry]);
   const maxAmt = plan ? plan.max_amount : B_MAX_AMT, minAmt = plan ? plan.min_amount : B_MIN_AMT, maxN = plan ? plan.max_stocks : B_MAX_N;
   const locked = !!plan && !plan.options;
   const a = inp.alloc, eqSum = a.Large + a.Mid + a.Small;
@@ -346,10 +349,11 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const [pool, setPool] = useState(null);                         // how many stocks pass every check today (live, counts only)
   const optKey = JSON.stringify([inp.rel, opt]);
   useEffect(() => {
+    if (!plan) return;                                            // the saved inputs are clamped to the plan first
     const t = setTimeout(() => api("/app/api/builder/preview", { method: "POST", json: { reliability: inp.rel, opts: opt } })
       .then(setPool).catch(e => { if (e.status === 401) onOut(e.message); }), 250);
     return () => clearTimeout(t);
-  }, [optKey]);
+  }, [optKey, plan]);
   const changed = ["horizon", "quality", "confirmed", "stock_max", "run_up", "fno_only", "by_volume", "pace"].filter(k => opt[k] !== B_OPT_DEFAULT[k]).length
     + (opt.exclude.length ? 1 : 0) + (inp.sector !== B_DEFAULT.sector) + (inp.weighting !== "equal");
   const [secSel, setSecSel] = useState([]);                       // sector filter on the plan's stock table
@@ -520,6 +524,18 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
       </div>
     );
   }
+
+  if (!plan) return (
+    <div className="pf bd" id="bd-wait">
+      <section className="card bd-wait">
+        {brand}
+        {planErr
+          ? <><div className="pf-miss" role="alert">{planErr}</div>
+              <button type="button" className="px-btn" id="bd-wait-retry" onClick={() => setPlanTry(n => n + 1)}>Try again</button></>
+          : <><div className="bd-wait-bar"/><div className="bd-wait-bar short"/><p>Getting the builder ready…</p></>}
+      </section>
+    </div>
+  );
 
   const st = styleOf(a);
   return (
