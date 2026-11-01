@@ -62,7 +62,7 @@ export function analyseZone(s, data) {
   const [fin, strength, ...per] = s.zv;
   const tf = {};
   ["M", "Q", "Y"].forEach((k, i) => { const t = per[i];
-    tf[k] = t ? { v: t[2], d: dirVal(t[2]), tr: t[0], pos: t[1], sd: t[3] ?? null, sn: t[4] ?? null } : { v: null, d: null, tr: null, pos: null, sd: null, sn: null }; });
+    tf[k] = t ? { v: t[2], d: dirVal(t[2]), tr: t[0], pos: t[1], sd: t[3] ?? null, sn: t[4] ?? null, nr: t[5] ?? 0, at: t[6] ?? -1 } : { v: null, d: null, tr: null, pos: null, sd: null, sn: null, nr: 0, at: -1 }; });
   const tooNew = s.yh == null || s.yh < PF_MIN_YEARS;
   let cat = tooNew ? "new" : fin === 1 ? "intact" : fin === -1 ? "review" : "watch";
   if (cat !== "new" && s.h === "W") cat = "review";                 // low reliability: always red (owner, 2026-10-16)
@@ -78,6 +78,21 @@ export function analyseZone(s, data) {
     if (rw) why.push(rw);
     const line = (t, k, name) => { const tr = streakText(t, k), once = tr.endsWith(`this ${ZPERIOD[k][0]}`);
       return `${name}: ${tr}, and the price is ${ZPRICE[t.pos]}${once ? "" : ` this ${ZPERIOD[k][0]}`}.`; };
+    // mother candle breakout / breakdown on M / Q / Y, read by WHERE the price sits in that timeframe (zone_engine.py:
+    // 12 combinations; at = above · near top · upper half · lower half · near bottom · below). Plain words only.
+    const NR_SAY = {
+      bo: ["and it is already above its usual {p} price level. A strong sign.", "right at the top of its usual {p} price level. A strong sign.",
+        "It still has to clear the top of its usual {p} price level.", "but it is still in the lower part of its usual {p} price level. An early sign.",
+        "from near the bottom of its usual {p} price level. Not proven yet.", "but it is still below its usual {p} price level. A weak bounce."],
+      bd: ["but it is still above its usual {p} price level. A pullback; it stays strong.", "turning down at the top of its usual {p} price level. A warning sign.",
+        "while in the upper part of its usual {p} price level. It is losing strength.", "in the lower part of its usual {p} price level. A weak sign.",
+        "near the bottom of its usual {p} price level. Support is giving way.", "and it is below its usual {p} price level. The fall is confirmed."],
+    };
+    const base = (t, k) => { const n = Math.abs(t.nr), [one, many] = ZPERIOD[k], adj = one === "year" ? "yearly" : `${one}ly`;
+      const tail = (NR_SAY[t.nr > 0 ? "bo" : "bd"][t.at] || "").replace("{p}", adj);
+      const head = t.nr > 0 ? (t.at >= 4 ? "The price has bounced up" : "The price has broken out") : (t.at === 0 ? "The price has slipped back" : "The price has broken down");
+      return `${head} after being held for the last ${n} ${many}, ${tail}`.replace(", It", ". It"); };
+    ["Y", "Q", "M"].forEach(k => { if (tf[k].nr) why.push(base(tf[k], k)); });
     why.push(line(Q, "Q", "Quarterly view"));
     why.push(Y.tr != null ? line(Y, "Y", "Yearly view") : "Yearly view: not available yet. It needs 10 years of price data.");
     if (M.tr != null) why.push(line(M, "M", "Monthly view")

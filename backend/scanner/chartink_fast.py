@@ -1004,25 +1004,55 @@ def parse_symbols_from_clipboard(clipboard_data, key, output_list, stock_signal_
     return processed_count
 
 
-def _row_to_record(cells):
+# Master screener volumes (owner, 2026-11-01): the current candle and the last 4 of each timeframe, for the AI Portfolio
+# Builder's volume analysis (backend/app/liquidity.py). "_0" is the candle so far, "_1" … "_4" are completed ones.
+VOLUME_PERIODS = ("Weekly", "Monthly", "Quarterly", "Yearly")
+VOLUME_FIELDS = tuple(f"{p}_Volume" + (f"_{k}" if k else "") for p in VOLUME_PERIODS for k in range(5))
+MASTER_LAYOUTS = {   # by column count, when the clipboard has no header row
+    29: ("Sr", "Stock_Name", "Symbol", "Price", "Change_Pct", "Volume", *VOLUME_FIELDS, "Sector", "Industry", "Marketcap"),
+    11: ("Sr", "Stock_Name", "Symbol", "Price", "Change_Pct", "Volume", "Weekly_Volume", "Monthly_Volume", "Sector", "Industry", "Marketcap"),
+    9: ("Sr", "Stock_Name", "Symbol", "Price", "Change_Pct", "Volume", "Sector", "Industry", "Marketcap"),
+}
+_MASTER_HEADER = {"sr": "Sr", "sr.": "Sr", "stock name": "Stock_Name", "name": "Stock_Name", "symbol": "Symbol",
+                  "close": "Price", "price": "Price", "ltp": "Price", "%_change": "Change_Pct", "%change": "Change_Pct",
+                  "% chg": "Change_Pct", "change": "Change_Pct", "daily_volume": "Volume", "volume": "Volume",
+                  "sector": "Sector", "industry": "Industry", "marketcapname": "Marketcap", "marketcap": "Marketcap",
+                  "market cap": "Marketcap"}
+_VOL_HEADER = re.compile(r"^(weekly|monthly|quaterly|quarterly|yearly)_volume(?:_(\d))?$")
+
+
+def master_header_fields(cells):
+    """header row → record field per column (None = column not used); None when it is not a master header"""
+    out = []
+    for c in cells:
+        h = " ".join(str(c).strip().lower().split())
+        m = _VOL_HEADER.match(h.replace(" ", "_"))
+        if m:
+            per = {"weekly": "Weekly", "monthly": "Monthly", "quaterly": "Quarterly", "quarterly": "Quarterly", "yearly": "Yearly"}[m.group(1)]
+            k = int(m.group(2) or 0)
+            out.append(f"{per}_Volume" + (f"_{k}" if k else "") if k <= 4 else None)
+        else:
+            out.append(_MASTER_HEADER.get(h))
+    return out if "Symbol" in out and "Stock_Name" in out else None
+
+
+def _row_to_record(cells, fields=None):
     """
-    Map one master-table row to a dict.
-    Column order (owner, 2026-11-01 — volumes added to the screener):
-      Sr, Stock Name, Symbol, Close, %change, Daily_volume, Weekly_Volume, Monthly_volume, Sector, Industry, Marketcap
-    The older 9-column layout (one Volume column) is still read.
+    Map one master-table row to a dict. With the clipboard's header row (fields) every column is read by its NAME;
+    without it, by position: the 29-column layout (owner, 2026-11-01: daily volume + the current and last 4 weekly,
+    monthly, quarterly and yearly volumes), the 11-column one (daily / weekly / monthly) and the original 9-column one.
+    Volumes left blank (a young stock has no yearly candles) are None.
     """
     cells = list(cells)
-    weekly = monthly = None
-    if len(cells) >= 11:
-        sr, stock_name, symbol, price, change_pct, volume, weekly, monthly, sector, industry, marketcap = cells[:11]
-    else:
+    if fields is None:
+        n = 29 if len(cells) >= 29 else 11 if len(cells) >= 11 else 9
         if len(cells) < 8:
             return None
         if len(cells) < 9:
             cells.append('Unknown')
-        sr, stock_name, symbol, price, change_pct, volume, sector, industry, marketcap = cells[:9]
-
-    symbol = symbol.strip().upper()
+        fields = MASTER_LAYOUTS[n]
+    raw = {f: v for f, v in zip(fields, cells) if f}
+    symbol = str(raw.get("Symbol") or "").strip().upper()
     if not symbol:
         return None
 
@@ -1034,7 +1064,7 @@ def _row_to_record(cells):
 
     def to_int(val, default=0):
         try:
-            return int(str(val).replace(',', '').strip())
+            return int(float(str(val).replace(',', '').strip()))
         except (ValueError, TypeError):
             return default
 
@@ -1044,19 +1074,20 @@ def _row_to_record(cells):
             return 'Unknown'
         return v.title()
 
-    return {
-        'Sr': to_int(sr),
-        'Stock_Name': stock_name.strip(),
+    rec = {
+        'Sr': to_int(raw.get("Sr")),
+        'Stock_Name': str(raw.get("Stock_Name") or "").strip(),
         'Symbol': symbol,
-        'Price': to_float(price),
-        'Change_Pct': to_float(change_pct),
-        'Volume': to_int(volume),
-        'Weekly_Volume': to_int(weekly) if weekly is not None else None,      # this week's candle (week so far)
-        'Monthly_Volume': to_int(monthly) if monthly is not None else None,   # this month's candle (month so far)
-        'Sector': clean_label(sector),
-        'Industry': clean_label(industry),
-        'Marketcap': clean_label(marketcap),
+        'Price': to_float(raw.get("Price")),
+        'Change_Pct': to_float(raw.get("Change_Pct")),
+        'Volume': to_int(raw.get("Volume")),
     }
+    for f in VOLUME_FIELDS:                       # "_0" = the candle so far; blank → None
+        if f in raw:
+            rec[f] = to_int(raw[f], None) if str(raw[f]).strip() else None
+    rec.update({'Sector': clean_label(raw.get("Sector")), 'Industry': clean_label(raw.get("Industry")),
+                'Marketcap': clean_label(raw.get("Marketcap"))})
+    return rec
 
 
 def parse_master_table_clipboard(clipboard_data):
@@ -1087,22 +1118,25 @@ def parse_master_table_clipboard(clipboard_data):
     # --- Strategy 1: tab-separated, one full row per line ---
     tab_lines = [ln for ln in lines if '\t' in ln]
     if tab_lines:
-        records = []
+        records, fields = [], None
         for ln in lines:
             if '\t' not in ln:
                 continue
             cells = [c.strip() for c in ln.split('\t')]
-            if not cells or not cells[0] or is_header_like(cells[0]):
+            if cells and is_header_like(cells[0]):
+                fields = master_header_fields(cells) or fields      # columns by name from here on
+                continue
+            if not cells or not cells[0]:
                 continue
             if not cells[0].replace(',', '').isdigit():
                 continue
-            rec = _row_to_record(cells)
+            rec = _row_to_record(cells, fields)
             if rec:
                 records.append(rec)
         if records:
             return records
 
-    # --- Strategy 2: flattened, one cell per line -> chunk into groups of 9 (or 8) ---
+    # --- Strategy 2: flattened, one cell per line -> chunks of 29 / 11 / 9 / 8 (blank cells are lost here) ---
     filtered = [ln for ln in lines if not is_header_like(ln)]
 
     start = 0
@@ -1111,7 +1145,7 @@ def parse_master_table_clipboard(clipboard_data):
     filtered = filtered[start:]
 
     best_records = []
-    for chunk_size in (11, 9, 8):
+    for chunk_size in (29, 11, 9, 8):
         records = []
         broken = False
         for i in range(0, len(filtered) - chunk_size + 1, chunk_size):
@@ -3427,6 +3461,32 @@ def build_zone_history_rows(frame):
     return rows
 
 
+CANDLE_BARS = 12        # bars 0..12 back — enough to draw any NR4 … NR12 mother candle with its children
+
+
+def build_candle_rows(frame):
+    """Candles: monthly, quarterly and yearly OHLC of the current bar + the last 12, one row per stock.
+    M0 = this month, M1 = last month … M12; each cell is "open high low close" (blank when the stock is too young).
+    Used only by the customer-admin detail view to draw the mother candle inside its zones."""
+    x = _Ctx(frame)
+    mats = {tf: [x.ohlc_matrix(tf, f, CANDLE_BARS) for f in ('open', 'high', 'low', 'close')] for tf in 'mqy'}
+    rows = []
+    for i, sym in enumerate(frame['symbol'].tolist()):
+        if any(w in sym.lower() for w in exclude_words) or np.isnan(x.c[i]):
+            continue
+        row, have = {'Symbol': sym}, False
+        for tf in 'mqy':
+            L = _TF_LABEL[tf]
+            for k in range(CANDLE_BARS + 1):
+                bar = [_r2(m[i, k]) for m in mats[tf]]
+                ok = all(v is not None for v in bar)
+                row[f'{L}{k}'] = ' '.join(f'{v:g}' for v in bar) if ok else ''
+                have = have or ok
+        if have:
+            rows.append(row)
+    return rows
+
+
 def build_return_potential_rows(zone_rows, health_rows=None):
     """
     HIDDEN RETURN — potential move if you enter on the MONTHLY zone breakout and exit at the
@@ -3699,6 +3759,7 @@ def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
         retest_rows = build_zone_retest_rows(frame, zone_rows, health_rows)
         tech_rows = build_technical_rows(frame, zone_rows)
         history_rows = build_zone_history_rows(frame)
+        candle_rows = build_candle_rows(frame)
         with pd.ExcelWriter(filename, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
             pd.DataFrame(zone_rows).to_excel(writer, sheet_name='Zone_Levels', index=False)
             pd.DataFrame(ret_rows).to_excel(writer, sheet_name='Return_Potential', index=False)
@@ -3709,6 +3770,8 @@ def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
                 pd.DataFrame(tech_rows).to_excel(writer, sheet_name='Technicals', index=False)
             if history_rows:
                 pd.DataFrame(history_rows).to_excel(writer, sheet_name='Zone_History', index=False)
+            if candle_rows:
+                pd.DataFrame(candle_rows).to_excel(writer, sheet_name='Candles', index=False)
         n_long = sum(1 for r in ret_rows if r['Direction'] == 'LONG')
         print(f"  ✓ Added Zone_Levels ({len(zone_rows)} stocks) + Return_Potential ({n_long} long / {len(ret_rows) - n_long} short setups)")
         return True
@@ -3809,6 +3872,7 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         retest_rows = build_zone_retest_rows(frame, zone_level_rows, health_rows)
         tech_rows = build_technical_rows(frame, zone_level_rows)
         history_rows = build_zone_history_rows(frame)
+        candle_rows = build_candle_rows(frame)
         n_long = sum(1 for r in return_rows if r['Direction'] == 'LONG')
         n_poor = sum(1 for r in health_rows if r['Health'] == 'POOR')
         n_weak = sum(1 for r in health_rows if r['Health'] == 'WEAK')
@@ -3819,6 +3883,7 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         print(f"  • Technicals: {len(tech_rows)} stocks" if tech_rows else "  • Technicals: no technical-data table this run")
         print(f"  • Zone_History: {len(history_rows)} stocks (current + last 4 M / Q / Y zones)" if history_rows
               else "  • Zone_History: no virgin-data table this run")
+        print(f"  • Candles: {len(candle_rows)} stocks (M / Q / Y, current + last {CANDLE_BARS})")
 
         current_step = "Saving Excel"
         filename = save_excel_with_enhanced_sheets(
@@ -3830,7 +3895,8 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
                           'Price_Health': health_rows, 'Failed_NR': failed_nr_rows,
                           'Zone_Retest': retest_rows,
                           **({'Technicals': tech_rows} if tech_rows else {}),
-                          **({'Zone_History': history_rows} if history_rows else {})}
+                          **({'Zone_History': history_rows} if history_rows else {}),
+                          **({'Candles': candle_rows} if candle_rows else {})}
         )
         if not filename:
             raise Exception("Failed to generate Excel file")

@@ -19,8 +19,11 @@ import time
 import traceback
 from datetime import timedelta
 
+from . import activity as act
 from . import config
 from .db import get_history_enabled, get_meta, get_settings, init_db, pool, set_meta
+from .adoption import ADOPTION_DAYS
+from .detail import DETAIL_DAYS
 from .publish import build_history, history_failed, history_missing, publish
 from .schedule import due_slots, now
 from .store import save_snapshot, workbook_to_sheets
@@ -158,12 +161,12 @@ def run_job(job, bg):
                 print(f"📣 Published to customers ({pub['stocks']} stocks)")
             except Exception as e:                               # noqa: BLE001 — never fail the collection for this
                 print(f"⚠ Could not publish to customers: {e}")
-        if job["kind"] == "scheduled" and get_history_enabled():
-            try:
-                build_history(sid)
-                print("🗓 Added to the customers' past-days picker")
-            except Exception as e:                               # noqa: BLE001 — never fail the collection for this
-                print(f"⚠ Could not add it to the customers' past days: {e}")
+        try:                                                     # final output stored for every collection (owner,
+            r = build_history(sid)                               # 2026-11-01): past day (scheduled) + stock states
+            print(f"🗓 Final output stored ({r and r['states']} stock states"
+                  + (", added to the customers' past-days picker)" if job["kind"] == "scheduled" else ")"))
+        except Exception as e:                                   # noqa: BLE001 — never fail the collection for this
+            print(f"⚠ Could not store the final output: {e}")
         _append_log(job_id, tee.take())
         with pool.connection() as c:
             c.execute("UPDATE jobs SET status='done', finished_at=now(), snapshot_id=%s WHERE id=%s", (sid, job_id))
@@ -256,6 +259,17 @@ def cleanup():
             shutil.rmtree(d, ignore_errors=True)
     with pool.connection() as c:
         c.execute("DELETE FROM jobs WHERE created_at < now() - interval '120 days'")
+        # stock detail view (customer admin) + the candles it draws: only the last DETAIL_DAYS days
+        old = "SELECT id FROM snapshots WHERE taken_at < now() - make_interval(days => %s)"
+        c.execute(f"DELETE FROM stock_detail WHERE snapshot_id IN ({old})", (DETAIL_DAYS,))
+        c.execute(f"DELETE FROM snapshot_candles WHERE snapshot_id IN ({old})", (DETAIL_DAYS,))
+        # adoption report: two years of customer × day × application rows
+        c.execute("DELETE FROM adoption_daily WHERE day < (now() AT TIME ZONE 'Asia/Kolkata')::date - %s", (ADOPTION_DAYS,))
+        # direct grants (Access manager): they stop working the day after their last day; the rows go 30 days later
+        for g in c.execute("DELETE FROM customer_permissions WHERE expires_on < (now() AT TIME ZONE 'Asia/Kolkata')::date - 30 "
+                           "RETURNING customer_id, permission, expires_on").fetchall():
+            act.log(c, actor_kind="customer", actor_id=g["customer_id"], app="customer", event="grant_expired",
+                    detail={"permission": g["permission"], "until": g["expires_on"].isoformat()})
     # Activity log: events, finished sessions and minutes per application older than the Activity log setting
     keep = max(30, int(s.get("activity_retention_days") or 180))
     with pool.connection() as c:
@@ -293,18 +307,18 @@ def main():
             if last_cleanup != now().date():
                 cleanup()
                 last_cleanup = now().date()
-            # customers' past days: build one older scheduled collection per idle tick (light on a small server)
-            if get_history_enabled():
-                todo = history_missing(limit=2)
-                if todo:
-                    try:
-                        r = build_history(todo[0])
-                        print(f"🗓 Customer past days: prepared collection #{todo[0]} ({r and r['stocks']} stocks)"
-                              + (" — more to go" if len(todo) > 1 else " — all done"), flush=True)
-                    except Exception as e:                       # noqa: BLE001 — skip it, never block the others
-                        history_failed(todo[0], e)
-                        print(f"⚠ Customer past days: collection #{todo[0]} could not be prepared ({e}) — skipped", flush=True)
-                    continue
+            # final output of older collections (missing, or built with an older formula): one per idle tick (light
+            # on a small server) — always, so turning past days on is instant and the strength evidence is complete
+            todo = history_missing(limit=2)
+            if todo:
+                try:
+                    r = build_history(todo[0])
+                    print(f"🗓 Final output: rebuilt collection #{todo[0]} with the current formula ({r and r['states']} stocks)"
+                          + (" — more to go" if len(todo) > 1 else " — all done"), flush=True)
+                except Exception as e:                           # noqa: BLE001 — skip it, never block the others
+                    history_failed(todo[0], e)
+                    print(f"⚠ Final output: collection #{todo[0]} could not be prepared ({e}) — skipped", flush=True)
+                continue
         except Exception:                                        # noqa: BLE001 — never let the loop die
             traceback.print_exc()
         time.sleep(POLL_SECONDS)

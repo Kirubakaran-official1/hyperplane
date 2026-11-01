@@ -1,7 +1,7 @@
 // Hyperplane AI Portfolio Builder — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addCss } from "../core.jsx";
-import { CopyBtns, Info, MultiSelect, RELIABILITY, api, colorOf, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
+import { CopyBtns, Info, MultiSelect, RELIABILITY, StockLink, api, colorOf, fmtDT, signed, tc, trackAction, trendWordOf } from "../core.jsx";
 import { CSS } from "./builder.css.js";
 
 addCss("builder", CSS);
@@ -60,18 +60,24 @@ const B_COUNTS = [20, 30, 50, 100];
 const B_AMOUNTS = [10000, 50000, 100000, 500000, 1000000, 2500000, 10000000, 100000000, 1000000000];
 const B_SECTOR = [[5, "5%"], [10, "10%"], [15, "15%"], [20, "20%"], [25, "25%"], [30, "30%"], [40, "40%"], [100, "No limit"]];
 const B_CASH_MIN = 5, B_MIN_AMT = 10000, B_MAX_AMT = 100000000000, B_MIN_N = 5, B_MAX_N = 1000;   // ₹10,000 … ₹10,000 crore · 5 … 1,000 stocks
-const B_KEY = "qf_builder";                                  // the customer's last inputs, this device only
+const B_KEY = "qf_builder_v2";                               // the customer's last inputs, this device only (v2: new standard settings)
 // "More options" (owner, 2026-11-01: "add more fields … based on the quant — zones along with the regime")
-const B_OPT_DEFAULT = { horizon: "long", quality: "building", confirmed: false, stock_max: 10, run_up: 30, fno_only: false, exclude: [], by_volume: false };
+// standard settings for every plan (owner, 2026-11-01); the Customer plan cannot change them (the server checks it)
+const B_OPT_DEFAULT = { horizon: "long", quality: "good", confirmed: true, stock_max: 5, run_up: 30, fno_only: false, exclude: [], by_volume: false, pace: "standard" };
 const B_HORIZON = [["long", "Long term", "Months to years · quarter and year count most"], ["medium", "Medium term", "Weeks to months · the month counts more"]];
 // names (owner, 2026-11-01: "most of the words look similar")
 const B_QUALITY = [["strong", "Leaders only", "Strength 40 and above · the fewest, strongest stocks"],
   ["good", "Proven trends", "Strength 24 and above"], ["building", "Proven + emerging", "Adds rising trends when proven ones run out"]];
 const B_REGIME = [[false, "Uptrend regime", "The long-term regime is up"], [true, "Confirmed uptrend", "Long- and short-term regimes both up · stricter"]];
-const B_VOLUME = [[false, "No", "Trading volume gives warnings only"], [true, "Yes", "No stock bigger than 5 days of normal buying"]];
+const B_VOLUME = [[false, "No", "Your plan stays · stocks too big for their trading are warned"], [true, "Yes", "No stock bigger than its trading supports · the rest goes to the others"]];
+// buying pace = the share of a stock's normal day of trading you buy each day (thin or jumpy stocks always slower)
+const B_PACE = [["careful", "Careful", "5% of a normal day · least price push"], ["standard", "Standard", "10% of a normal day · the usual rule"],
+  ["fast", "Fast", "20% of a normal day · quicker, pushes the price more"]];
+const V_TONE = { 5: "up", 4: "up", 3: "mid", 2: "low", 1: "bad" };
+const V_STATUS = { fits: "Fits", capped: "Kept to its limit", over: "Too big", unknown: "Not known" };
 const B_STOCK = [5, 10, 15, 20, 25];
 const B_RUNUP = [[20, "20%"], [30, "30%"], [50, "50%"], [0, "Don't leave out"]];
-const B_DEFAULT = { amount: 1000000, count: 30, alloc: B_PRESETS.multi, rel: ["S"], sector: 25, weighting: "equal", opts: B_OPT_DEFAULT };
+const B_DEFAULT = { amount: 100000, count: 20, alloc: B_PRESETS.multi, rel: ["S"], sector: 10, weighting: "equal", opts: B_OPT_DEFAULT };
 const inr = v => `₹${Math.round(v).toLocaleString("en-IN")}`;
 const inrShort = v => v >= 1e7 ? `₹${(v / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 2 })} Cr` : v >= 1e5 ? `₹${+(v / 1e5).toFixed(2)} L` : inr(v);
 // money on the plan (owner, 2026-11-01: "₹10,000 crore — the zeros break the page"): crore and lakh words, full on hover
@@ -82,9 +88,12 @@ const istToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkat
 const styleOf = a => (Object.entries(B_PRESETS).find(([, p]) => B_PARTS.every(([k]) => p[k] === a[k])) || [null])[0];
 const cleanOpts = o => {                                      // saved "More options", checked
   o = o && typeof o === "object" ? o : {};
-  return { horizon: B_HORIZON.some(([k]) => k === o.horizon) ? o.horizon : "long", quality: B_QUALITY.some(([k]) => k === o.quality) ? o.quality : "building",
-    confirmed: !!o.confirmed, stock_max: B_STOCK.includes(o.stock_max) ? o.stock_max : 10, run_up: B_RUNUP.some(([v]) => v === o.run_up) ? o.run_up : 30,
-    fno_only: !!o.fno_only, exclude: Array.isArray(o.exclude) ? o.exclude.filter(x => typeof x === "string").slice(0, 100) : [], by_volume: !!o.by_volume };
+  const d = B_OPT_DEFAULT;
+  return { horizon: B_HORIZON.some(([k]) => k === o.horizon) ? o.horizon : d.horizon, quality: B_QUALITY.some(([k]) => k === o.quality) ? o.quality : d.quality,
+    confirmed: typeof o.confirmed === "boolean" ? o.confirmed : d.confirmed, stock_max: B_STOCK.includes(o.stock_max) ? o.stock_max : d.stock_max,
+    run_up: B_RUNUP.some(([v]) => v === o.run_up) ? o.run_up : d.run_up,
+    fno_only: !!o.fno_only, exclude: Array.isArray(o.exclude) ? o.exclude.filter(x => typeof x === "string").slice(0, 100) : [], by_volume: !!o.by_volume,
+    pace: B_PACE.some(([k]) => k === o.pace) ? o.pace : "standard" };
 };
 const loadBuilder = () => {                                   // saved inputs, checked (an old or edited value falls back)
   let v = {};
@@ -115,6 +124,194 @@ function MixBar({ parts, label = "", thin = false }) {
   );
 }
 
+// ─── volume analysis (owner, 2026-11-01: "detail analysis … a lakh of volume doesn't mean we can buy all of it … exact
+// output and a better order to proceed"). The server works it out (liquidity.py + builder.py); this only shows it.
+const sh = n => n == null ? "—" : qtyTxt(Math.round(n));
+function VolCell({ p, open, onClick }) {
+  const l = p.liq;
+  if (!l || l.status === "unknown") return <button type="button" className="bd-vc unk" onClick={onClick} aria-expanded={open}><span className="vb">Not known</span></button>;
+  const st = l.status === "over" ? <span className="bd-vs is-over">⚠ {(p.amt / l.most_amt).toFixed(1)}× over limit</span>
+    : l.status === "capped" ? <span className="bd-vs is-cap">Capped at limit</span>
+    : l.light ? <span className="bd-vs is-ok">Easy to buy</span>
+    : <span className="bd-vs is-ok">Within limit · {l.days <= 1 ? "1 day" : `${l.days} days`}</span>;
+  return (
+    <button type="button" className={`bd-vc ${open ? "on" : ""}`} onClick={onClick} aria-expanded={open} title="Show the volume check">
+      <span className={`vb ${V_TONE[l.grade]}`}>{l.grade_word}</span>{st}</button>);
+}
+
+function Strip({ vals, label }) {
+  const v = (vals || []).map(x => x || 0), mx = Math.max(1, ...v);
+  if (!v.some(Boolean)) return <div className="bd-strip"><span>{label}</span><small className="dim">not enough history yet</small></div>;
+  return (
+    <div className="bd-strip"><span>{label}</span>
+      <div>{v.map((x, i) => <i key={i} style={{ height: `${Math.max(4, x / mx * 100)}%` }} title={`${qtyTxt(Math.round(x))} shares a day`}/>)}</div></div>);
+}
+
+// owner, 2026-11-01: "1 share can move the stock by 1 %?? … show the volume analyser based on the portfolio, don't show
+// the unnecessary things to a small holder". The push is now worked out from what YOU buy a day (server), and a
+// position that is a tiny part of the stock's trading gets one plain line instead of the full analysis.
+const pct = v => v == null ? "—" : v < 0.01 ? "under 0.01%" : `${+v.toFixed(v < 1 ? 2 : 1)}%`;
+const pushTxt = v => v == null ? null : v < 0.05 ? "negligible" : `about ${+v.toFixed(2)}%`;
+
+function VolCard({ p }) {
+  const l = p.liq || {};
+  if (l.status === "unknown") return <div className="bd-vcard" id={`vc-${p.s}`}><p>{(l.warn || [])[0]}</p></div>;
+  if (l.light) return (
+    <div className="bd-vcard light" id={`vc-${p.s}`}>
+      <p className="bd-vlight"><b>✓ Easily bought and sold.</b> Your {sh(p.qty)} share{p.qty === 1 ? "" : "s"} ({inrShort(p.amt)}) {p.qty === 1 ? "is" : "are"} {pct(l.share)} of
+        the {sh(l.dep)} shares it trades on a normal day (about {inrShort(l.value)}). Buy {p.qty === 1 ? "it" : "them"} in one go; {p.qty === 1 ? "it does" : "they do"} not move the price.</p>
+      {(l.warn || []).length > 0 && <ul className="bd-vwarn">{l.warn.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+    </div>);
+  const trend = l.trend === 1 ? "rising" : l.trend === -1 ? "falling" : "steady";
+  const push = pushTxt(l.push);
+  return (
+    <div className="bd-vcard" id={`vc-${p.s}`}>
+      <div className="bd-vgrid">
+        <div><span className="px-label">Average daily volume <Info text="Shares the stock normally trades in a day, from its finished weeks, months and quarters. The lower, recent figure is used when trading is falling, and one unusually heavy day is never counted."/></span>
+          <b>{sh(l.dep)} shares a day</b><small>about {inrShort(l.value)} a day · dependable figure{l.norm > l.dep ? ` (normal ${sh(l.norm)})` : ""}</small>
+          <div className="bd-strips"><Strip vals={l.wk} label="Last 4 weeks"/><Strip vals={l.mo} label="Last 4 months"/></div>
+          <small>Trading is {trend}{l.spike ? " · unusually heavy today (not counted)" : ""}{l.erratic ? " · uneven month to month" : ""}</small></div>
+        <div><span className="px-label">Buying capacity · {+(l.pace * 100).toFixed(1)}% of a day <Info text="To avoid pushing the price, buy only a small share of a day's trading. The stock's limit is five days of buying at that pace, an amount that can also be sold within about ten days even if trading halves."/></span>
+          <b>{sh(l.per_day)} shares a day</b>
+          <small>supports up to {sh(l.most)} shares ({inrShort(l.most_amt)}) — five days of buying, and sellable within about ten days even if trading halves</small></div>
+        <div><span className="px-label">Your position <Info text="Your quantity compared with the stock's trading: share of one day, days to buy at your pace, days to sell in a hurry, and how much your own buying may push the price (from the shares you buy each day)."/></span>
+          <b className={l.status === "over" ? "bad" : ""}>{sh(p.qty)} shares · {inrShort(p.amt)}</b>
+          <small>{pct(l.share)} of one day's trading · {l.days <= 1 ? "bought in one day" : `${l.days.toLocaleString("en-IN")} days to buy`} · {l.exit_days.toLocaleString("en-IN")} day{l.exit_days === 1 ? "" : "s"} to sell in a hurry</small>
+          {push && <small>Price push from your own buying: {push}</small>}</div>
+      </div>
+      {(l.warn || []).length > 0 && <ul className="bd-vwarn">{l.warn.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+    </div>);
+}
+
+// owner, 2026-11-01: "the usual dark side of trading … hit everyone's stop loss, then buy … mention some as a note".
+// Education only: what large players are known to do, and how a small investor avoids being on the wrong side.
+const TRICKS = [
+  ["Stop-loss hunting", "The price is pushed just below an obvious level — a round number, a recent low, the bottom of a zone — to set off many stop-losses at once. The forced selling is then bought cheaply and the price recovers.",
+    "Don't put stops exactly on obvious levels; leave a small gap, and prefer stop-limit orders."],
+  ["Spoofing and layering", "Large buy or sell orders are shown in the order book only to make others react, and are pulled before they trade. It is illegal under SEBI rules, but it still happens.",
+    "Judge a stock by trades that actually happened, not by the orders waiting in the book."],
+  ["Front-running", "Someone who knows a big order is coming buys just before it and sells to it at a higher price.",
+    "Split large orders, use limit prices, and keep your plans to yourself."],
+  ["Pump and dump", "A thinly traded stock is pushed up with heavy buying and 'tips', then sold to the late buyers who rush in.",
+    "Be careful with sudden volume jumps and tips; the dependable volume here ignores one-day spikes for this reason."],
+  ["Circuit traps", "A small stock is held at its upper circuit with no sellers, so it looks unstoppable; when the circuit opens, the holders who drove it sell and late buyers cannot get out.",
+    "Avoid chasing stocks that keep hitting circuits."],
+  ["Marking the close", "Heavy orders in the last minutes push the closing price to a level that suits a large holder.",
+    "Avoid the last 15 minutes, and judge trends on weekly and monthly closes rather than one day."],
+  ["Fake volume", "Related parties trade the same shares back and forth so a stock looks busy and easy to sell (circular trading). It is illegal, but it happens in small stocks.",
+    "Prefer stocks whose trading is steady over months, not just this week."],
+  ["Hidden buying (iceberg orders)", "Big funds show only a small part of a large order, so their buying looks like normal trading while they collect shares over weeks. This one is legal.",
+    "A steady rise in volume and price over weeks often means someone large is buying."],
+];
+function MarketTricks() {
+  return (
+    <details className="bd-tricks" id="bd-tricks">
+      <summary><b>Tricks big players use</b> <span>and how to stay on the right side</span></summary>
+      <ul>{TRICKS.map(([t, what, how]) => <li key={t}><b>{t}.</b> {what} <span className="bd-how">{how}</span></li>)}</ul>
+      <p className="fine">For education only. Many of these are illegal under SEBI rules; knowing them helps you avoid being on the wrong side of them.</p>
+    </details>);
+}
+
+function VolumeSection({ res, picks }) {
+  const v = res.volume, g = v.grades || {};
+  const over = picks.filter(p => p.liq && p.liq.status === "over");
+  const order = ["Very high", "High", "Moderate", "Low", "Very low"];
+  if (v.light) return (                                     // a small portfolio: nothing to manage, say so in one line
+    <section className="px-card bd-volume light" id="bd-volume">
+      <div className="px-ch"><div><h3>Volume analyser</h3>
+        <p className="bd-vlight"><b>✓ No volume concerns.</b> Every stock trades far more each day than this portfolio buys: each one can be bought in one go,
+          and your orders will not move the prices.</p></div></div>
+      <MarketTricks/>
+    </section>);
+  return (
+    <section className="px-card bd-volume" id="bd-volume">
+      <div className="px-ch"><div><h3>Volume analyser</h3>
+        <p>How easily each stock can be bought and later sold, at your <b>{(B_PACE.find(([k]) => k === v.pace) || [, ""])[1].toLowerCase()}</b> pace ({v.pace_pct}% of a normal day){v.by_volume ? " — sized to what each stock supports" : " — your plan is kept as it is"}.</p></div></div>
+      <div className="bd-vkpis">
+        <div id="vk-liquid"><span className="px-label">Liquid allocation <Info text="Share of the invested money in stocks that trade ₹10 crore or more a day (High or Very high liquidity). The higher it is, the easier the whole portfolio is to buy and to sell."/></span><b>{v.high_share}%</b><small>in High / Very high liquidity</small></div>
+        <div id="vk-days"><span className="px-label">Execution period <Info text="Trading days needed to buy every stock at your buying pace without pushing prices, following the Execution plan below."/></span><b>{v.days.toLocaleString("en-IN")} day{v.days === 1 ? "" : "s"}</b><small>at your buying pace</small></div>
+        <div id="vk-within"><span className="px-label">Within liquidity limit <Info text="Stocks whose amount is no bigger than their trading supports (five days of buying at your pace). 'Capped' stocks were reduced to that limit and the rest of their money went to the other stocks."/></span><b>{v.fits + v.capped}</b><small>{v.capped ? `${v.capped} capped at the limit` : `of ${v.fits + v.capped + v.over + v.unknown} stocks`}</small></div>
+        <div id="vk-over" className={v.over ? "warn" : ""}><span className="px-label">Over liquidity limit <Info text="Stocks whose amount is bigger than their trading supports. They take longer to buy and are slow to sell in a hurry. Turn on 'Size by trading volume' in More options to cap them."/></span><b>{v.over}</b><small>{v.over ? `${inrShort(v.over_amt)} in them` : "none"}</small></div>
+        <div id="vk-impact"><span className="px-label">Est. market impact <Info text="How much your own buying may push prices, on average, from the shares you buy each day compared with what each stock trades. Small orders in busy stocks have no effect."/></span><b>{pushTxt(v.push) || "—"}</b><small>average while buying</small></div>
+      </div>
+      <div className="bd-glabel"><span className="px-label">Liquidity grade of the money <Info text="Money traded in the stock each day: Very high ₹50 Cr or more · High ₹10 Cr or more · Moderate ₹2 Cr or more · Low ₹50 L or more · Very low below ₹50 L. Low and Very low stocks are always bought at no more than 5% of a day."/></span></div>
+      <div className="bd-gbar" role="img" aria-label={order.map(k => `${k} ${g[k] || 0}%`).join(", ")}>
+        {order.filter(k => g[k] > 0).map(k => <span key={k} className={`g${5 - order.indexOf(k)}`} style={{ flexGrow: g[k] }} title={`${k} trading: ${g[k]}% of the money`}>{g[k] >= 8 && <em>{k} {g[k]}%</em>}</span>)}</div>
+      <div className="bd-glegend">{order.map(k => <span key={k}><i className={`g${5 - order.indexOf(k)}`}/>{k}</span>)}</div>
+      {!v.by_volume && over.length > 0 && <div className="bd-vbanner" id="bd-vbanner">
+        <b>⚠ {over.length} stock{over.length === 1 ? " is" : "s are"} too big for {over.length === 1 ? "its" : "their"} trading</b> ({inrShort(v.over_amt)}).
+        Buying them at your pace takes up to {Math.max(...over.map(p => p.liq.days)).toLocaleString("en-IN")} days and they are slow to sell. Turn on “Size by trading volume” in More options to keep each within what it supports.
+        <div className="bd-vlist">{over.slice(0, 12).map(p => <span key={p.s}><b>{p.s}</b> {(p.amt / p.liq.most_amt).toFixed(1)}× · max {inrShort(p.liq.most_amt)}</span>)}{over.length > 12 && <span>+{over.length - 12} more</span>}</div></div>}
+      {(v.replaced || []).length > 0 && <p className="bd-vnote">Left out because they trade too little to take a useful share: {v.replaced.slice(0, 10).map(r => `${r.s} (up to ${inrShort(r.most_amt)})`).join(", ")}{v.replaced.length > 10 ? ` and ${v.replaced.length - 10} more` : ""}.</p>}
+      <MarketTricks/>
+    </section>);
+}
+
+// sticky section tabs on the result page: a click scrolls to the section; the tab of the section in view is lit
+function SectionTabs({ tabs }) {
+  const [on, setOn] = useState(tabs[0][0]);
+  useEffect(() => {
+    const els = tabs.map(([id]) => document.getElementById(id)).filter(Boolean);
+    const io = new IntersectionObserver(es => {
+      const vis = es.filter(e => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (vis.length) setOn(vis[0].target.id);
+    }, { rootMargin: "-80px 0px -55% 0px", threshold: 0 });
+    els.forEach(e => io.observe(e));
+    return () => io.disconnect();
+  }, [tabs.map(t => t[0]).join()]);
+  const go = id => { const el = document.getElementById(id); if (el) { setOn(id); el.scrollIntoView({ behavior: "smooth", block: "start" }); } };
+  return (
+    <nav className="bd-tabs" aria-label="Sections" id="bd-tabs">
+      {tabs.map(([id, label]) => <button key={id} type="button" className={on === id ? "on" : ""} aria-current={on === id ? "true" : undefined} onClick={() => go(id)} data-tab={id}>{label}</button>)}
+    </nav>);
+}
+
+const yearsTxt = d => d >= 500 ? ` (about ${Math.round(d / 250)} years)` : d >= 60 ? ` (about ${Math.round(d / 21)} months)` : "";
+function BuyingPlan({ plan, picks, res }) {
+  const [all, setAll] = useState(false);
+  const days = all ? plan.days : plan.days.slice(0, 7);
+  const sw = picks.map(p => p.liq && p.liq.swing).filter(Boolean).sort((a, b) => a - b);
+  const swing = sw.length ? Math.max(1, Math.round(sw[Math.floor(sw.length / 2)])) : 3;      // a typical day's move of these stocks
+  const byS = Object.fromEntries(picks.map(p => [p.s, p]));
+  if (plan.total_days <= 1) return (                       // everything in one day: a short list, no day-by-day plan
+    <section className="px-card bd-plan" id="bd-plan">
+      <div className="px-ch"><div><h3>Execution plan · 1 day</h3><p>Every stock can be bought today, in full.</p></div></div>
+      <div className="bd-buys">{plan.days[0] && plan.days[0].buys.map(b => <span key={b.s}><b>{b.s}</b> {qtyTxt(b.qty)}</span>)}</div>
+      <div className="bd-tips"><div className="px-label">How to place the orders</div>
+        <ul><li>Use limit orders at or near the current price, not market orders.</li>
+          <li>Avoid the first and last 15 minutes of the day, when prices swing the most.</li></ul></div>
+    </section>);
+  return (
+    <section className="px-card bd-plan" id="bd-plan">
+      <div className="px-ch"><div><h3>Execution plan · {plan.total_days.toLocaleString("en-IN")} day{plan.total_days === 1 ? "" : "s"}{yearsTxt(plan.total_days)}</h3>
+        <p>{plan.one_day} stock{plan.one_day === 1 ? "" : "s"} can be bought in full on day 1{plan.multi_day ? `; ${plan.multi_day} need${plan.multi_day === 1 ? "s" : ""} several days — start them on day 1 and continue each day, the slowest first` : ""}.</p></div></div>
+      <ol className="bd-days-list">
+        {days.map(d => (
+          <li key={d.day} className="bd-day" data-day={d.day}>
+            <div className="bd-dh"><b>Day {d.day}</b><span>{inrShort(d.amt)}</span><small>{Math.round(d.total / res.invested * 100)}% bought</small></div>
+            <div className="bd-buys">{d.buys.map(b => <span key={b.s} className={b.done ? "done" : ""} title={b.done ? "Completes this stock" : "Part of this stock"}><b>{b.s}</b> {qtyTxt(b.qty)}{b.done ? " ✓" : ""}</span>)}</div>
+          </li>))}
+      </ol>
+      {plan.days.length > 7 && <button type="button" className="px-btn" onClick={() => setAll(v => !v)} id="bd-plan-all">{all ? "Show fewer days" : `Show all ${plan.days.length} days`}</button>}
+      {plan.more && <div className="bd-later" id="bd-plan-more">
+        <div className="bd-laterh">⚠ {plan.more.stocks.length} stock{plan.more.stocks.length === 1 ? "" : "s"} still need buying after day {plan.more.from - 1} — the last one finishes on day {plan.more.to.toLocaleString("en-IN")}{yearsTxt(plan.more.to)}.</div>
+        <p>They trade too little for the amount planned: buying faster would push their prices up. Consider a smaller amount in them, or turn on “Size by trading volume”.</p>
+        <div className="table-wrap"><table className="bd-t bd-latert">
+          <thead><tr><th>Stock</th><th className="num">Shares a day</th><th className="num">Shares still to buy</th><th className="num">Money still to invest</th><th className="num">Finished on</th></tr></thead>
+          <tbody>{plan.more.stocks.map(x => <tr key={x.s}><td><b>{x.s}</b></td><td className="num mono">{qtyTxt(x.per_day)}</td><td className="num mono">{qtyTxt(x.qty)}</td>
+            <td className="num mono">{byS[x.s] ? inrShort(x.qty * byS[x.s].p) : "—"}</td><td className="num">day {x.days.toLocaleString("en-IN")}{yearsTxt(x.days)}</td></tr>)}</tbody>
+          <tfoot><tr><td colSpan={3}>Still to invest after day {plan.more.from - 1}</td><td className="num mono"><b>{inrShort(plan.more.amt)}</b></td><td></td></tr></tfoot></table></div>
+      </div>}
+      <div className="bd-tips"><div className="px-label">How to place the orders</div>
+        <ul>
+          <li>Use limit orders at or near the current price, not market orders.</li>
+          <li>Split each day's shares into 2–4 orders through the day, and avoid the first and last 15 minutes.</li>
+          <li>If a stock jumps more than about {swing}% (a normal day's move for these stocks) above today's price, pause it and buy the rest on another day.</li>
+          <li>On a day with big news or unusually heavy trading in a stock, skip that stock for the day.</li>
+        </ul></div>
+    </section>);
+}
+
 function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const [inp, setInpRaw] = useState(loadBuilder);
   const setInp = patch => setInpRaw(p => { const n = { ...p, ...patch }; try { localStorage.setItem(B_KEY, JSON.stringify(n)); } catch { /* storage blocked */ } return n; });
@@ -124,8 +321,25 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const setRes = r => { setResRaw(r); try { if (r) sessionStorage.setItem(B_RES, JSON.stringify(r)); else sessionStorage.removeItem(B_RES); } catch { /* storage full or blocked */ } }; const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const [added, setAdded] = useState("");                   // "" · "ask" · "busy" · "add" / "replace" (done) · error text
   const [pfNow, setPfNow] = useState(null);                 // how many stocks the Analyser list holds right now
+  // builder plan (Access manager: builder:customer / trader / admin) — limits shown here, enforced by the server
+  const [plan, setPlan] = useState(null);
+  useEffect(() => {
+    api("/app/api/builder/plan").then(pl => {
+      setPlan(pl);
+      setInpRaw(p => {                                         // keep the saved inputs inside the plan
+        const n = { ...p };
+        if (pl.max_amount && n.amount > pl.max_amount) { n.amount = pl.max_amount; setAmtText(Math.round(pl.max_amount).toLocaleString("en-IN")); }
+        if (n.count > pl.max_stocks) n.count = pl.max_stocks;
+        n.rel = n.rel.filter(r => pl.reliability.includes(r)); if (!n.rel.length) n.rel = ["S"];
+        if (!pl.options) { n.opts = { ...pl.defaults.opts }; n.sector = pl.defaults.sector_max; n.weighting = pl.defaults.weighting; }
+        return n;
+      });
+    }).catch(e => { if (e.status === 401) onOut(e.message); });
+  }, []);
+  const maxAmt = plan ? plan.max_amount : B_MAX_AMT, minAmt = plan ? plan.min_amount : B_MIN_AMT, maxN = plan ? plan.max_stocks : B_MAX_N;
+  const locked = !!plan && !plan.options;
   const a = inp.alloc, eqSum = a.Large + a.Mid + a.Small;
-  const amtOk = inp.amount >= B_MIN_AMT && inp.amount <= B_MAX_AMT, nOk = inp.count >= B_MIN_N && inp.count <= B_MAX_N;
+  const amtOk = inp.amount >= minAmt && (maxAmt == null || inp.amount <= maxAmt), nOk = inp.count >= B_MIN_N && inp.count <= maxN;
   const per = amtOk && nOk ? inp.amount * eqSum / 100 / inp.count : null;
   const spread = amtOk && nOk ? spreadCheck(inp.amount, inp.count, a.Cash) : null;
   const opt = inp.opts, setOpt = patch => setInp({ opts: { ...opt, ...patch } });
@@ -136,10 +350,12 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
       .then(setPool).catch(e => { if (e.status === 401) onOut(e.message); }), 250);
     return () => clearTimeout(t);
   }, [optKey]);
-  const changed = ["horizon", "quality", "confirmed", "stock_max", "run_up", "fno_only", "by_volume"].filter(k => opt[k] !== B_OPT_DEFAULT[k]).length
-    + (opt.exclude.length ? 1 : 0) + (inp.sector !== 25) + (inp.weighting !== "equal");
+  const changed = ["horizon", "quality", "confirmed", "stock_max", "run_up", "fno_only", "by_volume", "pace"].filter(k => opt[k] !== B_OPT_DEFAULT[k]).length
+    + (opt.exclude.length ? 1 : 0) + (inp.sector !== B_DEFAULT.sector) + (inp.weighting !== "equal");
   const [secSel, setSecSel] = useState([]);                       // sector filter on the plan's stock table
-  useEffect(() => { setSecSel([]); }, [res]);
+  useEffect(() => { setSecSel([]); setOpenRows(new Set()); }, [res]);
+  const [openRows, setOpenRows] = useState(() => new Set());       // stocks whose detail row is open
+  const toggleRow = sym => setOpenRows(o => { const x = new Set(o); x.has(sym) ? x.delete(sym) : x.add(sym); return x; });
   // an equity slider moves only into the cash share (cash never below the buffer); the cash slider scales the equity
   const setPart = (k, raw) => {
     const v = Math.max(0, Math.round(Number(raw) || 0));
@@ -158,9 +374,11 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
       setInp({ alloc: next });
     }
   };
-  const setAmount = t => { const digits = t.replace(/[^\d]/g, "").slice(0, 12); setAmtText(digits ? Number(digits).toLocaleString("en-IN") : ""); setInp({ amount: Number(digits) || 0 }); };
-  const problem = !amtOk ? `Enter an amount between ${inr(B_MIN_AMT)} and ${inrShort(B_MAX_AMT)}.`
-    : !nOk ? `Choose between ${B_MIN_N} and ${B_MAX_N} stocks.` : eqSum <= 0 ? "Put some money in at least one market-cap group." : "";
+  const setAmount = t => { const digits = t.replace(/[^\d]/g, "").slice(0, 15); setAmtText(digits ? Number(digits).toLocaleString("en-IN") : ""); setInp({ amount: Number(digits) || 0 }); };
+  const limited = !!plan && plan.tier === "customer";            // amounts / stocks / options limited for this access
+  const amtProblem = !plan ? "" : amtOk ? "" : maxAmt != null && inp.amount > maxAmt ? `Your access allows amounts up to ${inrShort(maxAmt)}.` : `Enter an amount of at least ${inr(minAmt)}.`;
+  const nProblem = !plan || nOk ? "" : inp.count > maxN ? `Your access allows up to ${maxN} stocks.` : `Choose at least ${B_MIN_N} stocks.`;
+  const problem = !plan ? "Loading…" : amtProblem || nProblem || (eqSum <= 0 ? "Put some money in at least one market-cap group." : "");
   const build = () => {
     if (problem) { setErr(problem); return; }
     setBusy(true); setErr(""); setAdded("");
@@ -176,16 +394,24 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
     const picks = res.picks, caps = ["Large", "Mid", "Small"].filter(c => picks.some(p => p.cap === c));
     const csv = () => {
       const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-      const rows = [["Stock", "Ticker", "Market cap", "Sector", "Industry", "Price (₹)", "Quantity", "Amount (₹)", "Weight %", "Long-term strength", "Reliability"],
-        ...picks.map(p => [p.n, p.s, `${p.cap} cap`, p.sec, p.ind, p.p, p.qty, p.amt, p.w, p.st, RELIABILITY[p.h] ? RELIABILITY[p.h][0] : ""]),
+      const L = p => p.liq || {};
+      const rows = [["Stock", "Ticker", "Market cap", "Sector", "Industry", "Price (₹)", "Quantity", "Amount (₹)", "Weight %", "Long-term strength", "Reliability",
+          "Trading", "Shares a day (dependable)", "₹ traded a day", "Most it supports (shares)", "Most it supports (₹)", "Buy per day (shares)", "Days to buy", "Days to sell in a hurry", "% of one day", "Price push %", "Volume check", "Warnings"],
+        ...picks.map(p => [p.n, p.s, `${p.cap} cap`, p.sec, p.ind, p.p, p.qty, p.amt, p.w, p.st, RELIABILITY[p.h] ? RELIABILITY[p.h][0] : "",
+          L(p).grade_word || "Not known", L(p).dep ?? "", L(p).value ?? "", L(p).most ?? "", L(p).most_amt ?? "", L(p).per_day ?? "", L(p).days ?? "", L(p).exit_days ?? "",
+          L(p).share ?? "", L(p).push ?? "", V_STATUS[L(p).status] || "", (L(p).warn || []).join(" | ")]),
         [], ["Cash kept", "", "", "", "", "", "", Math.round(res.cash), res.cash_pct], ["Total", "", "", "", "", "", "", res.amount, 100],
+        ...(res.plan ? [[], ["Buying plan", `${res.plan.total_days} day${res.plan.total_days === 1 ? "" : "s"}`], ["Day", "Ticker", "Shares", "Amount (₹)", "Finishes this stock"],
+          ...res.plan.days.flatMap(d => d.buys.map(b => [d.day, b.s, b.qty, b.amt, b.done ? "yes" : ""])),
+          ...(res.plan.more ? res.plan.more.stocks.map(x => [`${res.plan.more.from}–${res.plan.more.to}`, x.s, x.qty, "", `${x.per_day} a day`]) : [])] : []),
         [], [`Hyperplane AI Portfolio Builder · data as of ${fmtDT(res.as_of)} · for education only, not investment advice`]];
       const blob = new Blob(["﻿" + rows.map(r => r.map(q).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
       const el = document.createElement("a"); el.href = URL.createObjectURL(blob); el.download = `Hyperplane-Portfolio-Builder-${istToday()}.csv`;
       document.body.appendChild(el); el.click(); el.remove(); setTimeout(() => URL.revokeObjectURL(el.href), 1000);
+      trackAction("builder", "download");
     };
     const ask = () => { setAdded("ask"); setPfNow(null); api("/app/api/portfolio").then(r => setPfNow((r.symbols || []).length)).catch(() => setPfNow(0)); };
-    const sendPf = mode => { setAdded("busy"); onAddToPortfolio(picks.map(p => p.s), mode).then(() => setAdded(mode)).catch(e => setAdded(`Could not update the list: ${e.message}`)); };
+    const sendPf = mode => { setAdded("busy"); onAddToPortfolio(picks.map(p => p.s), mode).then(() => { setAdded(mode); trackAction("builder", "sent"); }).catch(e => setAdded(`Could not update the list: ${e.message}`)); };
     const done = added === "add" || added === "replace";
     const maxSec = Math.max(1, ...res.by_sec.map(r => r.pct));
     const pickSec = k => setSecSel(v => v.includes(k) ? v.filter(x => x !== k) : [...v, k]);
@@ -214,10 +440,14 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
                 <button type="button" className="px-btn danger" id="bd-replace" onClick={() => sendPf("replace")} title={`Remove your ${pfNow} stocks and keep only these ${picks.length}`}>Replace my list</button></>}
           <button type="button" className="px-btn" onClick={() => setAdded("")}>Cancel</button></div>}
         {done && <div className="bd-confirm ok" id="bd-done">{added === "replace" ? `Your AI Portfolio Analyser list now holds only these ${picks.length} stocks.` : "Added to your AI Portfolio Analyser list; the stocks already there stay."}
-          <button type="button" className="px-btn" onClick={() => onOpenApp("portfolio")}>Open the Analyser</button></div>}
+          <button type="button" className="px-btn" onClick={() => onOpenApp("portfolio")}>Open the Analyser</button>
+          <button type="button" className="bd-x" onClick={() => setAdded("")} aria-label="Close this message" title="Close" id="bd-done-x">✕</button></div>}
         {added && !["ask", "busy", "add", "replace"].includes(added) && <div className="pf-miss">{added}</div>}
 
-        <section className="bd-kpis">
+        <SectionTabs tabs={[["bd-kpis", "Overview"], ["bd-row", "Allocation"], ...(res.volume ? [["bd-volume", "Volume analyser"]] : []),
+          ["bd-hold", "Holdings"], ...(res.plan ? [["bd-plan", "Execution plan"]] : [])]}/>
+
+        <section className="bd-kpis" id="bd-kpis">
           <div className="px-card bd-kpi"><span className="px-label">Amount</span><b><Money v={res.amount}/></b><small>{res.amount >= 1e7 ? "Cr = crore (1,00,00,000)" : inrShort(res.amount)}</small></div>
           <div className="px-card bd-kpi"><span className="px-label">Invested in stocks</span><b><Money v={res.invested}/></b><small>{(100 - res.cash_pct).toFixed(1)}% of the amount</small></div>
           <div className="px-card bd-kpi cash"><span className="px-label">Cash kept <Info text={`Cash for safety: your ${res.alloc.Cash}% choice plus what is left after buying whole shares or when too few stocks passed the checks. Keeping cash lets you add on dips and pay charges without selling.`}/></span><b><Money v={res.cash}/></b><small>{res.cash_pct.toFixed(1)}% of the amount</small></div>
@@ -226,7 +456,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             <b className={tc(res.avg_st)}>{signed(res.avg_st)}</b><small className={tc(res.avg_st)}>{trendWordOf(res.avg_st)}</small></div>
         </section>
 
-        <section className="px-row2 bd-row">
+        <section className="px-row2 bd-row" id="bd-row">
           <div className="px-card bd-alloc">
             <div className="px-label">Where the money goes</div>
             <div className="mx-cmp"><MixBar label="You chose" parts={res.by_cap.map(r => [r.k, r.target])}/><MixBar label="Plan" parts={res.by_cap.map(r => [r.k, r.pct])}/></div>
@@ -246,50 +476,47 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
         </section>
 
         {resSpread && resSpread.tone !== "ok" && <SpreadNote chk={resSpread} id="bd-spread-res"/>}
-        {res.notes.length > 0 && <section className="px-card bd-notes">{res.notes.map((n, i) => <p key={i}><span aria-hidden="true">ℹ</span>{n}</p>)}</section>}
 
-        <section className="px-card px-hold bd-hold">
-          <div className="px-ch"><div><h3>What to buy</h3><p>{secSel.length ? `${shown.length} of ${picks.length} stocks · ${secSel.join(", ")}` : "Whole shares at today's price. Prices move, so check the price before you buy."}</p></div>
+        {res.volume && <VolumeSection res={res} picks={picks}/>}
+
+        <section className="px-card px-hold bd-hold" id="bd-hold">
+          <div className="px-ch"><div><h3>Portfolio holdings</h3><p>{secSel.length ? `${shown.length} of ${picks.length} stocks · ${secSel.join(", ")}` : "Whole shares at today's price. Prices move, so check the price before you buy."}</p></div>
             <div className="bd-tf"><span className="px-label">Sector</span>
               <MultiSelect label="sectors" options={res.by_sec.map(r => r.k)} value={secSel} onChange={setSecSel} width={190}/></div></div>
           <div className="table-wrap"><table className="bd-t">
-            <thead><tr><th>#</th><th>Stock</th><th className="hide-sm">Sector · Industry</th><th className="num">Price</th><th className="num">Quantity</th><th className="num">Amount</th><th className="num">Weight</th>
+            <thead><tr><th className="bd-xh"><button type="button" className="bd-xall" id="bd-xall" onClick={() => setOpenRows(o => o.size ? new Set() : new Set(shown.map(p => p.s)))}
+              title={openRows.size ? "Collapse all" : "Expand all"} aria-label={openRows.size ? "Collapse all" : "Expand all"}>{openRows.size ? "−" : "+"}</button></th><th>#</th><th>Stock</th><th className="hide-sm">Sector · Industry</th><th className="num">Price</th><th className="num">Quantity</th><th className="num">Amount</th><th className="num">Weight</th>
               <th className="num" title="Long-term strength from −100 to +100 (AI Portfolio engine), not a price change">Strength</th>
-              <th className="num hide-sm" title="How long the quantity takes to buy at about 10% of the stock's normal daily trading">Days to buy</th><th className="hide-sm">Why it was picked</th></tr></thead>
+              <th title="Liquidity grade and whether your amount fits the stock's trading — open the row for the full analysis">Liquidity</th></tr></thead>
             <tbody>{caps.filter(c => shown.some(p => p.cap === c)).map(c => <React.Fragment key={c}>
               <tr className="bd-grp"><td colSpan={10}><i style={{ background: B_COL[c] }}/>{c} cap · {shown.filter(p => p.cap === c).length} stocks · <Money v={shown.filter(p => p.cap === c).reduce((t, p) => t + p.amt, 0)}/></td></tr>
-              {shown.filter(p => p.cap === c).map(p => (
-                <tr key={p.s} data-sym={p.s}>
+              {shown.filter(p => p.cap === c).map(p => (<React.Fragment key={p.s}>
+                <tr data-sym={p.s} className={`${p.liq && p.liq.status === "over" ? "bd-over" : ""} ${openRows.has(p.s) ? "bd-open" : ""}`}>
+                  <td className="bd-xc"><button type="button" className="bd-xbtn" aria-expanded={openRows.has(p.s)} aria-label={`${openRows.has(p.s) ? "Hide" : "Show"} details of ${p.s}`}
+                    onClick={() => toggleRow(p.s)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button></td>
                   <td className="mono dim">{picks.indexOf(p) + 1}</td>
-                  <td><span className="sym">{p.s}</span>{p.tier === 2 && <span className="bd-tier" title="The trend is still building: added because not enough stocks with a strong trend passed every check in this group">Building</span>}<div className="sub">{p.n}</div></td>
+                  <td><StockLink sym={p.s} app="builder"><span className="sym">{p.s}</span></StockLink>{p.tier === 2 && <span className="bd-tier" title="The trend is still building: added because not enough stocks with a strong trend passed every check in this group">Building</span>}<div className="sub"><StockLink sym={p.s} app="builder">{p.n}</StockLink></div></td>
                   <td className="hide-sm"><span className="sec" style={{ color: colorOf(p.sec) }}>● {p.sec}</span><div className="sub">{p.ind}</div></td>
                   <td className="num mono">₹{p.p.toLocaleString("en-IN")}</td>
                   <td className="num mono" title={`${p.qty.toLocaleString("en-IN")} shares`}><b>{qtyTxt(p.qty)}</b></td>
                   <td className="num mono"><Money v={p.amt}/></td>
                   <td className="num mono">{p.w.toFixed(2)}%</td>
                   <td className={`num mono ${tc(p.st)}`}><b>{signed(p.st)}</b></td>
-                  <td className="num hide-sm">{p.days == null ? <span className="dim">—</span>
-                    : <span className={`bd-days ${p.days > 5 ? "slow" : p.days > 1 ? "mid" : "easy"}`} title={`About ${p.days} day${p.days === 1 ? "" : "s"} of buying at 10% of normal daily trading`}>{p.days <= 1 ? "Under a day" : `${p.days < 10 ? p.days : Math.round(p.days)} days`}</span>}</td>
-                  <td className="hide-sm"><div className="bd-why">{p.why.map(w => <span key={w}>{w}</span>)}</div></td>
-                </tr>))}
+                  <td><VolCell p={p} open={openRows.has(p.s)} onClick={() => toggleRow(p.s)}/></td>
+                </tr>
+                {openRows.has(p.s) && <tr className="bd-vrow"><td colSpan={10}>
+                  <div className="bd-detail" id={`bd-detail-${p.s}`}>
+                    <div className="bd-dsec"><div className="bd-dh2">Why it was picked</div><div className="bd-why lg">{p.why.map(w => <span key={w}>{w}</span>)}</div></div>
+                    <div className="bd-dsec"><div className="bd-dh2">Volume analyser</div><VolCard p={p}/></div>
+                  </div></td></tr>}</React.Fragment>))}
             </React.Fragment>)}
-              {!secSel.length && <tr className="bd-cash"><td></td><td colSpan={4}><i style={{ background: B_COL.Cash }}/>Cash kept for safety</td><td className="num mono"><Money v={res.cash}/></td><td className="num mono">{res.cash_pct.toFixed(2)}%</td><td colSpan={2}></td></tr>}
+              {!secSel.length && <tr className="bd-cash"><td></td><td></td><td colSpan={4}><i style={{ background: B_COL.Cash }}/>Cash kept for safety</td><td className="num mono"><Money v={res.cash}/></td><td className="num mono">{res.cash_pct.toFixed(2)}%</td><td colSpan={2}></td></tr>}
             </tbody></table></div>
         </section>
 
-        <section className="px-card bd-how">
-          <div className="px-label"><span className="ai-spark">✦</span> How Hyperplane AI picked these</div>
-          <ul>
-            <li>It checked all {res.checked.toLocaleString("en-IN")} stocks with the same engine as the AI Portfolio Analyser. {res.qualified} passed every check today.</li>
-            <li>Each stock's trend comes from how its price levels have been stepping up or down month by month, quarter by quarter and
-              year by year, and where today's price sits within them ({res.opts && res.opts.horizon === "medium" ? "medium term: the month counts more" : "long term: the quarter and the year count most"}).</li>
-            <li>Only stocks whose long-term regime is up{res.opts && res.opts.confirmed ? " and confirmed by the shorter regime" : ""}, with {res.reliability.map(r => RELIABILITY[r][0]).join(" or ")} reliability and at least 3 years of price history.</li>
-            <li>Stocks that have already run up a lot ({res.opts && res.opts.run_up ? `up more than ${res.opts.run_up}% in 3 months, or ` : ""}3 times in a year) are left out: most of their move has already happened.{res.opts && res.opts.fno_only ? " Only F&O stocks were used." : ""}</li>
-            <li>The strongest trends come first in each market-cap group, and no sector gets more than {res.sector_max === 100 ? "any fixed share (you chose no limit)" : `${res.sector_max}% of the money`}. {res.weighting === "strength" ? "Stronger stocks get a little more money." : "Every stock gets about the same money."}</li>
-            <li>At least {B_CASH_MIN}% always stays in cash as a buffer for charges, rounding and new chances.</li>
-          </ul>
-          <p className="fine">This is a model portfolio made by fixed rules on our trend data, for education only. It is not investment advice or a recommendation to buy or sell. Check each stock yourself, and consider a SEBI-registered adviser before investing.</p>
-        </section>
+        {res.plan && <BuyingPlan plan={res.plan} picks={picks} res={res}/>}
+
+        <p className="fine bd-fine">This is a model portfolio made by fixed rules on our trend data, for education only. It is not investment advice or a recommendation to buy or sell. Check each stock yourself, and consider a SEBI-registered adviser before investing.</p>
       </div>
     );
   }
@@ -308,17 +535,20 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             <label className="bd-l" htmlFor="bd-amt">1 · Amount to invest</label>
             <div className="bd-amt"><span>₹</span><input id="bd-amt" inputMode="numeric" value={amtText} onChange={e => setAmount(e.target.value)} placeholder="10,00,000" aria-label="Amount to invest in rupees"/>
               <em>{amtOk ? inrShort(inp.amount) : ""}</em></div>
-            <div className="bd-chips">{B_AMOUNTS.map(v => <button key={v} type="button" className={inp.amount === v ? "on" : ""} onClick={() => setAmount(String(v))}>{v < 100000 ? `₹${v / 1000} K` : inrShort(v)}</button>)}</div>
+            {amtProblem ? <div className="pf-miss bd-ferr" role="alert" id="bd-amt-err">{amtProblem}</div>
+              : limited && <div className="bd-hint" id="bd-access">Your access allows amounts up to {inrShort(maxAmt)} and up to {maxN} stocks.</div>}
+            <div className="bd-chips">{B_AMOUNTS.filter(v => maxAmt == null || v <= maxAmt).map(v => <button key={v} type="button" className={inp.amount === v ? "on" : ""} onClick={() => setAmount(String(v))}>{v < 100000 ? `₹${v / 1000} K` : inrShort(v)}</button>)}</div>
           </div>
 
           <div className="bd-f" id="bd-count">
             <span className="bd-l">2 · Number of stocks</span>
-            <div className="bd-chips">{B_COUNTS.map(n => <button key={n} type="button" className={!custom && inp.count === n ? "on" : ""} onClick={() => { setCustom(false); setInp({ count: n }); }}>{n} stocks</button>)}
+            <div className="bd-chips">{B_COUNTS.filter(n => n <= maxN).map(n => <button key={n} type="button" className={!custom && inp.count === n ? "on" : ""} onClick={() => { setCustom(false); setInp({ count: n }); }}>{n} stocks</button>)}
               <button type="button" className={custom ? "on" : ""} onClick={() => setCustom(true)}>Custom</button>
-              {custom && <input type="number" className="bd-n" id="bd-n" min={B_MIN_N} max={B_MAX_N} value={inp.count || ""} aria-label="Number of stocks"
-                onChange={e => setInp({ count: Math.min(B_MAX_N, Math.max(0, Math.round(Number(e.target.value) || 0))) })}/>}</div>
-            <div className="bd-hint">{per ? <>About <b>{money(per)}</b> per stock. </> : null}Up to {B_MAX_N} stocks. More stocks spread the risk; fewer let each idea matter.</div>
-            <SpreadNote chk={spread} id="bd-spread" onFix={n => { setCustom(!B_COUNTS.includes(n)); setInp({ count: n }); }}/>
+              {custom && <input type="number" className="bd-n" id="bd-n" min={B_MIN_N} max={maxN} value={inp.count || ""} aria-label="Number of stocks"
+                onChange={e => setInp({ count: Math.min(maxN, Math.max(0, Math.round(Number(e.target.value) || 0))) })}/>}</div>
+            <div className="bd-hint">{per ? <>About <b>{money(per)}</b> per stock. </> : null}Up to {maxN.toLocaleString("en-IN")} stocks{limited ? " with your access" : ""}. More stocks spread the risk; fewer let each idea matter.</div>
+            {nProblem && <div className="pf-miss bd-ferr" role="alert" id="bd-n-err">{nProblem}</div>}
+            <SpreadNote chk={spread} id="bd-spread" onFix={n => { n = Math.min(n, maxN); setCustom(!B_COUNTS.includes(n)); setInp({ count: n }); }}/>
           </div>
 
           <div className="bd-f" id="bd-mix">
@@ -352,7 +582,9 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
               <b> Medium</b>: more than 50% below its highest price, or lower than 5 years ago. <b>Low</b>: it once fell more than 70% from its highest price, so the builder never uses it.</>}/></span>
             <div className="bd-chips">
               <button type="button" className="on locked" disabled title="High reliability is always included">✓ High</button>
-              <button type="button" id="bd-rel-m" className={inp.rel.includes("M") ? "on" : ""} onClick={() => setInp({ rel: inp.rel.includes("M") ? ["S"] : ["S", "M"] })}>{inp.rel.includes("M") ? "✓ " : "+ "}Medium</button>
+              {plan && !plan.reliability.includes("M")
+                ? <button type="button" id="bd-rel-m" className="off" disabled title="Medium reliability is not included in your access">🔒 Medium</button>
+                : <button type="button" id="bd-rel-m" className={inp.rel.includes("M") ? "on" : ""} onClick={() => setInp({ rel: inp.rel.includes("M") ? ["S"] : ["S", "M"] })}>{inp.rel.includes("M") ? "✓ " : "+ "}Medium</button>}
               <button type="button" id="bd-rel-w" className="off" disabled title="Low reliability stocks once fell more than 70% from their highest price. The builder never uses them.">🔒 Low</button>
             </div>
           </div>
@@ -364,7 +596,9 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
           </div>}
 
           <details className="bd-more" id="bd-more">
-            <summary>More options <span>{changed ? `${changed} changed` : "horizon · trend quality · regime · limits · sectors"}</span></summary>
+            <summary>More options <span>{locked ? "🔒 fixed for your access" : changed ? `${changed} changed` : "horizon · trend quality · regime · limits · sectors"}</span></summary>
+            {locked && <div className="bd-lock" id="bd-lock">🔒 These are the standard settings, fixed for your access.</div>}
+            <fieldset className="bd-fs" disabled={locked}>
             <div className="bd-f">
               <span className="bd-l">Time horizon <Info text="How the monthly, quarterly and yearly trends are blended. Long term follows the AI Portfolio Analyser. Medium term gives the month more weight."/></span>
               <div className="bd-chips bd-cards2">{B_HORIZON.map(([k, l, d]) => <button key={k} type="button" id={`bd-h-${k}`} className={opt.horizon === k ? "on" : ""} onClick={() => setOpt({ horizon: k })}><b>{l}</b><small>{d}</small></button>)}</div>
@@ -387,8 +621,12 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
               <div className="bd-chips">{B_STOCK.map(v => <button key={v} type="button" className={opt.stock_max === v ? "on" : ""} onClick={() => setOpt({ stock_max: v })}>{v}%</button>)}</div>
             </div>
             <div className="bd-f">
-              <span className="bd-l">Size by trading volume <Info text="Buying more than about 10% of a stock's normal daily trading can push its price up. Yes: no position is bigger than 5 days of buying at that pace (the money goes to the other stocks or stays as cash). No: the quantities follow your plan, and the plan shows how many days each stock takes to buy."/></span>
+              <span className="bd-l">Size by trading volume <Info text="A stock that trades little cannot take a big amount: buying it pushes the price up and selling it later is slow. Yes: no stock gets more than its trading supports, the rest goes to the other stocks in its group (or cash), and stocks that can take only a little are replaced by the next best. No: your plan stays as it is, and every stock that is too big for its trading is marked with a warning."/></span>
               <div className="bd-chips bd-cards2">{B_VOLUME.map(([k, l, d]) => <button key={l} type="button" id={`bd-v-${k ? "y" : "n"}`} className={opt.by_volume === k ? "on" : ""} onClick={() => setOpt({ by_volume: k })}><b>{l}</b><small>{d}</small></button>)}</div>
+            </div>
+            <div className="bd-f" id="bd-pace">
+              <span className="bd-l">Buying pace <Info text="How much of a stock's normal day of trading you buy each day. Buying a bigger share pushes the price up against you. Stocks that trade little, or very unevenly, are always bought more slowly. The plan's 'most it supports' is five days of buying at this pace."/></span>
+              <div className="bd-chips bd-cards2 three">{B_PACE.map(([k, l, d]) => <button key={k} type="button" id={`bd-pace-${k}`} className={opt.pace === k ? "on" : ""} onClick={() => setOpt({ pace: k })}><b>{l}</b><small>{d}</small></button>)}</div>
             </div>
             <div className="bd-f">
               <span className="bd-l">Stocks</span>
@@ -407,9 +645,10 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
               <div className="bd-chips">{[["equal", "Same money in each stock"], ["strength", "Stronger stocks get more"]].map(([k, l]) => (
                 <button key={k} type="button" className={inp.weighting === k ? "on" : ""} onClick={() => setInp({ weighting: k })}>{l}</button>))}</div>
             </div>
+            </fieldset>
           </details>
 
-          {(err || problem) && <div className="pf-miss" role="alert">{err || problem}</div>}
+          {(err || (problem && !amtProblem && !nProblem && problem !== "Loading…")) && <div className="pf-miss" role="alert">{err || problem}</div>}
           <button type="button" className="pf-go" id="bd-go" disabled={busy || !!problem} onClick={build}>
             {busy ? "Hyperplane AI is checking every stock…" : "✦ Build my portfolio"}</button>
         </div>

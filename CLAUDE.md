@@ -164,12 +164,13 @@ Zone vocabulary per timeframe (from raw-data-5): **top band** = `top_near .. top
 | Price_Health | long-term quality from yearly candles (current + 12 years): **POOR** > 70% below the peak, or crashed ≥ 90% with the bottom in the last 5 years, or a round trip (crashed ≥ 80% and now ≥ 10× its 3-year low — the owner's MBECL example 2026-10-04: 114 → 2 → 494) · **WEAK** > 50% below peak, lower than 5 years ago, crashed ≥ 80% at any time, or ≥ 8× its 3-year low · **HEALTHY** otherwise (`HEALTH_*` settings). Extra columns Worst_Crash_Pct, Worst_Crash_Years_Ago, Run_Up_From_3Y_Low_X. **Stretched** (owner's STLTECH case 2026-10-10, ~100 → ~1,000): Run_Up_1Y_X = price ÷ lowest monthly low of the last 12 months; ≥ 5x → POOR ("parabolic"), ≥ 3x → WEAK + column Stretched = Yes (6 Oct: 72 of 2,658 stocks ≥ 3x, 9 ≥ 5x). On 3 Oct data: Healthy 1,812 → 1,293 (customer Strong 1,405 → 1,088); HAL/BEL/SBIN/LT/TITAN stay Healthy; old crashes alone only give WEAK (unadjusted demergers, e.g. ADANIENT 2015). Thresholds chosen with the owner's example — tune in the scanner settings. |
 | Technicals | per stock: Price + `{TF}_RSI/_ADX/_BB_Upper/_BB_Lower/_MACD/_Supertrend/_CCI` (raw values; only written when the technicals scrape worked) |
 | Zone_Retest | see "Zone retest" above: per stock + TF + side, previous close vs previous bar's zone, current zone + band, `Dist_To_Zone_Edge_Pct`, Health |
+| Candles | (2026-11-01) per stock: `M0…M12`, `Q0…Q12`, `Y0…Y12` = "open high low close" of the current bar + the last 12 (`build_candle_rows`, `CANDLE_BARS`). `store.save_snapshot` moves it to `snapshot_candles` (never in `snapshots.data_gz`, so the dashboard never downloads it, ~0.9 MB gz). Only the stock detail view uses it. Collections before 1 Nov 2026 have none. |
 | Failed_NR | NR trap: after the mother, bar(s) closed beyond one edge (failed BO/BD), no close beyond the other edge, other bodies inside, latest close back inside and near the OPPOSITE edge (same 1.9/2 rule). Failed BO → LONG at mother Low (stop Low, target High); mirror SHORT. Biggest mother per stock+TF kept. |
 
 All 20 sheets (Technicals only when scraped): Detailed_Signals, Flat_Data_For_Slicers, Signal_Matrix, Signal_Summary, Top_Opportunities,
 Bias_Distribution, Signal_Type_Analysis, Multi_Timeframe_NR, Strong_Conviction, Virgin_BO_BD_Analysis,
 Sector_Analysis, Industry_Analysis, NR_Breakout_Sector_Industry, Master_Stock_Data, Zone_Levels, Return_Potential,
-Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slicers are TradingView style `NSE:SYM,` — always clean with
+Price_Health, Failed_NR, Zone_Retest, Technicals (+ Zone_History, Candles — Candles never stored in the collection). Symbols in Flat_Data_For_Slicers are TradingView style `NSE:SYM,` — always clean with
 `replace("NSE:","").replace(",","").strip()` (JS `cleanSym`, Python `store.stock_rows`).
 
 ---
@@ -513,7 +514,8 @@ Price_Health, Failed_NR, Zone_Retest, Technicals. Symbols in Flat_Data_For_Slice
 size_bytes, excel_path) · `snapshot_stocks` (per stock summary, PK snapshot_id+symbol) · `jobs` (queued/running/done/
 failed/cancelled, log, one scheduled job per trade_date+slot) · `settings` (JSONB key/values incl. `worker_heartbeat`) ·
 `customers` · `published` · `hd_tickets` / `hd_messages` / `hd_images` (helpdesk) · `app_modules` / `roles` /
-`role_modules` / `customer_roles` (Access manager) · `customer_sessions` / `activity_log` / `module_usage` (Activity log).
+`role_modules` / `customer_roles` / `app_permissions` / `role_permissions` (Access manager) · `customer_sessions` /
+`activity_log` / `module_usage` (Activity log) · `snapshot_candles` / `stock_detail` (customer-admin detail view).
 
 ### Settings (Admin tab; defaults in `db.DEFAULT_SETTINGS`)
 schedule_times ["09:45","14:30"] · weekdays_only true · skip_dates [] (NSE holidays) · catch_up_minutes 180 ·
@@ -539,6 +541,82 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
 
 - Customer app theme: LIGHT is the default (owner, 2026-10-20); dark only when the customer picked it (`qf_theme` =
   "dark" in localStorage). The admin dashboard keeps its own default.
+
+### Adoption report (owner, 2026-11-01) — `backend/app/adoption.py` + `frontend/src/adoption.jsx`
+- Owner: "convert the activity log report to the adoption report … standard framework … output is more important than
+  the glamour UI". It matters once the customer app is sold. The framework is Google HEART + the AARRR funnel, read as
+  **Reach → Activate → Adopt → Retain** (the owner said "BDF"; no such standard exists, so these two were used).
+- Admin tab "📈 Adoption" (server.jsx, sub "activity") has two sub-tabs: **Adoption report** (default) and **Audit log**
+  (the old `ActivityTab` from access.jsx, unchanged and still needed for security events).
+- Data lives in `adoption_daily(customer_id, day, module, minutes, visits, actions JSONB, first_action_at)`, kept for
+  `ADOPTION_DAYS` = 730 (worker), separate from the 180-day audit log. It is filled live by `POST /app/api/activity`:
+  - `open` → visits+1, plus a minute when a new module_usage row starts;
+  - `ping` → minute+1 (same guard as module_usage);
+  - `kind:"action"` + `action` → `actions[name]+1`, whitelisted per app in `adoption.ACTIONS` (403 otherwise),
+    at most `ACTION_CAP` = 50 a day.
+  - Server-only actions (`SERVER_ACTIONS`, refused from the client): `portfolio:list_saved` (portfolio PUT) and
+    `builder:build` (successful build).
+  - Client actions use `trackAction(module, action)` in `frontend/app/src/core.jsx` (fire-and-forget, 30 s throttle):
+    research stock_card / filter, simple search, portfolio report, builder sent / download.
+  - A one-time backfill from module_usage (flag `adoption_backfill_v1`). Key actions count from `adoption_actions_since`
+    (the deploy day), and the report says so.
+- Definitions are constants at the top of adoption.py:
+  - activated = a key action within 14 days of approval (or of `adoption_actions_since`);
+  - adopted app = used on ≥ 3 days in 30 with ≥ 1 key action;
+  - habitual = active in ≥ 3 of the last 4 weeks;
+  - segments: champion / regular / casual / at_risk / dormant / not_started;
+  - score 0–100 = 40% active days + 30% apps adopted + 20% actions + 10% recency.
+- API (admin only): `GET /api/admin/adoption?days=7|30|90` (headline with previous-period values, funnel, apps, cohorts,
+  attention lists) and `GET /api/admin/adoption/customers?segment&q&sort&page&size`.
+- Tests (scratchpad): `adoption_test.py` (synthetic customers with known answers) and `adoption_ui_test.py`.
+
+### Access manager v2 — permissions ↔ roles ↔ customers (owner, 2026-11-01) — SUPERSEDES the role/app details below
+- Owner: "in future there might be 10 permissions and many roles … UI good but handling the data gets bad as the
+  count grows … only 3 sub-tabs: permission manager, permissions to roles, roles to users … any permission to any role,
+  and to a user as well … dynamic but identify everything properly". Decided with the owner: direct grants allowed
+  (reason + optional last day); permissions are created by the CODE, the admin edits label / group / description /
+  owner-level / on-off.
+- **Model** (`backend/app/permissions.py`): customer → roles → permissions `application:action` + direct grants.
+  `<app>:view` = open the application (now a real row; `role_modules` is only a trigger-kept mirror for one release,
+  nothing reads it — drop it later). `PERMISSIONS` tuple = the catalogue; `sync_catalogue` on every start (new keys
+  added; code-owned module/action/requires/sort follow the code; admin-owned name/description/grp/restricted/enabled
+  kept; keys gone from the code → `retired`, never deleted). `requires` is one level deep (detail → its app's view).
+  `migrate_v2` (settings `perm_model_v2`) copied role_modules → role_permissions once — verified identical access for
+  every customer. `customer_permissions` (PK customer+permission, reason NOT NULL, expires_on = last day IST, NULL = no
+  end). View `effective_permissions(customer_id, key)` = held via role or active grant, enabled, not retired, its
+  requirement effective too — the ONE source for portal (`MODULES_SQL` / `PERMS_SQL`), admin screens and the
+  `stock_detail` RLS policy. App on/off = its view permission (PATCH keeps `app_modules.enabled` in step).
+- **API** (`backend/app/access_admin.py`, mounted by `main.py` via `access_admin.build(admin_user, _cust, CUSTOMER_COLS)`):
+  `GET /api/admin/access` (modules, roles with permissions + owner flag, catalogue with roles / holders / direct
+  counts) · roles CRUD (`permissions`, older `modules` still accepted) · `POST /api/admin/access/role-permissions`
+  {changes:[{role, perm, on}], dry_run, confirm_owner_level} · `PATCH /api/admin/access/permissions/{key}` ·
+  `GET …/permissions/{key}/holders?q&source=all|role|direct&page&size` · `PUT …/permissions/{key}/roles` {add, remove}
+  · `GET /api/admin/access/users?q&role&perm&direct&owner&status&sort&page&size` (server-paged, filters on EFFECTIVE
+  permission) · `GET/PUT …/users/{id}` (+ `/roles`, `/grants`, `DELETE …/grants/{key}`) · `POST …/users/bulk`
+  {customer_ids | filter, add_roles, remove_roles, grant, revoke, dry_run} (≤ 20,000). Legacy kept: `PUT
+  /api/admin/customers/{id}/roles`, `POST /api/admin/roles/bulk` (same response), `PATCH /api/admin/modules/{key}`.
+  Every write: `dry_run` = done inside a savepoint, effective access before/after compared (who gains / loses what,
+  customers affected), then `psycopg.Rollback`. Owner-level additions without `confirm_owner_level` → 409 +
+  `X-Confirm: owner-level`. Rules: requires added automatically / dependants removed with their app; default role ≥1
+  view and never restricted; a permission on the default role can't become owner-level; ≥1 role per customer; grant
+  reason 3–200 chars, last day not in the past; revoking an app grant also revokes grants that need it. Logged:
+  role_updated (added/removed/customers_changed), perm_updated, grant_added, grant_removed, grant_expired (worker
+  deletes grants 30 days after their last day). New customers' pins: `_pin_new_apps` from effective access.
+- **UI** (`frontend/src/access/`: `index.jsx` tabs, `perms.jsx`, `roles.jsx`, `users.jsx`, `ui.jsx` building blocks,
+  `shared.jsx` helpers + AM_CSS, `style.js` AX_CSS; `access.jsx` keeps the Activity log and re-exports AccessTab).
+  Three tabs: **Permission manager** (grouped by application, search, chips All / Owner-level / Switched off / Not
+  given to anyone / Retired, on/off with a review, counts that deep-link to the other tabs; drawer: edit, give to
+  many roles, paged "who can use it" with via-role / direct) · **Permissions ↔ Roles** (searchable role list; Role
+  view = grouped checklist with All/None + "show only what it has"; Matrix = permissions × up to 12 chosen roles,
+  sticky headers, click a cell, "give to all shown", "only rows that differ"; Compare two roles + "make B the same as
+  A"; New role from a copy) · **Roles ↔ Users** (server-paged 50/page, filters, sort, tick page → "select all N
+  matching" → bulk add/remove role or give/remove a direct permission; drawer: roles, direct grants, every permission
+  ✓/✗ with WHY). Common: nothing saves until the review dialog (pending bar for multi-changes), owner-level needs
+  typing OWNER. Customer app: account window shows "Extra access (until …)" (`/me.grants`).
+- Tests: `access_v2_test.py` (catalogue sync / retired, previews, requires, owner rules, grants + expiry + RLS,
+  switch off, 1,000 customers: page 34 ms, bulk preview 1.1 s, bulk 3.1 s) · `access_v2_ui_test.py` (3 tabs at 1,000
+  customers + 15 roles, review + OWNER, matrix, compare, select-all bulk, drawer WHY, deep links, phone, console).
+  `rbac_ui_admin.py` now covers only the Activity log + Customers (its old Access manager part is in v2's test).
 
 ### Access manager (RBAC, customer app only) + Activity log + side nav (owner, 2026-10-27)
 - **Applications** = the customer app's modules, fixed catalogue `app_modules` (research | simple | portfolio | builder; admin can
@@ -597,6 +675,185 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
   the nav (1615 px open / 1480 px collapsed).
 - Tests (scratchpad): `rbac_api_test.py` (103 API checks incl. DB-role permissions), `rbac_ui_customer.py`,
   `rbac_ui_admin.py` (Selenium).
+
+### Final output for every date + strength evidence (owner, 2026-11-01)
+- "Check all the combinations as much as possible … the date picker needs the same output on previous dates … store
+  the final output." Runtime scoring covers all 729,000 combinations exactly (no lookup table: one stored number per
+  combination would be off by up to ±25 points — more than the mother candle's whole effect).
+- `publish.FORMULA_VERSION` (5 = regime + long-term regime + mother candle by place + volume). BUMP IT whenever the
+  customer strengths change. `customer_history.formula` records the version; `history_missing()` returns collections
+  whose past day is missing / older (scheduled) or whose `stock_states` are missing / older (every collection); the
+  worker rebuilds one per idle tick ALWAYS (not only when past days are switched on) and right after each collection
+  (`build_history` → past day for scheduled + `_store_states` for all). Admin "pending" = len(history_missing()).
+- `stock_states` (admin only, no portal grant): one row per stock per collection — price, cap, reliability, stretched,
+  long-term regime, per timeframe `*_state` (0…89 = trend [2,1,0,−1,−2] × 18 + place [NR_PLACES] × 3 + mother candle
+  [none, breakout, breakdown]), `*_st` strengths, `*_nr` ±n, stock strength + colour, formula. ~200 bytes a row with
+  its index → ~460 KB a collection → ~230 MB a year at 2 collections a trading day. zv timeframe arrays now always carry
+  the place index (7th item), not only with a mother candle.
+- `evidence.py` + Admin → 🧪 Strength evidence (`frontend/src/evidence.jsx`): levels nr (none + breakout / breakdown ×
+  6 places = 13 per timeframe), zone (90 per timeframe), full (M × Q × Y seen, top 300 of 729,000); horizons 7 / 30 /
+  90 days; forward return = price at the first collection ≥ horizon later; vs market = minus the average of every stock
+  from the same collection; one example per stock per box per period (month / quarter / year); ≥ 30 finished examples
+  to judge (verdicts Better / Worse / In line / Not enough yet; Excel). "Rebuild with the current formula" button.
+  Collections before ~17 Oct have no Zone_History → no long-term states (their research / regime data is still stored).
+- Tests: `evidence_test.py` (states for every collection, past days on the current formula, 27 reports, admin only,
+  past-day fields = today's, ETag 304, worker auto-rebuild of an old formula, admin tab).
+
+### Builder plans — Customer / Trader / Admin (owner, 2026-11-01)
+- Owner: "bring the AI Portfolio Builder to all the roles … three permissions: customer (common for all), trader and
+  admin — trader and admin only from the admin panel … even with Postman or Burp Suite the response must follow the
+  role … customer: up to ₹1 lakh, 20 stocks, High reliability only … trader: everything up to ₹10,000 crore with the
+  More options … admin: any amount, same volume analyser".
+- Permissions (catalogue, permissions.py): `builder:customer` (every role, incl. the default), `builder:trader`,
+  `builder:admin` (owner-level, never on the default role); each requires `builder:view`. `migrate_builder_plans`
+  (settings `builder_plans_v1`, after `_seed_roles`): every role gets builder:view + builder:customer, the role
+  "Customer Admin" gets builder:admin, saved pins get "builder" while there is room. Trader is given to nobody.
+  The "AI Portfolio Builder" role now means Customer plan unless Trader is ticked on it.
+- `portal.builder_tier(c)`: admin > trader > customer (no plan permission = customer). `GET /app/api/builder/plan` →
+  `builder.plan_info` (limits + standard settings). Builds / previews outside the plan → **403** + `X-Plan` (PlanError);
+  other bad input 422. Response field `tier` (NOT `plan` — that is the buying plan).
+- `builder.TIERS`: customer ₹10,000–₹1 lakh, ≤ 20 stocks, reliability S, options locked (opts / sector_max / weighting
+  must equal the standard settings, else 403); trader ₹10,000–₹10,000 crore, ≤ 1,000, S/M, every option; admin
+  ₹1,000 – no business limit (`ADMIN_AMOUNT_CEIL` 1e15 sanity bound), ≤ 1,000, S/M, every option.
+- Standard settings for every plan (`DEFAULT_OPTS`, `DEFAULT_SECTOR` 10, equal money): long term, Proven trends
+  (`good`), Confirmed uptrend, leave out > 30 % in 3 months, 5 % in one stock, standard pace 10 %, volume sizing off.
+- UI: form loads the plan, plan badge (`#bd-plantag`), amount / stock chips cut at the plan's limit, Medium shown
+  locked, More options shown locked (`<fieldset disabled>`, `#bd-lock`), saved inputs clamped; saved-input key is
+  `qf_builder_v2` (new defaults for everyone); default ₹1 lakh / 20 stocks. Guide text updated.
+- **Data note (1 Nov 2026):** the new master column `marketcapname` classifies by size, not NSE rank (local data:
+  Large 355 / Mid 433 / Small 1,585 vs 99 / 144 / 2,133 before; F&O mid caps 10 vs 88). Owner to decide: switch the
+  screener column back, or derive the cap group from the Nifty LargeCap 100 / Midcap 150 lists. Two
+  `builder_api_test` cash checks fail on this data until then.
+- **Owner, same day — no plan names to customers:** customer text says "Your access allows amounts up to ₹1 L and up to
+  20 stocks" under the amount (`#bd-access`; over the limit → `#bd-amt-err` there, not near Build), no badge, More
+  options "fixed for your access"; server messages "Your access allows …". Admin labels are "Builder · Customer /
+  Trader / Admin level" (`rename_builder_levels`). Access manager: Permissions ↔ Roles is Role view only (Matrix and
+  Compare removed); drawers sit above the dashboard header (`.ax-ov` z-index 1000).
+- **Volume analyser business logic (same day):** price push = daily swing × √(shares bought a day ÷ dependable volume)
+  — from what the customer actually buys, so 1 share of a busy stock = negligible (shown "negligible" under 0.05 %);
+  a position under 1 % of one day's trading (`L.LIGHT_SHARE`, `liq.light`) gets one plain line ("easily bought and
+  sold"); all positions light → `volume.light` → the section shows "No volume concerns" only and the execution plan is
+  "1 day — buy every stock today"; the "after day 30" summary is a table (shares a day, still to buy, money, finished
+  on day N + years); "Tricks big players use" (stop-loss hunting, spoofing, front-running, pump and dump, circuit
+  traps, marking the close, fake volume, iceberg buying) with how to protect — education only; order tip uses the
+  stocks' median daily swing (`liq.swing`).
+- Tests: `plan_api_test.py` (catalogue, migration, 8 Postman-style refusals, trader / admin limits, plan removal),
+  `plan_ui_test.py`; other suites updated for "every customer has the builder".
+
+### Volume analyser — AI Portfolio Builder (owner, 2026-11-01)
+- Owner: "I added the volume for the quarterly and yearly too, and the last few weeks, months, quarters and years …
+  not just how many days to buy … a lakh of volume doesn't mean we can acquire all of it — there should be a standard
+  … if a stock doesn't help, give the max it supports and focus on the others … with sizing off, warn in the table …
+  exact output and a better order to proceed".
+- **Master screener** (chartink all-data-of-the-stock-2) now has 29 columns: Sr, Stock Name, Symbol, close, %_change,
+  Daily_volume, Weekly_Volume + _1…_4, Monthly_volume + _1…_4, quaterly_volume + _1…_4, yearly_volume + _1…_4, sector,
+  industry, marketcapname. `parse_master_table_clipboard` reads the header row BY NAME when present (`master_header_fields`,
+  blanks kept as None — young stocks have no yearly candles), else by position (`MASTER_LAYOUTS` 29 / 11 / 9); records
+  carry `chartink_fast.VOLUME_FIELDS` (`Weekly_Volume`, `Weekly_Volume_1` … `Yearly_Volume_4`; "_0" = candle so far).
+- **`backend/app/liquidity.py`** (publish time, per stock → `vl` packed list + `av` = dependable shares/day):
+  per-day volume of each COMPLETED candle (volume ÷ its weekdays, real calendar from the collection day; the current
+  candles only spot spikes) → normal = median{median 4 weeks, median 4 months, last quarter}; dependable = min(normal,
+  4-week median); trend (4 weeks vs 4 months, ≥1.3 / ≤0.7), spike (today or this week > 3× normal), erratic (monthly CV
+  > 0.6), grade by ₹ a day (≥50 Cr Very high · ≥10 Cr High · ≥2 Cr Moderate · ≥50 L Low · else Very low), swing =
+  D_ATR / price. Old collections (11 columns) fall back to the week / month so far (n = 0).
+- **Acquisition standard** (builder.py `_liq`, `L.capacity`): buying pace option careful 5 % / standard 10 % / fast 20 %
+  of a normal day (participation rate); Low / Very low never above 5 %, erratic halved; whole shares a day =
+  floor(pace × dependable); most the stock supports = 5 days of that (`BUILD_DAYS`) = also sellable within ~10 days if
+  trading halves; price push ≈ swing × √pace. Sizing ON: cap = min(single-stock limit, supported money) through
+  `_fill` (rest → other stocks in the group, cash only when all full); a stock supporting < 30 % (`MIN_USEFUL`) of its
+  slice is replaced by the next candidate (note "Replaced …"); note "Trading volume is the limit at this amount" when
+  cash rises because of it. Sizing OFF: plan unchanged; status "over" + warning "₹X is N× what this stock's trading
+  supports … N days to buy … N days to sell in a hurry". Per pick `liq` {status fits/capped/over/unknown, grade,
+  dep, norm, value, pace, per_day, most, most_amt, days, exit_days, share (% of one day), push, trend, spike, erratic,
+  wk, mo, warn[]}; response `volume` (KPIs, grade shares, replaced) and `plan` (`buying_plan`: computed per day without
+  looping — day 1 finishes every one-day stock + first slice of the rest, slowest first, best-ranked first; first 30
+  days listed, the rest summed in `more`).
+- **Result page layout (owner, same day):** the ℹ notes list and "How Hyperplane AI picked these" are REMOVED (the API
+  still returns `notes`); sticky **section tabs** (Overview · Allocation · Volume analyser · What to buy · Buying plan,
+  `SectionTabs`, IntersectionObserver lights the tab in view, `scroll-margin-top`); every stock row has an expand
+  button IN FRONT (`.bd-xbtn`, + / − expand-all in the header) opening "Why it was picked" (the old column) and below it
+  the "Volume analyser" card; the volume column is "Liquidity" (grade + Within limit · N days / Capped at limit / ⚠ N×
+  over limit); the section is "Volume analyser" with KPI names Liquid allocation · Execution period · Within / Over
+  liquidity limit · Est. market impact, each with an ⓘ, plus a "Liquidity grade" ⓘ; the education-only line stays.
+- **UI** (`apps/builder.jsx`): "Buying pace" chips in More options; the "Days to buy" column became **Volume** (grade
+  badge + Fits · N days / Kept to its limit / ⚠ N× too big; click → volume card with trading, last 4 weeks / months
+  strips, what it carries, your position, warnings); **Volume check** section (KPIs, grade bar, banner listing
+  over-sized stocks when sizing is off, replaced stocks); **Buying plan** (Day 1 … with shares, ✓ = stock finished,
+  "Show all", the rest summarised, order-placing tips); the download adds the volume columns and the plan.
+- Tests: `parse_check.py`, `liq_check.py` (13), `vol_api_test.py` (16), `vol_ui_test.py` (14); builder suites pass.
+  Local collections only have the old 11-column master, so the strips show "not enough history yet" until the next
+  scanner run with the new screener.
+
+### Customer Admin + permissions + stock detail view (owner, 2026-11-01)
+- Owner: "click the stock name in the AI Portfolio Analyser or Builder → monthly, quarterly and yearly zone range, the
+  mother candle status, is any NR supporting the trend, has the regime helped, the technical table … draw the zone with
+  the mother candle … only the admin, to judge whether the result is right … don't give this access to anyone … be clear
+  with the RBAC (e.g. builder: permission, display, detail view) … bring the best standard".
+- **RBAC standard (NIST RBAC):** customer → roles → permissions, each permission = `application:action`.
+  `application:view` (open and use it) = the `role_modules` row; `app_permissions` is the catalogue of EXTRA actions
+  (`portfolio:detail`, `builder:detail`; fixed, seeded in the schema, `restricted` = owner-level); `role_permissions`
+  holds them per role. Rules (API, `main._clean_perms`): a permission needs its application in the SAME role; an
+  application taken out of a role takes its permissions with it; restricted permissions are never on the default role
+  (and a role holding one can't become the default). Effective = permission held by any role AND its application
+  enabled + allowed (`portal.PERMS_SQL` → `c["perms"]`; `/me.perms`; `need_perm(key)` → 403 + `X-Access: denied`).
+- **Role "Customer Admin"** (seeded once, settings `customer_admin_role_seeded`; a role of that name made by hand is
+  REUSED): every application + every restricted permission, given to nobody. Owner assigns it to himself in Access
+  manager → User access mapping. Owner-level holders are flagged everywhere (🔒 badge in roles, users, matrix, person drawer).
+- **Admin UI (access.jsx):** role editor shows each application card (`key:view · open & use`) with its extra permissions
+  nested under it (keys shown in mono); warning box when a role holds owner-level permissions; new section
+  **Permission matrix** (every role × every permission, owner-level holder count). Person drawer lists extra permissions.
+  Activity log event `detail` ("Stock detail viewed": symbol, application, day) + filter "Stock detail views".
+- **Data:** `detail.build_all(sheets, payload, candles)` — per stock: zones D…Y, per M/Q/Y the zone history (bar k ago),
+  steps → T, P, place, mother candle n / points / weight, strength (same `zone_engine` arithmetic, test-verified equal
+  to zv), 13 candles, NR signals; regime lines/sides + short/long verdicts + held timeframes; technicals (regime line
+  sent as key `ST`, its name only in `meta.line_name` — keeps "upertrend" out of the customer bundle); Failed_NR rows.
+  Stored by `publish.build_history` in `stock_detail` (PK snapshot_id+symbol, gzip per row — rows are too small for
+  TOAST — plus a `~meta` row) for collections of the last `detail.DETAIL_DAYS` (14) days; `history_missing` includes
+  missing detail; worker cleanup drops detail + candles older than that. ≈5 MB a collection with candles.
+- **Endpoint** `GET /app/api/detail/{symbol}?app_key=portfolio|builder[&date&part]` (permission `<app>:detail`; the
+  Analyser follows the day on screen, the builder always the latest). Row-level security: hp_portal may SELECT
+  `stock_detail` only while `hp.cid` (set per transaction by `_own`) holds a detail permission — a service bug cannot
+  leak it. hp_portal has no grant on `snapshot_candles`. Every look is logged. Rate 120/min.
+- **Customer app:** `core.DetailCtx` + `StockLink` (names / tickers become links only with the permission); the view is
+  its own lazy chunk `apps/detail.jsx` (+ `detail.css.js`) — never downloaded by other customers. Owner's second ask
+  (same day): "very simple, like a checklist — is it satisfied … don't make me calculate … animated picture, not the
+  original chart … colour the zones … zone and where the candle breaks on one picture for every timeframe … simple
+  words". Right-side panel, top to bottom: verdict (score, "Good uptrend", ✓ Helping / ✗ Holding it back in words) →
+  CHECKLIST (rows: zone moving up · price in the upper part · mother candle breaks the right way · regime agrees;
+  columns M / Q / Y; ✓ / ✗ / –; result row with the share of the final score) → "About the stock" checks (regime up,
+  history healthy, no big run-up, listed long enough, quarterly not negative) → "How the final score adds up" (each
+  timeframe adds / takes away X, diverging bars, final score; ⚠ only if the parts don't add up — `pyRound` = Python
+  half-to-even) → one ANIMATED zone picture per timeframe, drawn to the zone, NOT to price scale (`zoneScale`:
+  piecewise — above / top band / upper half / lower half / bottom band / below get fixed heights, green tints at the
+  top, red at the bottom, the price's band outlined): mother candle (purple) + the candles inside it (grey) + latest
+  candle (green / red) with ▲ / ▼, dashed mother box, price line + tag sliding in; mini "last 5 zones" steps; one plain
+  sentence underneath. "↻ Play again"; reduced-motion respected → technicals with a plain reading (Strong / Weak /
+  Trending …) → raw numbers only in a closed "For checking" section. No code words (NR7, T, P) on screen. An error
+  boundary keeps a bad record inside the panel. Escape / ✕ close; phone = full width, pictures stacked.
+- Tests: `detail_api_test.py` (33: catalogue, seed, rules, /me perms, 401/403/404/422, worked-out = zv for every
+  timeframe + 60 stocks' weighted totals, per-application permission, app switched off, live role removal, RLS as
+  hp_portal, no grants, activity log, candles out of collections) · `detail_ui_test.py` (normal customer: plain names
+  and the chunk never loads; Analyser + Builder clicks, chart parts, hover, 30 builder stocks add up, phone, console,
+  admin role editor + matrix; screenshots `detail_*.png`, `admin_role_perms.png`, `admin_matrix.png`).
+
+### Mother candle (NR) breakout in the long-term engine (owner, 2026-11-01)
+- "Add the mother candle breakout / breakdown — treat it as the zone breakout or breakdown, give the same score — as a
+  parameter of the strength; slight variation by the child count." `zone_engine.nr_map(sheets)`: per stock M / Q / Y
+  from `Flat_Data_For_Slicers` NR_PATTERN Breakout (+n) / Breakdown (−n), n = mother bars back (4…12 = 3…11 child
+  candles; the longest n wins; breakout and breakdown on one timeframe = ignored). It is ONE POINT of the timeframe
+  strength (owner: "−49 to −80 is too huge … only one of the points"): strength = 100 × (0.6 T + 0.4 P) +
+  `nr_points(n, place)`, kept within ±100. The points depend on WHERE the price sits in that timeframe's zone
+  (owner: "breakdown above the zone top = retracement, still strong; inside the zone the meaning is different") —
+  `nr_place`: the scanner's {tf}_Position bands (ABOVE_TOP / IN_TOP_BAND / IN_BOTTOM_BAND / BELOW_BOTTOM) + the engine's
+  rel (≥ 0.5 = upper half) for INSIDE. `NR_POINTS` (breakout, breakdown): above +10/−2 · near top +10/−5 · upper half
+  +7/−6 · lower half +5/−8 · near bottom +4/−10 · below +3/−10, × `nr_weight` 0.94 (NR4) … 1.00 (NR12). Near High /
+  Near Low / Back to NR = 0. The scanner flags BO/BD only ON the breakout candle (bars 1..N−1 must be inside the
+  mother, so the next candle is never a breakout again; back inside = nothing). zv timeframe arrays: 6th item ±n,
+  7th item the place index in NR_PLACES (−1 none); the regime gate keeps both. Rejected versions: P lifted to the
+  breakout level (−49 → −80), flat ±10. Analyser reasons per place ("…slipped back after being held for the last N
+  quarters, but it is still above its usual quarterly price level. A pullback; it stays strong." etc. — NR_SAY in
+  portfolio-engine.jsx). 29 Oct: 93 stocks, 76 timeframe strengths moved, 3 stocks Keep an eye on → Look at first.
+  The Research / AI Mode strength already scored NR Breakout like a zone cross (EVENT_W 1.0 each) — unchanged.
 
 ### Customer app = shell + micro-frontends (owner, 2026-11-01: "not a monolithic single file … load fast, consume what we use")
 - `frontend/app/src/main.jsx` = 13-line entry (theme, shell styles, render). `shell.jsx` = sign-in, side menu, top bar,

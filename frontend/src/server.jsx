@@ -7,7 +7,9 @@ import {
   InfoTip, classifySignal, TF_WEIGHT, AlgoEditor, prebuiltAlgos, exprText,
 } from "./dashboard.jsx";
 import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../shared/helpdesk.jsx";
-import { AccessTab, ActivityTab } from "./access.jsx";
+import { AccessTab } from "./access.jsx";
+import { AdoptionTab } from "./adoption.jsx";
+import { EvidenceTab } from "./evidence.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 let onUnauthorized = () => {};
@@ -915,7 +917,7 @@ function CustomersTab({ snaps, notify }) {
   );
 }
 
-// ─── ADMIN AREA: settings, customers, activity log, access manager (admins only) ───
+// ─── ADMIN AREA: settings, customers, activity log, access manager, strength evidence (admins only) ───
 function AdminArea({ snaps, notify, ...adminProps }) {
   const [sub, setSub] = useState(() => pref("hp_admin_sub", "system"));
   const [pending, setPending] = useState(0);
@@ -930,12 +932,14 @@ function AdminArea({ snaps, notify, ...adminProps }) {
       <div style={{ display: "flex", gap: 4, padding: "10px 22px 0", borderBottom: "1px solid var(--b1)" }}>
         {tab("system", "⚙ System & settings")}
         {tab("customers", "👥 Customers", pending > 0 && <span title="Waiting for approval" style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: "var(--mixed)", color: "#111", fontSize: 10, fontWeight: 800, lineHeight: "18px", textAlign: "center" }}>{pending}</span>)}
-        {tab("activity", "📜 Activity log")}
+        {tab("activity", "📈 Adoption")}
         {tab("access", "🔐 Access manager")}
+        {tab("evidence", "🧪 Strength evidence")}
       </div>
       {sub === "customers" ? <CustomersTab snaps={snaps} notify={notify} />
-        : sub === "activity" ? <ActivityTab api={api} notify={notify} />
+        : sub === "activity" ? <AdoptionTab api={api} notify={notify} />
         : sub === "access" ? <AccessTab api={api} notify={notify} />
+        : sub === "evidence" ? <EvidenceTab api={api} notify={notify} />
         : <AdminTab snaps={snaps} notify={notify} {...adminProps} />}
     </div>
   );

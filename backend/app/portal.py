@@ -27,8 +27,10 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel
 
 from . import activity as act
+from . import adoption
 from . import builder
 from . import helpdesk as hd
+from .detail import DETAIL_DAYS
 from .security import DUMMY_HASH, hash_password, verify_password
 
 IST = timezone(timedelta(hours=5, minutes=30))          # day open / day end are judged on Indian time
@@ -245,9 +247,12 @@ def login(body: LoginIn, request: Request, response: Response):
     return {"name": r["name"]}
 
 
-MODULES_SQL = ("SELECT m.key, m.name, m.description FROM app_modules m WHERE m.enabled AND EXISTS ("
-               "SELECT 1 FROM customer_roles cr JOIN role_modules rm ON rm.role_id = cr.role_id "
-               "WHERE cr.customer_id = %s AND rm.module = m.key) ORDER BY m.sort, m.key")
+# what a customer may use = permissions.effective (roles + direct grants, on, not retired, requirement met):
+# applications = their "<app>:view" permissions, perms = the extra actions inside them ("portfolio:detail" …)
+MODULES_SQL = ("SELECT m.key, m.name, m.description FROM app_modules m WHERE EXISTS (SELECT 1 FROM effective_permissions e "
+               "WHERE e.customer_id = %s AND e.key = m.key || ':view') ORDER BY m.sort, m.key")
+PERMS_SQL = ("SELECT e.key, p.module FROM effective_permissions e JOIN app_permissions p ON p.key = e.key "
+             "WHERE e.customer_id = %s AND p.action <> 'view'")
 
 
 def _session(request: Request, response: Response | None = None):
@@ -287,7 +292,9 @@ def _session(request: Request, response: Response | None = None):
         elif (datetime.now(timezone.utc) - r["last_seen"]).total_seconds() > SEEN_EVERY or r["last_ip"] != _ip(request):
             c.execute("UPDATE customer_sessions SET last_seen = now(), last_ip = %s WHERE id = %s", (_ip(request), sid))
         r["apps"] = c.execute(MODULES_SQL, (r["id"],)).fetchall()
+        perms = c.execute(PERMS_SQL, (r["id"],)).fetchall()
     r["modules"] = {a["key"] for a in r["apps"]}
+    r["perms"] = {p["key"] for p in perms if p["module"] in r["modules"]}
     return r
 
 
@@ -299,6 +306,15 @@ def need(*mods):
     """Dependency: the customer must hold at least one of these applications (their roles — Admin → Access manager)."""
     def dep(c=Depends(customer)):
         if not c["modules"] & set(mods):
+            raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+        return c
+    return dep
+
+
+def need_perm(perm):
+    """Dependency: the customer's roles must hold this permission (application:action) and its application."""
+    def dep(c=Depends(customer)):
+        if perm not in c["perms"]:
             raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
         return c
     return dep
@@ -334,9 +350,15 @@ def me(c=Depends(customer)):
     with _own(c) as conn:
         roles = [x["name"] for x in conn.execute("SELECT r.name FROM customer_roles cr JOIN roles r ON r.id = cr.role_id "
                                                  "WHERE cr.customer_id = %s ORDER BY r.name", (c["id"],)).fetchall()]
+        # direct grants (Admin → Access manager): shown in the account window as "extra access"
+        grants = [{"name": g["name"], "app": g["app"], "until": g["expires_on"].isoformat() if g["expires_on"] else None}
+                  for g in conn.execute("SELECT p.name, m.name AS app, g.expires_on FROM customer_permissions g "
+                                        "JOIN app_permissions p ON p.key = g.permission JOIN app_modules m ON m.key = p.module "
+                                        "WHERE g.customer_id = %s AND (g.expires_on IS NULL OR g.expires_on >= (now() AT TIME ZONE "
+                                        "'Asia/Kolkata')::date) ORDER BY m.sort, p.sort", (c["id"],)).fetchall()]
         pins = _pins(conn, c)
     return {"name": c["name"], "email": c["email"], "expires_on": c["expires_on"].isoformat() if c["expires_on"] else None,
-            "apps": [dict(a) for a in c["apps"]], "roles": roles, "pins": pins, "max_pins": MAX_PINS}
+            "apps": [dict(a) for a in c["apps"]], "roles": roles, "grants": grants, "perms": sorted(c["perms"]), "pins": pins, "max_pins": MAX_PINS}
 
 
 class PinsIn(BaseModel):
@@ -361,6 +383,7 @@ def set_pins(body: PinsIn, request: Request, c=Depends(customer)):
 class ActivityIn(BaseModel):
     module: str
     kind: str = "open"                                   # open = the customer opened it · ping = still on it (every 60 s)
+    action: str | None = None                            # kind "action": a key action (adoption.ACTIONS), e.g. "stock_card"
 
 
 IST_DAY = "(now() AT TIME ZONE 'Asia/Kolkata')::date"
@@ -370,8 +393,14 @@ IST_DAY = "(now() AT TIME ZONE 'Asia/Kolkata')::date"
 def activity(body: ActivityIn, request: Request, c=Depends(customer)):
     """Which application the customer uses and for how long (Admin → Activity log)."""
     _rate("activity", str(c["id"]), 120, 60)
-    if body.module not in c["modules"] or body.kind not in ("open", "ping"):
+    if body.module not in c["modules"] or body.kind not in ("open", "ping", "action"):
         raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+    if body.kind == "action":                            # adoption: only the known key actions of that application
+        if body.action not in adoption.ACTIONS.get(body.module, {}) or (body.module, body.action) in adoption.SERVER_ACTIONS:
+            raise HTTPException(403, "Unknown action")
+        with pool.connection() as conn:
+            adoption.action(conn, c["id"], body.module, body.action)
+        return {"ok": True}
     with pool.connection() as conn:
         if body.kind == "open":
             # the same application on the same device within 10 minutes counts as one visit
@@ -381,12 +410,19 @@ def activity(body: ActivityIn, request: Request, c=Depends(customer)):
                 act.log(conn, actor_kind="customer", actor_id=c["id"], actor_name=c["name"], session_id=c["sid"],
                         device_id=c["device_id"], device=act.device_label(_ua(request)), ip=_ip(request),
                         app="customer", module=body.module, event="open")
-            conn.execute(f"INSERT INTO module_usage (session_id, customer_id, module, day) VALUES (%s,%s,%s,{IST_DAY}) "
-                         "ON CONFLICT (session_id, module, day) DO UPDATE SET last_at = now()", (c["sid"], c["id"], body.module))
+                adoption.visit(conn, c["id"], body.module)
+            new = conn.execute(f"INSERT INTO module_usage (session_id, customer_id, module, day) VALUES (%s,%s,%s,{IST_DAY}) "
+                               "ON CONFLICT (session_id, module, day) DO UPDATE SET last_at = now() RETURNING (xmax = 0) AS inserted",
+                               (c["sid"], c["id"], body.module)).fetchone()
+            if new and new["inserted"]:                  # a new usage row starts at 1 minute: adoption counts it the same way
+                adoption.minute(conn, c["id"], body.module)
         else:                                            # still on it: +1 minute, at most once every 50 s
-            conn.execute(f"INSERT INTO module_usage (session_id, customer_id, module, day) VALUES (%s,%s,%s,{IST_DAY}) "
-                         "ON CONFLICT (session_id, module, day) DO UPDATE SET last_at = now(), minutes = module_usage.minutes + 1 "
-                         "WHERE module_usage.last_at < now() - interval '50 seconds'", (c["sid"], c["id"], body.module))
+            counted = conn.execute(f"INSERT INTO module_usage (session_id, customer_id, module, day) VALUES (%s,%s,%s,{IST_DAY}) "
+                                   "ON CONFLICT (session_id, module, day) DO UPDATE SET last_at = now(), minutes = module_usage.minutes + 1 "
+                                   "WHERE module_usage.last_at < now() - interval '50 seconds' RETURNING 1",
+                                   (c["sid"], c["id"], body.module)).fetchone()
+            if counted:
+                adoption.minute(conn, c["id"], body.module)
     return {"ok": True}
 
 
@@ -488,6 +524,8 @@ def portfolio_put(body: PortfolioIn, request: Request, c=Depends(need("portfolio
     with _own(c) as conn:
         conn.execute("INSERT INTO customer_portfolio (customer_id, symbols, updated_at) VALUES (%s, %s, now()) "
                      "ON CONFLICT (customer_id) DO UPDATE SET symbols = EXCLUDED.symbols, updated_at = now()", (c["id"], syms))
+        if syms:
+            adoption.action(conn, c["id"], "portfolio", "list_saved")          # adoption: the Analyser list was saved
     return {"symbols": syms}
 
 
@@ -496,8 +534,8 @@ class BuilderIn(BaseModel):
     count: int
     alloc: dict
     reliability: list[str]
-    sector_max: int = 25
-    weighting: str = "equal"
+    sector_max: int = builder.DEFAULT_SECTOR
+    weighting: str = builder.DEFAULT_WEIGHTING
     opts: dict = {}                                       # "More options": horizon, quality, confirmed, stock_max, …
 
 
@@ -520,22 +558,79 @@ def _latest_view():
     return _latest["data"]
 
 
+DETAIL_SYM = re.compile(r"^[A-Z0-9&._-]{1,30}$")
+
+
+@app.get("/app/api/detail/{symbol}")
+def stock_detail(symbol: str, request: Request, response: Response, app_key: str = "portfolio", date: str | None = None,
+                 part: str | None = None):
+    """Stock detail view (customer admin): everything behind one stock's result for the day on screen. Permission
+    "<application>:detail" (portfolio / builder), checked here AND by the database (row-level security on stock_detail).
+    Every look is written to the activity log."""
+    if app_key not in ("portfolio", "builder"):
+        raise HTTPException(422, "Unknown application")
+    c = need_perm(f"{app_key}:detail")(_session(request, response))
+    _rate("detail", str(c["id"]), 120, 60)
+    sym = symbol.strip().upper()
+    if not DETAIL_SYM.match(sym):
+        raise HTTPException(422, "Not a stock symbol")
+    with _own(c) as conn:
+        if date or part:
+            row = _history_days(conn).get(date or "", {}).get(part or "")
+            sid = row and row["snapshot_id"]
+        else:
+            head = conn.execute("SELECT snapshot_id FROM published ORDER BY id DESC LIMIT 1").fetchone()
+            sid = head and head["snapshot_id"]
+        rows = {r["symbol"]: json.loads(gzip.decompress(bytes(r["data_gz"]))) for r in conn.execute(
+            "SELECT symbol, data_gz FROM stock_detail WHERE snapshot_id = %s AND symbol IN (%s, '~meta')", (sid, sym)).fetchall()} if sid else {}
+        act.log(conn, actor_kind="customer", actor_id=c["id"], actor_name=c["name"], session_id=c["sid"], device_id=c["device_id"],
+                device=act.device_label(_ua(request)), ip=_ip(request), app="customer", module=app_key, event="detail",
+                detail={"symbol": sym, **({"date": date, "part": part} if date else {})})
+    if "~meta" not in rows:
+        raise HTTPException(404, f"The detail view is not stored for this day (it is kept for the last {DETAIL_DAYS} days).")
+    if sym not in rows:
+        raise HTTPException(404, f"{sym} has no detail for this day.")
+    return {"meta": rows["~meta"], "stock": rows[sym]}
+
+
+def builder_tier(c):
+    """the customer's builder plan from their permissions (Access manager): admin > trader > customer (everyone)"""
+    return "admin" if "builder:admin" in c["perms"] else "trader" if "builder:trader" in c["perms"] else "customer"
+
+
+@app.get("/app/api/builder/plan")
+def portfolio_builder_plan(c=Depends(need("builder"))):
+    """the limits and standard settings of the customer's builder plan (the form shows them; the server enforces them)"""
+    return builder.plan_info(builder_tier(c))
+
+
 @app.post("/app/api/builder")
 def portfolio_builder(body: BuilderIn, request: Request, c=Depends(need("builder"))):
-    """Hyperplane AI Portfolio Builder: a model portfolio from the latest published data (builder.py)."""
+    """Hyperplane AI Portfolio Builder: a model portfolio from the latest published data (builder.py), within the
+    customer's builder plan — checked here whatever the client sends."""
     _rate("builder", str(c["id"]), 30, 60)
+    tier = builder_tier(c)
     try:
-        return builder.build(_latest_view(), body.amount, body.count, body.alloc, body.reliability, body.sector_max, body.weighting, body.opts)
+        res = builder.build(_latest_view(), body.amount, body.count, body.alloc, body.reliability, body.sector_max, body.weighting,
+                            body.opts, tier=tier)
+    except builder.PlanError as e:
+        raise HTTPException(403, str(e), headers={"X-Plan": tier})
     except builder.BuildError as e:
         raise HTTPException(422, str(e))
+    with pool.connection() as conn:
+        adoption.action(conn, c["id"], "builder", "build")                      # adoption: a portfolio was built
+    return res
 
 
 @app.post("/app/api/builder/preview")
 def portfolio_builder_preview(body: PreviewIn, c=Depends(need("builder"))):
     """Live count for the form: how many stocks pass every check today (per market cap) + the sector list."""
     _rate("builder-preview", str(c["id"]), 120, 60)
+    tier = builder_tier(c)
     try:
-        return builder.preview(_latest_view(), body.reliability, body.opts)
+        return builder.preview(_latest_view(), body.reliability, body.opts, tier=tier)
+    except builder.PlanError as e:
+        raise HTTPException(403, str(e), headers={"X-Plan": tier})
     except builder.BuildError as e:
         raise HTTPException(422, str(e))
 

@@ -30,13 +30,16 @@ from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel
 
+from . import access_admin
+from . import adoption
 from . import activity as act
 from . import config
 from . import helpdesk as hd
 from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
                  init_db, pool, put_settings, set_auto_approve, set_history_enabled, set_meta, get_history_changed)
 from .schedule import TZ, next_runs, now, parse_hhmm
-from .publish import publish
+from .publish import FORMULA_VERSION, history_missing, publish
+from . import evidence
 from .security import hash_password
 from .store import save_snapshot, taken_at_from_filename, workbook_to_sheets
 
@@ -452,9 +455,31 @@ def _history_status():
         sched = c.execute("SELECT count(*) AS n FROM snapshots WHERE source = 'scheduled'").fetchone()["n"]
     failed = get_meta("history_failed", {}) or {}
     return {"enabled": get_history_enabled(), "collections": h["n"], "days": h["days"], "scheduled": sched,
-            "pending": max(0, sched - h["n"] - len(failed)), "failed": len(failed), "changed": get_history_changed(),
+            "pending": len(history_missing()), "failed": len(failed), "changed": get_history_changed(),
             "error": next(iter(failed.values()), None),
             "first": h["first"].isoformat() if h["first"] else None, "last": h["last"].isoformat() if h["last"] else None}
+
+
+# ─── Strength evidence (owner, 2026-11-01): every combination checked against what the price did afterwards ───
+@app.get("/api/admin/evidence")
+def evidence_status(user=Depends(admin_user)):
+    return evidence.status()
+
+
+@app.get("/api/admin/evidence/report")
+def evidence_report(level: str = "nr", tf: str = "Q", horizon: int = 30, user=Depends(admin_user)):
+    try:
+        return evidence.report(level, tf, horizon)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/admin/evidence/rebuild")
+def evidence_rebuild(user=Depends(admin_user)):
+    """Rebuild every stored past day and stock state with the current formula (the worker does it in the background)."""
+    evidence.rebuild_all()
+    set_meta("history_failed", {})
+    return {**evidence.status(), "pending": len(history_missing())}
 
 
 @app.get("/api/admin/customer-history")
@@ -560,41 +585,7 @@ def delete_customer(cid: int, user=Depends(admin_user)):
 
 
 # ─────────────────────────────── Access manager (RBAC, customer app only) ───────────────────────────────
-# Applications = the customer app's modules (fixed catalogue); roles group applications; a customer holds one or more
-# roles and may open the union of their applications. Exactly one role is the default (given to every new customer).
-ROLE_NAME_MAX, ROLE_DESC_MAX = 40, 200
-
-
-class RoleIn(BaseModel):
-    name: str
-    description: str = ""
-    modules: list[str] = []
-    is_default: bool = False
-
-
-class RolePatch(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    modules: list[str] | None = None
-    is_default: bool | None = None
-
-
-class ModulePatch(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    enabled: bool | None = None
-
-
-class CustomerRolesIn(BaseModel):
-    role_ids: list[int]
-
-
-class BulkRolesIn(BaseModel):
-    customer_ids: list[int]
-    add: list[int] = []
-    remove: list[int] = []
-
-
+# Roles, permissions, direct grants and the paged customer ↔ role mapping live in access_admin.py (Access manager v2).
 def _iso(v):
     return v.astimezone(TZ).isoformat() if v else None
 
@@ -603,242 +594,25 @@ def _modules_all(c):
     return c.execute("SELECT key, name, description, sort, enabled FROM app_modules ORDER BY sort, key").fetchall()
 
 
-def _roles_all(c):
-    rows = c.execute(
-        "SELECT r.id, r.name, r.description, r.is_default, r.is_system, r.created_at, r.updated_at, r.updated_by, "
-        "ARRAY(SELECT rm.module FROM role_modules rm JOIN app_modules m ON m.key = rm.module WHERE rm.role_id = r.id ORDER BY m.sort) AS modules, "
-        "(SELECT count(*) FROM customer_roles cr WHERE cr.role_id = r.id) AS users "
-        "FROM roles r ORDER BY r.is_system DESC, r.is_default DESC, lower(r.name)").fetchall()
-    return [{**r, "created_at": _iso(r["created_at"]), "updated_at": _iso(r["updated_at"])} for r in rows]
+app.include_router(access_admin.build(admin_user, _cust, CUSTOMER_COLS))
 
 
-def _access(c):
-    return {"modules": _modules_all(c), "roles": _roles_all(c)}
-
-
-def _clean_modules(c, mods):
-    known = {m["key"] for m in _modules_all(c)}
-    out = [m for m in dict.fromkeys(mods) if m in known]
-    if len(out) != len(set(mods)):
-        raise HTTPException(422, "Unknown application")
-    return out
-
-
-def _clean_role_name(c, name, rid=None):
-    name = " ".join((name or "").split())
-    if not 2 <= len(name) <= ROLE_NAME_MAX:
-        raise HTTPException(422, f"Role name must be 2–{ROLE_NAME_MAX} characters")
-    if c.execute("SELECT 1 FROM roles WHERE lower(name) = lower(%s) AND id IS DISTINCT FROM %s", (name, rid)).fetchone():
-        raise HTTPException(409, f"A role called “{name}” already exists")
-    return name
-
-
-def _set_modules(c, rid, mods):
-    c.execute("DELETE FROM role_modules WHERE role_id = %s", (rid,))
-    for m in mods:
-        c.execute("INSERT INTO role_modules (role_id, module) VALUES (%s, %s)", (rid, m))
-
-
-def _admin_log(c, user, event, **detail):
-    act.log(c, actor_kind="user", actor_id=user["name"], actor_name=user["name"], app="admin", event=event, detail=detail)
-
-
-def _role_or_404(c, rid):
-    r = c.execute("SELECT * FROM roles WHERE id = %s", (rid,)).fetchone()
-    if not r:
-        raise HTTPException(404, "Role not found")
-    return r
-
-
-@app.get("/api/admin/access")
-def access_overview(user=Depends(admin_user)):
+# ─────────────────────────────── Adoption report (adoption.py) ───────────────────────────────
+@app.get("/api/admin/adoption")
+def adoption_report(days: int = Query(30), user=Depends(admin_user)):
+    if days not in (7, 30, 90):
+        raise HTTPException(422, "days is 7, 30 or 90")
     with pool.connection() as c:
-        return _access(c)
+        return adoption.report(c, days)
 
 
-@app.post("/api/admin/roles")
-def create_role(body: RoleIn, user=Depends(admin_user)):
+@app.get("/api/admin/adoption/customers")
+def adoption_customers(segment: str | None = None, q: str = "", sort: str = "score", page: int = Query(1, ge=1),
+                       size: int = Query(50, ge=1, le=200), user=Depends(admin_user)):
+    if segment and segment not in dict(adoption.SEGMENTS):
+        raise HTTPException(422, "Unknown segment")
     with pool.connection() as c:
-        name = _clean_role_name(c, body.name)
-        mods = _clean_modules(c, body.modules)
-        if body.is_default and not mods:
-            raise HTTPException(422, "The default role needs at least one application")
-        if body.is_default:
-            c.execute("UPDATE roles SET is_default = false WHERE is_default")
-        rid = c.execute("INSERT INTO roles (name, description, is_default, updated_by) VALUES (%s,%s,%s,%s) RETURNING id",
-                        (name, body.description.strip()[:ROLE_DESC_MAX], body.is_default, user["name"])).fetchone()["id"]
-        _set_modules(c, rid, mods)
-        _admin_log(c, user, "role_created", role=name, modules=mods, default=body.is_default)
-        return {**_access(c), "id": rid}
-
-
-@app.patch("/api/admin/roles/{rid}")
-def update_role(rid: int, body: RolePatch, user=Depends(admin_user)):
-    with pool.connection() as c:
-        r = _role_or_404(c, rid)
-        name = _clean_role_name(c, body.name, rid) if body.name is not None else r["name"]
-        mods = _clean_modules(c, body.modules) if body.modules is not None else None
-        if body.is_default is False and r["is_default"]:
-            raise HTTPException(422, "There must always be a default role — make another role the default instead")
-        will_default = r["is_default"] or body.is_default
-        if will_default and mods is not None and not mods:
-            raise HTTPException(422, "The default role needs at least one application")
-        if body.is_default and not r["is_default"]:
-            has = mods if mods is not None else [x["module"] for x in c.execute("SELECT module FROM role_modules WHERE role_id = %s", (rid,))]
-            if not has:
-                raise HTTPException(422, "The default role needs at least one application")
-            c.execute("UPDATE roles SET is_default = false WHERE is_default")
-        c.execute("UPDATE roles SET name = %s, description = %s, is_default = %s, updated_at = now(), updated_by = %s WHERE id = %s",
-                  (name, (body.description if body.description is not None else r["description"]).strip()[:ROLE_DESC_MAX],
-                   bool(will_default), user["name"], rid))
-        if mods is not None:
-            holders = [x["customer_id"] for x in c.execute("SELECT customer_id FROM customer_roles WHERE role_id = %s", (rid,))]
-            had = _mods_of(c, holders)
-            _set_modules(c, rid, mods)
-            _pin_new_apps(c, had, holders)                  # an application added to the role is pinned for its holders
-        _admin_log(c, user, "role_updated", role=name, **({"modules": mods} if mods is not None else {}),
-                   **({"renamed_from": r["name"]} if name != r["name"] else {}), **({"default": True} if body.is_default and not r["is_default"] else {}))
-        return _access(c)
-
-
-@app.post("/api/admin/roles/{rid}/duplicate")
-def duplicate_role(rid: int, user=Depends(admin_user)):
-    with pool.connection() as c:
-        r = _role_or_404(c, rid)
-        name, n = f"{r['name'][:ROLE_NAME_MAX - 7]} (copy)", 2
-        while c.execute("SELECT 1 FROM roles WHERE lower(name) = lower(%s)", (name,)).fetchone():
-            name = f"{r['name'][:ROLE_NAME_MAX - 10]} (copy {n})"; n += 1
-        new = c.execute("INSERT INTO roles (name, description, updated_by) VALUES (%s,%s,%s) RETURNING id",
-                        (name, r["description"], user["name"])).fetchone()["id"]
-        c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, module FROM role_modules WHERE role_id = %s", (new, rid))
-        _admin_log(c, user, "role_created", role=name, copied_from=r["name"])
-        return {**_access(c), "id": new}
-
-
-@app.delete("/api/admin/roles/{rid}")
-def delete_role(rid: int, user=Depends(admin_user)):
-    with pool.connection() as c:
-        r = _role_or_404(c, rid)
-        if r["is_system"]:
-            raise HTTPException(422, f"“{r['name']}” is the built-in role and cannot be deleted (you can edit it)")
-        if r["is_default"]:
-            raise HTTPException(422, "This is the default role — make another role the default first")
-        # customers who would be left with no role get the default role
-        moved = c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) "
-                          "SELECT cr.customer_id, d.id, %s FROM customer_roles cr CROSS JOIN (SELECT id FROM roles WHERE is_default) d "
-                          "WHERE cr.role_id = %s AND NOT EXISTS (SELECT 1 FROM customer_roles o WHERE o.customer_id = cr.customer_id AND o.role_id <> %s) "
-                          "ON CONFLICT DO NOTHING", (f"{user['name']} (role deleted)", rid, rid)).rowcount
-        c.execute("DELETE FROM roles WHERE id = %s", (rid,))
-        _admin_log(c, user, "role_deleted", role=r["name"], moved_to_default=moved)
-        return {**_access(c), "moved": moved}
-
-
-@app.patch("/api/admin/modules/{key}")
-def update_module(key: str, body: ModulePatch, user=Depends(admin_user)):
-    with pool.connection() as c:
-        m = c.execute("SELECT * FROM app_modules WHERE key = %s", (key,)).fetchone()
-        if not m:
-            raise HTTPException(404, "Application not found")
-        name = " ".join((body.name if body.name is not None else m["name"]).split())
-        if not 2 <= len(name) <= 60:
-            raise HTTPException(422, "Application name must be 2–60 characters")
-        c.execute("UPDATE app_modules SET name = %s, description = %s, enabled = %s WHERE key = %s",
-                  (name, (body.description if body.description is not None else m["description"]).strip()[:200],
-                   m["enabled"] if body.enabled is None else body.enabled, key))
-        _admin_log(c, user, "app_updated", app=key, **({"enabled": body.enabled} if body.enabled is not None else {}),
-                   **({"renamed_from": m["name"]} if name != m["name"] else {}))
-        return _access(c)
-
-
-MAX_PINS = 6                                         # same as portal.MAX_PINS (applications pinned to the side menu)
-_MODS_OF = ("SELECT cr.customer_id, array_agg(DISTINCT rm.module) AS mods FROM customer_roles cr "
-            "JOIN role_modules rm ON rm.role_id = cr.role_id JOIN app_modules m ON m.key = rm.module AND m.enabled "
-            "WHERE cr.customer_id = ANY(%s) GROUP BY cr.customer_id")
-
-
-def _mods_of(c, cids):
-    """customer id -> the enabled applications their roles give them."""
-    return {r["customer_id"]: set(r["mods"]) for r in c.execute(_MODS_OF, (list(cids),))}
-
-
-def _pin_new_apps(c, before, cids):
-    """An application a customer has just gained (e.g. the AI Portfolio Builder role) is pinned to their side menu
-    (owner, 2026-11-01). Saved pins: the new apps are added while there is room; a full menu gives its last place to the
-    first new app. No saved pins: nothing is written — the menu shows the first MAX_PINS apps in catalogue order, and
-    the builder is 4th."""
-    after = _mods_of(c, cids)
-    order = [r["key"] for r in c.execute("SELECT key FROM app_modules WHERE enabled ORDER BY sort, key")]
-    for cid in cids:
-        new = [k for k in order if k in after.get(cid, set()) - before.get(cid, set())]
-        row = new and c.execute("SELECT pins FROM customer_prefs WHERE customer_id = %s", (cid,)).fetchone()
-        if not row:
-            continue
-        pins = [k for k in row["pins"] if k in after[cid]]
-        add = [k for k in new if k not in pins]
-        if not add:
-            continue
-        room = MAX_PINS - len(pins)
-        pins = pins + add[:room] if room > 0 else pins[:MAX_PINS - 1] + add[:1]
-        c.execute("INSERT INTO customer_prefs (customer_id, pins, updated_at) VALUES (%s, %s, now()) "
-                  "ON CONFLICT (customer_id) DO UPDATE SET pins = EXCLUDED.pins, updated_at = now()", (cid, pins))
-
-
-def _assign(c, cid, role_ids, user, valid):
-    before = [r["role_id"] for r in c.execute("SELECT role_id FROM customer_roles WHERE customer_id = %s ORDER BY role_id", (cid,))]
-    after = sorted(set(role_ids))
-    if before == after:
-        return False
-    had = _mods_of(c, [cid])
-    c.execute("DELETE FROM customer_roles WHERE customer_id = %s AND NOT (role_id = ANY(%s))", (cid, after))
-    for rid in after:
-        c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
-                  (cid, rid, user["name"]))
-    _pin_new_apps(c, had, [cid])
-    name = c.execute("SELECT name FROM customers WHERE id = %s", (cid,)).fetchone()["name"]
-    act.log(c, actor_kind="customer", actor_id=cid, actor_name=name, app="customer", event="roles_changed",
-            detail={"by": user["name"], "before": [valid[x] for x in before if x in valid], "after": [valid[x] for x in after]})
-    return True
-
-
-@app.put("/api/admin/customers/{cid}/roles")
-def set_customer_roles(cid: int, body: CustomerRolesIn, user=Depends(admin_user)):
-    with pool.connection() as c:
-        if not c.execute("SELECT 1 FROM customers WHERE id = %s", (cid,)).fetchone():
-            raise HTTPException(404, "Customer not found")
-        valid = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM roles")}
-        if not body.role_ids:
-            raise HTTPException(422, "A customer needs at least one role (block the account to stop all access)")
-        if any(r not in valid for r in body.role_ids):
-            raise HTTPException(404, "Role not found")
-        _assign(c, cid, body.role_ids, user, valid)
-        return {"roles": sorted(set(body.role_ids))}
-
-
-@app.post("/api/admin/roles/bulk")
-def bulk_roles(body: BulkRolesIn, user=Depends(admin_user)):
-    """Add and / or remove roles for many customers. A removal that would leave someone with no role is skipped."""
-    if not body.customer_ids or not (body.add or body.remove):
-        raise HTTPException(422, "Pick customers and a role to add or remove")
-    if len(body.customer_ids) > 5000:
-        raise HTTPException(422, "Too many customers at once")
-    changed = skipped = 0
-    with pool.connection() as c:
-        valid = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM roles")}
-        if any(r not in valid for r in body.add + body.remove):
-            raise HTTPException(404, "Role not found")
-        have = {}
-        for r in c.execute("SELECT customer_id, role_id FROM customer_roles WHERE customer_id = ANY(%s)", (body.customer_ids,)):
-            have.setdefault(r["customer_id"], set()).add(r["role_id"])
-        exist = {r["id"] for r in c.execute("SELECT id FROM customers WHERE id = ANY(%s)", (body.customer_ids,))}
-        for cid in dict.fromkeys(body.customer_ids):
-            if cid not in exist:
-                continue
-            new = (have.get(cid, set()) | set(body.add)) - set(body.remove)
-            if not new:
-                skipped += 1
-                continue
-            changed += _assign(c, cid, list(new), user, valid)
-    return {"changed": changed, "skipped": skipped}
+        return adoption.customers(c, segment, q, sort, page, size)
 
 
 # ─────────────────────────────── Activity log ───────────────────────────────
@@ -1014,9 +788,12 @@ def activity_person(cid: int, user=Depends(admin_user)):
             raise HTTPException(404, "Customer not found")
         roles = c.execute("SELECT r.id, r.name, cr.assigned_at, cr.assigned_by FROM customer_roles cr JOIN roles r ON r.id = cr.role_id "
                           "WHERE cr.customer_id = %s ORDER BY r.name", (cid,)).fetchall()
-        apps = c.execute("SELECT m.key, m.name FROM app_modules m WHERE m.enabled AND EXISTS (SELECT 1 FROM customer_roles cr "
-                         "JOIN role_modules rm ON rm.role_id = cr.role_id WHERE cr.customer_id = %s AND rm.module = m.key) ORDER BY m.sort",
-                         (cid,)).fetchall()
+        eff = c.execute("SELECT e.key, p.module, p.action, p.name, p.restricted FROM effective_permissions e "
+                        "JOIN app_permissions p ON p.key = e.key JOIN app_modules m ON m.key = p.module "
+                        "WHERE e.customer_id = %s ORDER BY m.sort, p.sort", (cid,)).fetchall()
+        names = {m["key"]: m["name"] for m in _modules_all(c)}
+        apps = [{"key": x["module"], "name": names[x["module"]]} for x in eff if x["action"] == "view"]
+        perms = [{k: x[k] for k in ("key", "module", "name", "restricted")} for x in eff if x["action"] != "view"]
         sessions = c.execute(
             "SELECT s.*, (SELECT COALESCE(sum(minutes), 0) FROM module_usage u WHERE u.session_id = s.id) AS minutes "
             "FROM customer_sessions s WHERE customer_id = %s ORDER BY last_seen DESC LIMIT 200", (cid,)).fetchall()
@@ -1036,6 +813,7 @@ def activity_person(cid: int, user=Depends(admin_user)):
         d["live"] += _session_status(s, at) in ("active", "idle")
     return {
         "customer": _cust(r), "roles": [{**x, "assigned_at": _iso(x["assigned_at"])} for x in roles], "apps": apps,
+        "permissions": perms,
         "devices": sorted([{**d, "ips": sorted(d["ips"]), "first_seen": _iso(d["first_seen"]), "last_seen": _iso(d["last_seen"])}
                            for d in devices.values()], key=lambda d: d["last_seen"], reverse=True),
         "sessions": [{"id": s["id"], "device": s["device"], "device_id": s["device_id"], "ip": s["ip"], "last_ip": s["last_ip"],

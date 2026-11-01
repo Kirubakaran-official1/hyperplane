@@ -1,7 +1,7 @@
 // AI Portfolio Analyser — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addCss } from "../core.jsx";
-import { G_ZONES, Info, RELIABILITY, RG_INFO, StockSearch, TrendGauge, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
+import { addCss, trackAction } from "../core.jsx";
+import { G_ZONES, Info, RELIABILITY, RG_INFO, StockLink, StockSearch, TrendGauge, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
 import { LT_TF, PF_CAT, PF_CATS, PF_MIN_YEARS, PF_ORDER, StrengthTiles, analyseHolding, portfolioSummary, zDir } from "./portfolio-engine.jsx";
 import { placeLabels } from "../labels.js";
 import { CSS } from "./portfolio.css.js";
@@ -17,7 +17,7 @@ function HoldingItem({ r, flash }) {
   return (
     <article id={`pf-card-${r.s.s}`} className={`px-item ${tone} ${flash ? "flash" : ""}`}>
       <div className="px-who">
-        <div className="px-name"><b title={r.s.n}>{r.s.n}</b><em>{r.s.s}</em></div>
+        <div className="px-name"><StockLink sym={r.s.s} app="portfolio"><b title={r.s.n}>{r.s.n}</b></StockLink><StockLink sym={r.s.s} app="portfolio"><em>{r.s.s}</em></StockLink></div>
         <div className="px-where">{r.s.sec} › {r.s.ind}</div>
         <span className={`px-pill ${tone}`}><i/>{label}</span>
         <div className="px-chips">
@@ -248,7 +248,7 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
           <button type="button" className="px-btn" onClick={() => { setStage("build"); window.scrollTo(0, 0); }}>Edit list</button>
           {sum && <button type="button" className="px-btn primary pf-dl" disabled={making === "busy"} onClick={() => {
             setMaking("busy");
-            import("../report.js").then(({ downloadReport }) => { downloadReport(reportModel(rows, sum, data, me)); setMaking(""); })
+            import("../report.js").then(({ downloadReport }) => { downloadReport(reportModel(rows, sum, data, me)); setMaking(""); trackAction("portfolio", "report"); })
               .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
           }}><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
             {making === "busy" ? "Preparing…" : "Download report"}</button>}

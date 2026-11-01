@@ -27,6 +27,8 @@ import math
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from . import detail
+from . import liquidity
 from .db import get_meta, get_settings, pool, set_meta, TECH_TF_DEFAULT
 from .zone_engine import read_all as zone_read_all, apply_regime as zone_apply_regime
 
@@ -41,6 +43,10 @@ _IDX_SYM = re.compile(r"NIFTY|SENSEX|BEES|ETF$")
 _IDX_NAME = re.compile(r"\bETF\b|\bindex fund\b|\bfund of funds?\b", re.I)
 CAP = {"largecap": "Large", "midcap": "Mid", "smallcap": "Small"}
 KEEP_PUBLISHED = 30
+# Strength formula version (owner, 2026-11-01: past dates must show the same final output). Bump it whenever the customer
+# strengths change; the worker then rebuilds every stored past day and every stock state with the current formula.
+#   5 = regime analyser + long-term regime + mother candle by place (12 combinations) + volume
+FORMULA_VERSION = 5
 # AI Portfolio zone step (owner, 2026-10-16: "compare zone levels"): this month's / quarter's zone vs the zone stored in the
 # previous month / quarter. Middle of the zone moved up by ≥ ZONE_STEP × the earlier zone's width = stepping up (1), down
 # by as much = stepping down (−1), else level (0); None = no collection stored in the previous period.
@@ -219,25 +225,6 @@ def _zone_step(z, tf, earlier):
     return 1 if shift >= ZONE_STEP else -1 if shift <= -ZONE_STEP else 0
 
 
-def _weekdays_so_far(d):
-    """(trading days elapsed this week, this month) up to and including d — weekdays, holidays ignored."""
-    week = min(d.weekday(), 4) + 1
-    month = sum(1 for k in range(1, d.day + 1) if date(d.year, d.month, k).weekday() < 5)
-    return week, max(month, 1)
-
-
-def avg_volume(m, d):
-    """Average shares traded per day (owner, 2026-11-01: daily / weekly / monthly volume added to the master screener).
-    The weekly and monthly candles are "so far", so each is divided by the days elapsed; the LOWER of the two is used
-    (one spike day must not make a stock look easy to buy). Falls back to the day's volume."""
-    w, mo = _weekdays_so_far(d)
-    est = [v / n for v, n in ((_num(m.get("Weekly_Volume")), w), (_num(m.get("Monthly_Volume")), mo)) if v]
-    if est:
-        return min(est)
-    v = _num(m.get("Volume"))
-    return v or None
-
-
 def build_public(sheets, settings, as_of, earlier=None):
     flat = sheets.get("Flat_Data_For_Slicers", [])
     zl = {_sym(r.get("Symbol")): r for r in sheets.get("Zone_Levels", [])}
@@ -247,6 +234,7 @@ def build_public(sheets, settings, as_of, earlier=None):
     years = {_sym(r.get("Symbol")): _num(r.get("Years_Of_History")) for r in sheets.get("Price_Health", [])}
     tech = {_sym(r.get("Symbol")): r for r in sheets.get("Technicals", [])} if settings.get("tech_enabled") else {}
     zv = zone_read_all(sheets)                   # AI Portfolio zone engine codes (empty for collections without Zone_History)
+    atr = {_sym(r.get("Symbol")): _num(r.get("D_ATR")) for r in sheets.get("Technicals", []) or []}   # daily price swing
     reg = regimes(sheets)                        # regime analyser: symbol -> (weekly, daily)
     try:                                         # the collection's trading day (IST) — for the average daily volume
         day = datetime.fromisoformat(str(as_of)).astimezone(timezone(timedelta(hours=5, minutes=30))).date()
@@ -330,7 +318,8 @@ def build_public(sheets, settings, as_of, earlier=None):
                        "ind": str(m.get("Industry") or z.get("Industry") or "Other") or "Other",
                        "cap": cap, "f": 1 if str(z.get("Is_FNO") or "") == "Yes" else 0,
                        # average shares traded per day (AI Portfolio Builder: can a position be bought without moving the price)
-                       **({"av": round(av)} if (av := avg_volume(m, day)) else {}),
+                       # volume analyser (liquidity.py): av = dependable shares a day, vl = the full reading (builder)
+                       **({"av": vla["dep"], "vl": liquidity.pack(vla)} if (vla := liquidity.analyse(m, price, atr.get(sym), day)) else {}),
                        "p": round(price, 2), "c": _num(m.get("Change_Pct") if m else z.get("Change_Pct")),
                        "r": rating, "sc": sc, "os": overall_sc, "o": overall,
                        # background (Price_Health): S = Healthy, M = Weak or unrated (as the Control Tower), W = Poor
@@ -492,32 +481,96 @@ def sector_stats(sheets, flat, master, zl, types, tech, tech_cfg, tech_w, tech_o
     return sectors, industries
 
 
-def build_history(snapshot_id):
-    """Store the customer-safe view of one SCHEDULED collection for the customers' date picker."""
+def _state_code(t):
+    """one timeframe's combination: zone trend (5) × price place (6) × mother candle (none / breakout / breakdown) → 0 … 89"""
+    if not t or len(t) < 7:
+        return None
+    trend = {2: 0, 1: 1, 0: 2, -1: 3, -2: 4}[t[0]]
+    return trend * 18 + t[6] * 3 + (1 if t[5] > 0 else 2 if t[5] < 0 else 0)
+
+
+def state_rows(snap, payload):
+    """stock_states rows of one collection, straight from its customer view (the same numbers customers see)."""
+    out = []
+    for s in payload.get("stocks", []):
+        zv = s.get("zv")
+        per = (zv or [None, None, None, None, None])[2:5]
+        code = [_state_code(t) for t in per]
+        out.append((snap["id"], snap["trade_date"], snap["taken_at"], s["s"], s.get("p"), (s.get("cap") or "")[:1], s.get("h"),
+                    bool(s.get("x")), (s.get("rp") or [None])[0], *code,
+                    *[(t[2] if t else None) for t in per], *[(t[5] if t and len(t) > 5 else None) for t in per],
+                    zv[1] if zv else None, zv[0] if zv else None, FORMULA_VERSION))
+    return out
+
+
+def _store_states(snap, payload):
+    rows = state_rows(snap, payload)
     with pool.connection() as c:
-        snap = c.execute("SELECT id, taken_at, trade_date, slot, data_gz FROM snapshots WHERE id = %s AND source = 'scheduled'",
-                         (snapshot_id,)).fetchone()
+        c.execute("DELETE FROM stock_states WHERE snapshot_id = %s", (snap["id"],))
+        with c.cursor() as cur:
+            cur.executemany("INSERT INTO stock_states (snapshot_id, trade_date, taken_at, symbol, price, cap, rel, stretched, regime, "
+                            "m_state, q_state, y_state, m_st, q_st, y_st, m_nr, q_nr, y_nr, strength, colour, formula) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", rows)
+    return len(rows)
+
+
+def build_history(snapshot_id):
+    """Store the FINAL customer output of one collection with the current formula: scheduled collections go to the
+    customers' date picker (customer_history); every collection gets its stock states (strength evidence)."""
+    with pool.connection() as c:
+        snap = c.execute("SELECT id, taken_at, trade_date, slot, source, data_gz FROM snapshots WHERE id = %s", (snapshot_id,)).fetchone()
     if not snap:
         return None
     sheets = json.loads(gzip.decompress(bytes(snap["data_gz"])))
     payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat(), earlier_zones(snap["trade_date"]))
-    gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
+    if snap["source"] == "scheduled":
+        gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
+        with pool.connection() as c:
+            c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz, formula) "
+                      "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET data_gz = EXCLUDED.data_gz, "
+                      "stocks = EXCLUDED.stocks, formula = EXCLUDED.formula, built_at = now()",
+                      (snap["id"], snap["trade_date"], snap["taken_at"], snap["slot"], len(payload["stocks"]), gz, FORMULA_VERSION))
+    n = _store_states(snap, payload)
+    d = _store_detail(snap, sheets, payload) if snap["taken_at"] >= _detail_since() else 0
+    return {"snapshot_id": snap["id"], "stocks": len(payload["stocks"]), "states": n, "detail": d}
+
+
+def _detail_since():
+    return datetime.now(timezone.utc) - timedelta(days=detail.DETAIL_DAYS)
+
+
+def _store_detail(snap, sheets, payload):
+    """Stock detail view rows of one collection (customer-admin permission *:detail), one per stock + '~meta'."""
     with pool.connection() as c:
-        c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz) "
-                  "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET data_gz = EXCLUDED.data_gz, "
-                  "stocks = EXCLUDED.stocks, built_at = now()",
-                  (snap["id"], snap["trade_date"], snap["taken_at"], snap["slot"], len(payload["stocks"]), gz))
-    return {"snapshot_id": snap["id"], "stocks": len(payload["stocks"])}
+        g = c.execute("SELECT data_gz FROM snapshot_candles WHERE snapshot_id = %s", (snap["id"],)).fetchone()
+    candles = json.loads(gzip.decompress(bytes(g["data_gz"]))) if g else None
+    built = detail.build_all(sheets, payload, candles)
+    meta = {**built["meta"], "as_of": snap["taken_at"].isoformat(), "formula": FORMULA_VERSION}
+    with pool.connection() as c:
+        c.execute("DELETE FROM stock_detail WHERE snapshot_id = %s", (snap["id"],))
+        gz = lambda v: gzip.compress(json.dumps(v, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
+        with c.cursor().copy("COPY stock_detail (snapshot_id, symbol, formula, data_gz) FROM STDIN") as cp:
+            cp.write_row((snap["id"], "~meta", FORMULA_VERSION, gz(meta)))
+            for sym, v in built["stocks"].items():
+                cp.write_row((snap["id"], sym, FORMULA_VERSION, gz(v)))
+    return len(built["stocks"])
 
 
 def history_missing(limit=None, skip_failed=True):
-    """Scheduled collections that have no customer history row yet (newest first). Collections that failed to build
-    are skipped until the admin switches past days on again (that clears the list)."""
+    """Collections whose final output is missing or was built with an older formula (newest first): scheduled ones
+    need their past day, every one needs its stock states, the last DETAIL_DAYS days their stock detail rows. Collections that failed are skipped until the admin
+    switches past days on again (that clears the list)."""
     failed = [int(k) for k in (get_meta("history_failed", {}) or {})] if skip_failed else []
     with pool.connection() as c:
-        rows = c.execute("SELECT s.id FROM snapshots s LEFT JOIN customer_history h ON h.snapshot_id = s.id "
-                         "WHERE s.source = 'scheduled' AND h.snapshot_id IS NULL AND NOT (s.id = ANY(%s)) ORDER BY s.taken_at DESC"
-                         + (" LIMIT %s" % int(limit) if limit else ""), (failed,)).fetchall()
+        rows = c.execute(
+            "SELECT s.id FROM snapshots s LEFT JOIN customer_history h ON h.snapshot_id = s.id "
+            "WHERE NOT (s.id = ANY(%s)) AND ("
+            "  (s.source = 'scheduled' AND (h.snapshot_id IS NULL OR h.formula < %s))"
+            "  OR NOT EXISTS (SELECT 1 FROM stock_states t WHERE t.snapshot_id = s.id AND t.formula >= %s)"
+            "  OR (s.taken_at >= %s AND NOT EXISTS (SELECT 1 FROM stock_detail d WHERE d.snapshot_id = s.id "
+            "      AND d.symbol = '~meta' AND d.formula >= %s))) "
+            "ORDER BY s.taken_at DESC" + (" LIMIT %s" % int(limit) if limit else ""),
+            (failed, FORMULA_VERSION, FORMULA_VERSION, _detail_since(), FORMULA_VERSION)).fetchall()
     return [r["id"] for r in rows]
 
 

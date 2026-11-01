@@ -56,6 +56,15 @@ export async function api(path, opts = {}) {
   }
   return data;
 }
+// Adoption report (Admin): a key action in an application — fire and forget, never blocks or breaks the page; the same
+// action is sent at most once every 30 seconds (the server also caps it per day)
+const _sent = {};
+export function trackAction(module, action) {
+  const k = `${module}:${action}`, now = Date.now();
+  if (_sent[k] && now - _sent[k] < 30000) return;
+  _sent[k] = now;
+  api("/app/api/activity", { method: "POST", json: { module, kind: "action", action } }).catch(() => { /* never matters to the customer */ });
+}
 export const fmtDT = iso => iso ? new Date(iso).toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"numeric", minute:"2-digit", timeZone:"Asia/Kolkata" }) : "—";
 export async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; }
@@ -151,8 +160,10 @@ export const regimeFull = (r, dir) => [r.base, regimeStory(r, dir)].filter(Boole
 // Research table "Regime" filter: by the regime, or the stocks whose regime is fading / has turned
 export const RG_FILTER = [["all", "All regimes"], ["up", "▲ Regime up"], ["down", "▼ Regime down"],
   ["sdn", "↘ Turning or changed to down"], ["sup", "↗ Turning or changed to up"]];
+// the turning / changed filters follow the label's own order (a change since the previous day comes first), so the rows
+// they show always carry the matching label (e.g. "changed to up" today with a short-term dip is not "turning down")
 export const regimeMatch = (s, k) => k === "all" || (!!s.rg && (k === "up" ? s.rg[0] === 1 : k === "down" ? s.rg[0] === -1
-  : k === "sdn" ? s.rx === -1 || (s.rg[0] === 1 && s.rg[1] === -1) : s.rx === 1 || (s.rg[0] === -1 && s.rg[1] === 1)));
+  : (k === "sdn" ? ["sdn", "dn-soon"] : ["sup", "up-soon"]).includes(regimeOf(s).key)));
 export const RG_INFO = "Regime analyser: tells you whether the current regime of the stock is up or down, and when it starts changing. A trend that goes against the regime is not trusted yet, so it is shown as Sideways.";
 export const RegimeTag = ({ r, sm }) => !r ? <span className="dim">—</span>
   : <span className={`rgtag ${r.tone} ${sm ? "sm" : ""}`} title={`${r.word}. ${r.text}`}><i aria-hidden="true">{r.icon}</i>{sm ? r.short : r.word}</span>;
@@ -454,4 +465,14 @@ export const fmtDay = d => new Date(d + "T00:00:00").toLocaleDateString("en-IN",
 export function addCss(id, css) {
   if (typeof document === "undefined" || document.getElementById(`css-${id}`)) return;
   const el = document.createElement("style"); el.id = `css-${id}`; el.textContent = css; document.head.appendChild(el);
+}
+
+// Stock detail view (customer admin, permission "<application>:detail"): the shell provides open(symbol, app) when the
+// customer's roles hold that permission; everyone else gets a plain name (no link, no extra download).
+export const DetailCtx = React.createContext(null);
+export function StockLink({ sym, app, className = "", children, title }) {
+  const d = React.useContext(DetailCtx);
+  if (!d || !d.can(app)) return children;
+  return <button type="button" className={`stock-link ${className}`} data-detail={sym}
+    title={title || `Open the detail view of ${sym}`} onClick={e => { e.stopPropagation(); d.open(sym, app); }}>{children}</button>;
 }

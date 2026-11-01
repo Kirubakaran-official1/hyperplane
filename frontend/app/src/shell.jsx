@@ -4,7 +4,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
 import { QuickGuideButton } from "./quick.jsx";
 import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
-import { AppIcon, Brand, CollapseIcon, DISCLAIMER, GridIcon, GuideIcon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, fmtDT, fmtDay, fmtTime, foldText, getMode, useTheme } from "./core.jsx";
+import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, GridIcon, GuideIcon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, fmtDT, fmtDay, fmtTime, foldText, getMode, useTheme } from "./core.jsx";
 
 // WhatsApp country code: every country (dial.js); it follows the Country choice until the user picks a code
 const DIAL_BY = Object.fromEntries(DIAL_CODES);
@@ -80,6 +80,8 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
               <div><span className="lbl">Email</span><span>{me.email}</span></div>
               <div><span className="lbl">Access until</span><span>{me.expires_on ? new Date(me.expires_on + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "No end date"}</span></div>
               <div><span className="lbl">Plan</span><span className="acct-plan">{(me.roles || []).join(" · ") || "—"}</span></div>
+              {(me.grants || []).length > 0 && <div className="acct-apps"><span className="lbl">Extra access</span><span className="acct-chips">{me.grants.map((g, i) => (
+                <span key={i} className="acct-chip">{g.name} · {g.app}{g.until ? ` (until ${fmtDay(g.until)})` : ""}</span>))}</span></div>}
               <div className="acct-apps"><span className="lbl">Applications</span><span className="acct-chips">{(me.apps || []).length
                 ? me.apps.map(a => <span key={a.key} className="acct-chip"><AppIcon k={a.key}/>{a.name}</span>) : "None yet"}</span></div>
               <div><span className="lbl">Appearance</span><div className="sg">{[["dark", "Dark"], ["light", "Light"]].map(([k, l]) => <button key={k} type="button" className={theme === k ? "on" : ""} onClick={() => setTheme(k)}>{l}</button>)}</div></div>
@@ -326,6 +328,8 @@ const APP_MODULES = {
   builder: lazy(() => import("./apps/builder.jsx")),
 };
 const Guide = lazy(() => import("./guide.jsx"));
+// stock detail view (customer admin): its own chunk, downloaded only by someone with a detail permission who opens it
+const StockDetail = lazy(() => import("./apps/detail.jsx"));
 const DATA_APPS = ["research", "simple", "portfolio"];         // the builder works on the server: no stock data needed
 const Waiting = ({ text = "Loading…" }) => <div className="card empty">{text}</div>;
 
@@ -422,6 +426,13 @@ function Home({ me, onOut, reloadMe }) {
   const [opened, setOpened] = useState(() => new Set());
   useEffect(() => { if (view === "tower" && face && APP_MODULES[face]) setOpened(s => s.has(face) ? s : new Set([...s, face])); }, [view, face]);
   const hasApps = allowed.length > 0;
+  // stock detail view: AI Portfolio Analyser follows the day on screen, the builder always works on the latest data
+  const perms = me.perms || [];
+  const [detail, setDetail] = useState(null);
+  const detailCtx = useMemo(() => perms.some(p => p.endsWith(":detail")) ? {
+    can: k => perms.includes(`${k}:detail`),
+    open: (sym, k) => setDetail({ sym, app: k, day: k === "portfolio" ? sel : null, n: Date.now() }),
+  } : null, [perms.join(), sel]);
   const app = k => {
     if (k === "research") return <APP_MODULES.research data={data} err={err} sel={sel} mode={mode} setMode={setMode}/>;
     if (k === "builder") return <APP_MODULES.builder apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut}/>;
@@ -437,6 +448,7 @@ function Home({ me, onOut, reloadMe }) {
     : curApp ? { icon: <AppIcon k={curApp.key}/>, name: curApp.name, sub: curApp.description } : { icon: null, name: "Hyperplane", sub: "" };
   const showsData = view === "tower" && DATA_APPS.includes(face);
   return (
+    <DetailCtx.Provider value={detailCtx}>
     <div className={`shell ${navMin ? "nav-min" : ""}`}>
       <SideNav apps={apps} pins={pins} face={face} view={view} onFace={k => { setMoreOpen(false); setFace(k); }}
         onDocs={() => { setMoreOpen(false); goView("guide"); }} onHelpdesk={() => { setMoreOpen(false); openHelpdesk(null); }}
@@ -479,7 +491,9 @@ function Home({ me, onOut, reloadMe }) {
       <footer><p className="fine">{DISCLAIMER}</p><p className="fine">© {new Date().getFullYear()} QuantFriday · Hyperplane</p></footer>
     </div>
       </div>
+      {detail && <Suspense fallback={null}><StockDetail req={detail} onClose={() => setDetail(null)} onOut={onOut}/></Suspense>}
     </div>
+    </DetailCtx.Provider>
   );
 }
 

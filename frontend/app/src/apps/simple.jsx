@@ -1,6 +1,6 @@
 // Simplified view (AI Mode) — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addCss } from "../core.jsx";
+import { addCss, trackAction } from "../core.jsx";
 import { CopyBtns, DivBar, Info, LEVEL, MODES, ModeWeights, OverallMeter, RELIABILITY, RegimeBox, StockSearch, aan, combinedView, dirToneOf, dirVal, fmtDT, isBi, levelOf, pct, regimeOf, signed, sizeOf, trendWordOf } from "../core.jsx";
 import { CSS } from "./simple.css.js";
 
@@ -51,6 +51,7 @@ const PERIOD_ROWS = [["Days", "short term"], ["Weeks", ""], ["Months", ""], ["Qu
 
 function SimpleView({ data, mode, setMode, sym, setSym }) {
   const stocks = data.stocks;
+  useEffect(() => { if (sym) trackAction("simple", "search"); }, [sym]);           // adoption: a stock looked up
   const s = sym ? stocks.find(x => x.s === sym) : null;
   if (!s) return (
     <div className="sv sv-empty">

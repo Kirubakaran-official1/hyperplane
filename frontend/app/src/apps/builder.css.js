@@ -177,4 +177,111 @@ button.bd-s:hover{background:var(--s2)}button.bd-s.on{background:var(--adim);box
 .ap-pin.on{color:#22d3ee}
 @media (min-width:901px){.sn.min .sn-it.on::before{left:-5px;top:10px;bottom:10px}}
 @media (max-width:900px){.sn-scrim.on{opacity:1;pointer-events:auto}}
+
+/* volume check (owner 2026-11-01): grade badge, status, card, section, buying plan */
+.bd-cards2.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.bd-vc{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;padding:3px 6px;border-radius:7px}
+.bd-vc:hover,.bd-vc.on{background:var(--s2)}
+.bd-vc:focus-visible{outline:2px solid var(--acc)}
+.bd-vc .caret{font-size:10px;color:var(--t3)}
+.vb{font:700 10.5px var(--sans);padding:2px 7px;border-radius:999px;white-space:nowrap;border:1px solid var(--b2);color:var(--t2)}
+.vb.up{color:var(--long);border-color:color-mix(in srgb,var(--long) 45%,transparent);background:var(--longd)}
+.vb.mid{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 45%,transparent)}
+.vb.low{color:var(--mixed);border-color:color-mix(in srgb,var(--mixed) 45%,transparent);background:var(--mixedd)}
+.vb.bad{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,transparent);background:var(--shortd)}
+.bd-vs{font:600 11.5px var(--sans);white-space:nowrap}
+.bd-vs.is-ok{color:var(--t2)}.bd-vs.is-cap{color:var(--acc)}.bd-vs.is-over{color:var(--short)}
+tr.bd-over td{background:color-mix(in srgb,var(--short) 5%,transparent)}
+tr.bd-vrow td{background:var(--s2);padding:0!important}
+.bd-vcard{padding:14px 16px;display:flex;flex-direction:column;gap:10px;position:sticky;left:0;box-sizing:border-box;width:min(1180px,calc(100vw - 140px))}
+.bd-vgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.bd-vgrid>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.bd-vgrid b{font:700 15px var(--sans);color:var(--t1)}.bd-vgrid b.bad{color:var(--short)}
+.bd-vgrid small{font-size:12px;color:var(--t2);line-height:1.45}
+.bd-strips{display:flex;gap:14px;margin:4px 0}
+.bd-strip{display:flex;flex-direction:column;gap:3px}
+.bd-strip span{font-size:10.5px;color:var(--t3)}
+.bd-strip>div{display:flex;align-items:flex-end;gap:3px;height:34px}
+.bd-strip i{display:block;width:12px;border-radius:3px 3px 0 0;background:var(--mx-m);animation:bd-grow .5s ease-out both}
+@keyframes bd-grow{from{transform:scaleY(0)}}
+.bd-strip i{transform-origin:bottom}
+.bd-vwarn{margin:0;padding-left:18px;font-size:12.5px;color:var(--t1);line-height:1.55}
+.bd-vwarn li::marker{color:var(--mixed)}
+.bd-volume{padding:16px 18px;margin-bottom:14px}
+.bd-vkpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:10px 0 12px}
+.bd-vkpis>div{background:var(--s2);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:3px}
+.bd-vkpis>div.warn{background:var(--shortd)}
+.bd-vkpis b{font:800 20px var(--sans);color:var(--t1)}.bd-vkpis small{font-size:11.5px;color:var(--t2)}
+.bd-gbar{display:flex;gap:2px;height:22px;border-radius:7px;overflow:hidden}
+.bd-gbar span{display:flex;align-items:center;justify-content:center;min-width:3px}
+.bd-gbar em{font:700 10.5px var(--sans);font-style:normal;color:#fff;white-space:nowrap;padding:0 6px}
+.g5{background:#0f6e56}.g4{background:#1d9e75}.g3{background:#5dcaa5}.g2{background:#d99a1e}.g1{background:#c2402f}
+.bd-gbar .g3 em,.bd-gbar .g2 em{color:#1f1a0a}
+.bd-glegend{display:flex;flex-wrap:wrap;gap:12px;margin-top:6px;font-size:11.5px;color:var(--t2)}
+.bd-glegend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.bd-vbanner{margin-top:12px;padding:12px 14px;border-radius:10px;border:1px solid color-mix(in srgb,var(--short) 50%,transparent);background:var(--shortd);font-size:13px;color:var(--t1);line-height:1.5}
+.bd-vlist{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.bd-vlist span{font-size:11.5px;padding:2px 8px;border-radius:6px;background:var(--s1);border:1px solid var(--b1)}
+.bd-vnote{font-size:12.5px;color:var(--t2);margin:10px 0 0;line-height:1.5}
+.bd-plan{padding:16px 18px;margin:14px 0}
+.bd-days-list{list-style:none;margin:10px 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.bd-day{display:grid;grid-template-columns:160px minmax(0,1fr);gap:12px;align-items:start;padding:9px 12px;border-radius:10px;background:var(--s2)}
+.bd-dh{display:flex;flex-direction:column;gap:1px}
+.bd-dh b{font:700 13.5px var(--sans);color:var(--t1)}.bd-dh span{font:600 12.5px var(--mono);color:var(--t1)}.bd-dh small{font-size:11px;color:var(--t3)}
+.bd-buys{display:flex;flex-wrap:wrap;gap:5px}
+.bd-buys span{font:500 12px var(--mono);padding:3px 8px;border-radius:6px;background:var(--s1);border:1px solid var(--b1);color:var(--t1)}
+.bd-buys span b{font-family:var(--sans)}
+.bd-buys span.done{border-color:color-mix(in srgb,var(--long) 45%,transparent)}
+.bd-tips{margin-top:12px;padding-top:10px;border-top:1px solid var(--b1)}
+.bd-tips ul{margin:6px 0 0;padding-left:18px;font-size:12.5px;color:var(--t1);line-height:1.6}
+@media (max-width:900px){.bd-vcard{width:calc(100vw - 40px)}.bd-vgrid{grid-template-columns:1fr}.bd-vkpis{grid-template-columns:repeat(2,minmax(0,1fr))}.bd-day{grid-template-columns:1fr}.bd-cards2.three{grid-template-columns:1fr}}
+
+/* result page: sticky section tabs, expandable rows (owner 2026-11-01: "the accordion in front of the row … the reasons
+   and the volume analyser inside it … tabs that scroll to each section") */
+.bd-tabs{position:sticky;top:0;z-index:6;display:flex;gap:4px;overflow-x:auto;padding:8px 6px;margin:0 -6px 12px;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--b1);scrollbar-width:none}
+.bd-tabs::-webkit-scrollbar{display:none}
+.bd-tabs button{all:unset;cursor:pointer;white-space:nowrap;padding:7px 14px;border-radius:999px;font:600 12.5px var(--sans);color:var(--t2);border:1px solid transparent}
+.bd-tabs button:hover{color:var(--t1);background:var(--s2)}
+.bd-tabs button.on{color:var(--acc);border-color:var(--accb);background:var(--adim)}
+.bd-tabs button:focus-visible{outline:2px solid var(--acc)}
+#bd-kpis,#bd-row,#bd-volume,#bd-hold,#bd-plan{scroll-margin-top:64px}
+.bd-xh,.bd-xc{width:34px;padding-right:0!important}
+.bd-xbtn,.bd-xall{all:unset;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:7px;border:1px solid var(--b2);background:var(--s1);color:var(--t2);font:700 14px var(--sans)}
+.bd-xbtn:hover,.bd-xall:hover{border-color:var(--acc);color:var(--acc)}
+.bd-xbtn:focus-visible,.bd-xall:focus-visible{outline:2px solid var(--acc)}
+.bd-xbtn svg{transition:transform .18s ease}
+.bd-xbtn[aria-expanded="true"]{background:var(--adim);border-color:var(--accb);color:var(--acc)}
+.bd-xbtn[aria-expanded="true"] svg{transform:rotate(90deg)}
+tr.bd-open>td{border-bottom-color:transparent}
+.bd-detail{position:sticky;left:0;box-sizing:border-box;width:min(1180px,calc(100vw - 140px));padding:12px 16px 14px;display:flex;flex-direction:column;gap:12px}
+.bd-detail .bd-vcard{position:static;width:auto;padding:0}
+.bd-dsec{display:flex;flex-direction:column;gap:7px}
+.bd-dh2{font:700 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--t2);padding-bottom:4px;border-bottom:1px solid var(--b1)}
+.bd-why.lg{max-width:none}
+.bd-why.lg span{font-size:12px;padding:3px 9px;color:var(--t1);background:var(--s1)}
+.bd-glabel{margin:2px 0 6px}
+@media (max-width:900px){.bd-detail{width:calc(100vw - 40px)}}
+.bd-x{all:unset;cursor:pointer;margin-left:auto;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;color:var(--t2);font-size:13px}
+.bd-x:hover{background:var(--s2);color:var(--t1)}.bd-x:focus-visible{outline:2px solid var(--acc)}
+/* builder plans (owner 2026-11-01): plan badge, locked More options */
+.bd-plantag{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:4px 0 12px;padding:6px 12px;border-radius:999px;border:1px solid var(--b2);background:var(--s1);font-size:12px;color:var(--t2)}
+.bd-plantag b{font:700 12px var(--sans);color:var(--t1)}
+.bd-plantag.t-trader{border-color:var(--accb);background:var(--adim)}.bd-plantag.t-trader b{color:var(--acc)}
+.bd-plantag.t-admin{border-color:color-mix(in srgb,var(--mixed) 55%,transparent);background:var(--mixedd)}.bd-plantag.t-admin b{color:var(--mixed)}
+.bd-fs{border:0;margin:0;padding:0;min-width:0}
+.bd-fs:disabled{opacity:.6}
+.bd-fs:disabled button,.bd-fs:disabled input,.bd-fs:disabled select{cursor:not-allowed}
+.bd-lock{margin:8px 0 4px;padding:9px 12px;border-radius:9px;background:var(--s2);font-size:12.5px;color:var(--t1)}
+/* small positions, market tricks, long plans */
+.bd-vlight{margin:0;font-size:13px;line-height:1.55;color:var(--t1)}.bd-vlight b{color:var(--long)}
+.bd-vcard.light{padding:2px 0}
+.bd-tricks{margin-top:14px;border-top:1px solid var(--b1);padding-top:10px}
+.bd-tricks summary{cursor:pointer;font-size:13px;color:var(--t1)}.bd-tricks summary span{color:var(--t2);font-size:12px;margin-left:4px}
+.bd-tricks ul{margin:10px 0 6px;padding-left:18px;display:flex;flex-direction:column;gap:7px;font-size:12.5px;line-height:1.55;color:var(--t1)}
+.bd-tricks .bd-how{display:block;color:var(--acc)}
+.bd-later{margin-top:12px;padding:12px 14px;border-radius:10px;border:1px solid color-mix(in srgb,var(--mixed) 50%,transparent);background:var(--mixedd)}
+.bd-laterh{font-weight:700;font-size:13px;color:var(--t1)}
+.bd-later p{margin:4px 0 10px;font-size:12.5px;color:var(--t1)}
+.bd-latert tfoot td{border-top:1px solid var(--b2);font-size:12.5px}
+.bd-ferr{margin-top:8px}
 `;

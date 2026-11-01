@@ -375,18 +375,21 @@ const ALL_SECTIONS = [
 
   { id: "builder", app: "builder", t: "AI Portfolio Builder · Hyperplane AI", body: <>
     <p>The <b>AI Portfolio Builder</b> turns an amount into a ready list of stocks, with how many shares of each to buy. It uses the
-      same engine as the AI Portfolio Analyser. It is part of the <b>AI Portfolio Builder</b> plan.</p>
+      same engine as the AI Portfolio Analyser. Depending on your access, the amount, the number of stocks and the options you
+      can change may be limited; the page shows your limits under the amount.</p>
     <ol className="g-steps">
-      <li><b>Amount to invest.</b> Type it, or pick ₹1 L, ₹5 L, ₹10 L, ₹25 L or ₹1 Cr.</li>
-      <li><b>Number of stocks.</b> 20, 30 or 50, or <b>Custom</b> for any number from 5 to 250. The page shows about how much
-        goes into each stock.</li>
+      <li><b>Amount to invest.</b> Type it, or pick one of the amounts shown (up to your plan's limit).</li>
+      <li><b>Number of stocks.</b> Pick one, or <b>Custom</b> for any number from 5 up to your plan's limit. The page shows about
+        how much goes into each stock.</li>
       <li><b>Market cap and cash.</b> Pick a starting mix, then move the sliders to make it your own. <b>Large cap</b>: 70% large,
         10% mid, 10% small, 10% cash. <b>Mid cap</b>: 20% large, 50% mid, 20% small, 10% cash. <b>Small cap</b>: 15% large, 15% mid,
         60% small, 10% cash. <b>Multi cap</b>: 25% each, with 25% cash. Cash never goes below 5%: it pays for charges and rounding,
         and lets you buy on dips. The plan keeps the cash you chose.</li>
-      <li><b>Reliability.</b> High is always used. You can add Medium. Low is never used: those stocks once fell more than 70%.</li>
-      <li><b>More options</b> (optional): the most money one sector may get (25% by default), and whether every stock gets the
-        same money or stronger stocks get a little more.</li>
+      <li><b>Reliability.</b> High is always used. Where your access allows it, you can add Medium. Low is never used: those stocks once
+        fell more than 70%.</li>
+      <li><b>More options</b>: the standard settings are long term, proven trends, confirmed uptrend, leave out
+        stocks up more than 30% in 3 months, at most 5% in one stock and 10% in one sector, the standard buying pace, and the same
+        money in each stock. Where your access does not allow changes, these stay fixed.</li>
     </ol>
     <p>Press <b>Build my portfolio</b>. In a moment you get the shopping list: each stock with its price, the number of whole
       shares, the money and the reasons it was picked, grouped by market cap, plus where the money goes and the cash kept.</p>

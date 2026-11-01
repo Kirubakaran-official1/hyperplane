@@ -32,9 +32,17 @@ the owner may tune the constants):
     first skipped as too costly for its slice gets a second chance with the bigger slice — so cash stays at the
     customer's choice unless those limits are full (then a note says why);
     a top-up pass buys one more share of the best picks while the group's money allows; everything left = cash.
+  Volume (owner 2026-11-01, liquidity.py): every pick gets a volume reading — how much it really trades a day, the
+    most it can carry at the chosen buying pace (5 / 10 / 20 % of a normal day, thin or erratic stocks slower; 5 days
+    of buying = also sellable within 10 days if trading halves), the days to buy, the % of a day and the price push.
+    "Size by trading volume" ON: no stock above what it supports (the rest goes to the other stocks in its group) and
+    a stock that supports < 30 % of its share is replaced by the next; OFF: the plan stays, every over-sized stock is
+    warned. A day-by-day buying plan (which stock, how many shares, which day) comes with every build.
 Customers receive the plan and plain reasons — never the weights above.
 """
 import math
+
+from . import liquidity as L
 
 CASH_MIN = 5                     # % always kept as a buffer
 IND_MAX_SHARE = 0.10             # at most 10 % of the stocks (min 2) from one industry
@@ -57,11 +65,56 @@ LIQ_WARN = {"Large": 500_000_000, "Mid": 100_000_000, "Small": 20_000_000}   # n
 # Trading volume (owner, 2026-11-01): buying more than LIQ_PART of a normal day's trading moves the price. A position is
 # "easy" within a day at that pace; more than LIQ_DAYS days of buying is flagged. With the option "size by volume" ON,
 # no position is bigger than LIQ_DAYS days of buying (the rest goes to the others / cash); OFF = suggestions only.
-LIQ_PART, LIQ_DAYS = 0.10, 5
+LIQ_PART, LIQ_DAYS = 0.10, L.BUILD_DAYS          # (older fields; the volume analyser's standard pace and window)
+PLAN_DAYS_SHOWN = 30                             # the buying plan lists the first 30 days one by one, the rest in one line
+
+
+# Builder plans (owner, 2026-11-01): three permissions — builder:customer (every role, the default), builder:trader and
+# builder:admin (given in Admin → Access manager only). The SERVER enforces them (a request made with Postman / Burp gets
+# the same limits): amount, stock count, reliability, and whether More options / sector limit / weighting may differ
+# from the standard settings below. Customer = up to ₹1 lakh, 20 stocks, High reliability, standard settings;
+# Trader = up to ₹10,000 crore and 1,000 stocks, High / Medium, every option; Admin = any amount, every option.
+DEFAULT_OPTS = {"horizon": "long", "quality": "good", "confirmed": True, "stock_max": 5, "run_up": 30, "fno_only": False,
+                "exclude": [], "by_volume": False, "pace": "standard"}
+DEFAULT_SECTOR, DEFAULT_WEIGHTING = 10, "equal"          # owner 2026-11-01: the standard settings for every plan
+ADMIN_AMOUNT_CEIL = 1e15                                 # admin: no business limit, only a sanity bound on the number
+TIERS = {
+    "customer": {"name": "Customer", "min_amount": 10_000, "max_amount": 100_000, "max_stocks": 20, "reliability": ("S",), "options": False},
+    "trader": {"name": "Trader", "min_amount": 10_000, "max_amount": 100_000_000_000, "max_stocks": 1000, "reliability": ("S", "M"), "options": True},
+    "admin": {"name": "Admin", "min_amount": 1_000, "max_amount": None, "max_stocks": 1000, "reliability": ("S", "M"), "options": True},
+}
 
 
 class BuildError(ValueError):
     """A customer input that cannot be used (shown to the customer as is)."""
+
+
+class PlanError(BuildError):
+    """Allowed on a higher builder plan only (the customer service answers 403)."""
+
+
+def plan_info(tier):
+    """what the form may offer this customer (the server checks the same limits on every request)"""
+    t = TIERS[tier]
+    return {"tier": tier, **t, "reliability": list(t["reliability"]),
+            "defaults": {"opts": dict(DEFAULT_OPTS), "sector_max": DEFAULT_SECTOR, "weighting": DEFAULT_WEIGHTING}}
+
+
+def _inr(v):
+    return f"₹{v / 1e7:,.0f} crore" if v >= 1e7 else f"₹{v / 1e5:,.0f} lakh" if v >= 1e5 else f"₹{v:,.0f}"
+
+
+def check_plan(tier, reliability=None, opts=None, sector_max=None, weighting=None):
+    """the parts of a request that depend on the builder plan (PlanError = not on this plan)"""
+    t = TIERS.get(tier)
+    if not t:
+        raise PlanError("No builder access")
+    if reliability is not None and any(r not in t["reliability"] for r in reliability):
+        raise PlanError("Your access uses High reliability stocks only")
+    if not t["options"]:
+        if (check_options(opts) != check_options(DEFAULT_OPTS) or (sector_max is not None and sector_max != DEFAULT_SECTOR)
+                or (weighting is not None and weighting != DEFAULT_WEIGHTING)):
+            raise PlanError("More options are fixed to the standard settings for your access")
 
 
 def _group_index(rows_by_tf, industry):
@@ -77,9 +130,11 @@ def _group_index(rows_by_tf, industry):
 def check_options(o):
     """The 'More options' inputs (all optional; defaults = the safest everyday choice)."""
     o = dict(o or {})
-    out = {"horizon": o.get("horizon", "long"), "quality": o.get("quality", "building"), "confirmed": bool(o.get("confirmed", False)),
-           "stock_max": o.get("stock_max", 10), "run_up": o.get("run_up", 30), "fno_only": bool(o.get("fno_only", False)),
-           "exclude": [str(x) for x in (o.get("exclude") or [])][:100], "by_volume": bool(o.get("by_volume", False))}
+    d = DEFAULT_OPTS
+    out = {"horizon": o.get("horizon", d["horizon"]), "quality": o.get("quality", d["quality"]), "confirmed": bool(o.get("confirmed", d["confirmed"])),
+           "stock_max": o.get("stock_max", d["stock_max"]), "run_up": o.get("run_up", d["run_up"]), "fno_only": bool(o.get("fno_only", False)),
+           "exclude": sorted(str(x) for x in (o.get("exclude") or []))[:100], "by_volume": bool(o.get("by_volume", d["by_volume"])),
+           "pace": o.get("pace", d["pace"])}
     if out["horizon"] not in HORIZONS:
         raise BuildError("Choose a time horizon")
     if out["quality"] not in QUALITY:
@@ -88,19 +143,27 @@ def check_options(o):
         raise BuildError("Choose a single-stock limit")
     if out["run_up"] not in RUN_UP_LIMITS:
         raise BuildError("Choose the 'already ran up' limit")
+    if out["pace"] not in L.PACES:
+        raise BuildError("Choose a buying pace")
     return out
 
 
-def check_inputs(amount, count, alloc, reliability, sector_max, weighting):
+def check_inputs(amount, count, alloc, reliability, sector_max, weighting, tier="customer"):
+    t = TIERS.get(tier) or TIERS["customer"]
     try:
         amount = float(amount)
         count = int(count)
     except (TypeError, ValueError):
         raise BuildError("Enter the amount and the number of stocks")
-    if not MIN_AMOUNT <= amount <= MAX_AMOUNT:
-        raise BuildError("Enter an amount between ₹10,000 and ₹10,000 crore")
-    if not MIN_STOCKS <= count <= MAX_STOCKS:
-        raise BuildError(f"Choose between {MIN_STOCKS} and {MAX_STOCKS} stocks")
+    if not math.isfinite(amount) or amount < t["min_amount"]:
+        raise BuildError(f"Enter an amount of at least {_inr(t['min_amount'])}")
+    if amount > (t["max_amount"] or ADMIN_AMOUNT_CEIL):
+        raise (PlanError if t["max_amount"] and t["max_amount"] < MAX_AMOUNT else BuildError)(
+            f"Your access allows amounts up to {_inr(t['max_amount'] or ADMIN_AMOUNT_CEIL)}")
+    if count < MIN_STOCKS:
+        raise BuildError(f"Choose at least {MIN_STOCKS} stocks")
+    if count > t["max_stocks"]:
+        raise (PlanError if t["max_stocks"] < MAX_STOCKS else BuildError)(f"Your access allows up to {t['max_stocks']} stocks")
     try:
         alloc = {k: float(alloc.get(k, 0)) for k in ("Large", "Mid", "Small", "Cash")}
     except (AttributeError, TypeError, ValueError):
@@ -177,6 +240,9 @@ def candidates(data, rel, opts=None):
             why.append("Quarterly trend turned up")
         if q[1] >= 1:
             why.append("Price holding up well this quarter")
+        for t, k, word in ((y, "Y", "years"), (q, "Q", "quarters"), (m, "M", "months")):
+            if t and len(t) > 5 and t[5] > 0:
+                why.append(f"Broke out after {t[5]} {word}")
         if has_regime:
             why.append("Long-term regime up" + (", confirmed" if weekly == 1 else ", but it has started changing" if weekly == -1 else ""))
         why.append(f"{REL_WORD[s['h']]} reliability")
@@ -186,12 +252,13 @@ def candidates(data, rel, opts=None):
     return out, skip
 
 
-def preview(data, reliability, opts=None):
+def preview(data, reliability, opts=None, tier="customer"):
     """What the form shows while the customer types: how many stocks pass every check today, per market cap, and the
     sectors they can leave out. Counts only — no stock names."""
     rel = list(dict.fromkeys(reliability or ["S"]))
     if "W" in rel or not rel or any(r not in ("S", "M") for r in rel):
         raise BuildError("Choose High reliability, or High and Medium")
+    check_plan(tier, rel, opts)
     pool_, _ = candidates(data, set(rel), opts)
     by = {c: {"strong": 0, "building": 0} for c in CAPS}
     for x in pool_:
@@ -255,8 +322,9 @@ def _fill(picked, budgets, weights, caps, sec_cap):
     return alloc
 
 
-def build(data, amount, count, alloc, reliability, sector_max=25, weighting="equal", opts=None):
-    amount, count, alloc, rel, sector_max, weighting = check_inputs(amount, count, alloc, reliability, sector_max, weighting)
+def build(data, amount, count, alloc, reliability, sector_max=DEFAULT_SECTOR, weighting=DEFAULT_WEIGHTING, opts=None, tier="customer"):
+    amount, count, alloc, rel, sector_max, weighting = check_inputs(amount, count, alloc, reliability, sector_max, weighting, tier)
+    check_plan(tier, sorted(rel), opts, sector_max, weighting)
     o = check_options(opts)
     pool_, skip = candidates(data, rel, o)
     groups = {c: sorted([x for x in pool_ if x["s"]["cap"] == c], key=lambda x: (x["tier"], -x["score"])) for c in CAPS}
@@ -270,13 +338,27 @@ def build(data, amount, count, alloc, reliability, sector_max=25, weighting="equ
     picked = {c: [] for c in CAPS}
     sec_money, ind_n, idx, pricey = {}, {}, {c: 0 for c in CAPS}, {c: [] for c in CAPS}
 
+    vol = {}
+
+    def volcap(s):
+        """the most money the stock's trading supports at the chosen pace (None = volume not known)"""
+        if s["s"] not in vol:
+            v = L.unpack(s.get("vl"))
+            vol[s["s"]] = L.capacity(v, s["p"], o["pace"])[2] if v and v["dep"] else None
+        return vol[s["s"]]
+
     def capof(s):
         """the most money one stock may take: the single-stock limit, and with 'size by volume' its trading volume too"""
-        if o["by_volume"] and s.get("av"):
-            return min(stock_cap, LIQ_DAYS * LIQ_PART * s["av"] * s["p"])
-        return stock_cap
+        vc = volcap(s)
+        return min(stock_cap, vc) if o["by_volume"] and vc is not None else stock_cap
+
+    thin = []                                                # size by volume: replaced because they support too little
 
     def fits(s, slice_):
+        if o["by_volume"] and volcap(s) is not None and volcap(s) < L.MIN_USEFUL * slice_:
+            if s["s"] not in [t[0] for t in thin]:
+                thin.append((s["s"], volcap(s), slice_))
+            return False
         return (sec_money.get(s["sec"], 0) + slice_ <= sec_cap + 1e-6
                 and ind_n.get((s["sec"], s["ind"]), 0) < ind_cap and capof(s) >= s["p"])
 
@@ -361,13 +443,27 @@ def build(data, amount, count, alloc, reliability, sector_max=25, weighting="equ
         notes.append(f"Each stock gets about ₹{per:,.0f}. Stocks priced above their share are left out; fewer stocks or a larger amount gives a wider choice.")
     if "M" not in rel and len(holdings) < count:
         notes.append("Adding Medium reliability gives the builder more stocks to choose from.")
-    days = lambda h: h["qty"] / (LIQ_PART * h["x"]["s"]["av"]) if h["x"]["s"].get("av") else None
-    slow = [h for h in holdings if (days(h) or 0) > LIQ_DAYS]
-    if slow:
-        notes.append(f"{len(slow)} position{'s are' if len(slow) > 1 else ' is'} large compared with how much the stock normally trades "
-                     f"(more than {LIQ_DAYS} days of buying at {LIQ_PART * 100:.0f}% of a normal day). Buy slowly over several days, "
-                     "choose more stocks, or turn on 'Size by trading volume' in More options.")
-    big = {c: sum(1 for h in holdings if h["cap"] == c and not h["x"]["s"].get("av") and h["qty"] * h["x"]["s"]["p"] > LIQ_WARN[c]) for c in CAPS}
+    for h in holdings:
+        h["liq"] = _liq(h, o, stock_cap, volcap(h["x"]["s"]))
+    days = lambda h: h["liq"].get("days")
+    over = [h for h in holdings if h["liq"]["status"] == "over"]
+    if over:
+        notes.append(f"{len(over)} stock{'s are bigger than their' if len(over) > 1 else ' is bigger than its'} trading supports "
+                     f"(₹{_words(sum(h['qty'] * h['x']['s']['p'] for h in over))} in total) — see the warnings in the table. "
+                     "Turn on 'Size by trading volume' to keep every stock within what it can carry.")
+    capped = [h for h in holdings if h["liq"]["status"] == "capped"]
+    if capped:
+        notes.append(f"{len(capped)} stock{'s were kept to the most their' if len(capped) > 1 else ' was kept to the most its'} trading supports; "
+                     "the rest of the money went to the other stocks in the same group.")
+    if thin:
+        names = ", ".join(f"{sym} (up to ₹{_words(vc)})" for sym, vc, _ in thin[:6])
+        notes.append(f"Replaced by the next best stock because they trade too little to take a useful share: {names}"
+                     + (f" and {len(thin) - 6} more" if len(thin) > 6 else "") + ".")
+    if o["by_volume"] and (capped or thin) and extra >= 2:
+        absorb = sum(min(h["qty"] * h["x"]["s"]["p"], h["liq"].get("most_amt") or 0) for h in holdings)
+        notes.append(f"Trading volume is the limit at this amount: the stocks that passed can take about ₹{_words(absorb)} at the "
+                     f"{o['pace']} buying pace. Choose more stocks (each then needs less), a faster pace, or keep the rest as cash.")
+    big = {c: sum(1 for h in holdings if h["cap"] == c and h["liq"]["status"] == "unknown" and h["qty"] * h["x"]["s"]["p"] > LIQ_WARN[c]) for c in CAPS}
     if any(big.values()):
         notes.append("Some positions are large for their company size (" + ", ".join(f"{n} {c.lower()} cap" for c, n in big.items() if n)
                      + "). Buying that much at once can move the price: spread the buying over several days, or choose more stocks.")
@@ -385,8 +481,7 @@ def build(data, amount, count, alloc, reliability, sector_max=25, weighting="equ
                       "qty": h["qty"], "amt": amt, "w": round(amt / amount * 100, 2), "st": h["x"]["st"],
                       "m": zv[2][2] if zv[2] else None, "q": zv[3][2] if zv[3] else None, "y": zv[4][2] if zv[4] else None,
                       "h": s["h"], "tier": h["x"]["tier"], "why": h["x"]["why"],
-                      # days to buy at LIQ_PART of a normal day's trading (None = volume not known)
-                      "days": round(days(h), 1) if days(h) is not None else None})
+                      "days": days(h), "liq": h["liq"]})
     by_cap = [{"k": c, "target": alloc[c], "amt": round(sum(p["amt"] for p in picks if p["cap"] == c), 2),
                "n": sum(1 for p in picks if p["cap"] == c)} for c in CAPS]
     by_cap.append({"k": "Cash", "target": alloc["Cash"], "amt": round(cash, 2), "n": 0})
@@ -397,10 +492,102 @@ def build(data, amount, count, alloc, reliability, sector_max=25, weighting="equ
         a = secs.setdefault(p["sec"], {"k": p["sec"], "amt": 0.0, "n": 0}); a["amt"] += p["amt"]; a["n"] += 1
     by_sec = sorted(({**v, "amt": round(v["amt"], 2), "pct": round(v["amt"] / invested * 100, 2) if invested else 0}
                      for v in secs.values()), key=lambda r: -r["amt"])
-    return {"as_of": data.get("as_of"), "amount": amount, "count": count, "alloc": alloc, "reliability": sorted(rel), "opts": o,
+    return {"as_of": data.get("as_of"), "tier": tier, "amount": amount, "count": count, "alloc": alloc, "reliability": sorted(rel), "opts": o,
             "sector_max": sector_max, "weighting": weighting, "invested": round(invested, 2), "cash": round(cash, 2),
             "cash_pct": round(cash / amount * 100, 2), "stocks": len(picks),
             "avg_st": round(sum(p["st"] for p in picks) / len(picks)) if picks else None,
             "by_cap": by_cap, "by_sec": by_sec, "picks": picks, "notes": notes,
             "checked": len(data.get("stocks", [])), "qualified": len(pool_),
-            "strong": sum(1 for x in pool_ if x["tier"] == 1), "left_out": skip}
+            "strong": sum(1 for x in pool_ if x["tier"] == 1), "left_out": skip,
+            "volume": _volume_summary(picks, amount, o, thin), "plan": buying_plan(picks)}
+
+
+def _words(n):
+    return f"{n / 1e7:,.2f} Cr" if n >= 1e7 else f"{n / 1e5:,.2f} L" if n >= 1e5 else f"{n:,.0f}"
+
+
+def _liq(h, o, stock_cap, vcap):
+    """the volume reading of one position: what the stock trades, what it supports at the pace, how long buying
+    takes, the price push, and plain warnings"""
+    s, qty = h["x"]["s"], h["qty"]
+    amt = qty * s["p"]
+    v = L.unpack(s.get("vl"))
+    if not v or not v["dep"]:
+        return {"status": "unknown", "days": None, "warn": ["Trading volume is not known for this stock — buy in small parts over a few days."]}
+    pace = L.pace_for(v, o["pace"])
+    per_day, most, most_amt = L.capacity(v, s["p"], o["pace"])
+    per_int = max(1, math.floor(per_day))                                  # whole shares a day
+    days = max(1, math.ceil(qty / per_int))
+    exit_days = max(1, math.ceil(qty / max(math.floor(pace * v["dep"] * 0.5), 1)))   # selling when trading halves
+    status = "fits" if qty <= most * 1.0001 else "over"
+    share = qty / v["dep"]                                                  # the position as a share of ONE day's trading
+    light = status == "fits" and share < L.LIGHT_SHARE                       # tiny next to its trading: nothing to manage
+    if o["by_volume"] and status == "fits" and most_amt < stock_cap and amt >= most_amt * 0.97 - s["p"]:
+        status = "capped"
+    warn = []
+    if light:
+        return {"status": status, "light": True, "grade": v["grade"], "grade_word": L.GRADE_WORD[v["grade"]], "dep": v["dep"],
+                "norm": v["norm"], "value": round(v["dep"] * s["p"]), "pace": pace, "per_day": per_int, "most": math.floor(most),
+                "most_amt": round(most_amt), "days": 1, "exit_days": 1, "share": round(share * 100, 4),
+                "push": L.price_push(v, qty), "swing": v["swing"], "trend": v["trend"], "spike": v["spike"], "erratic": v["erratic"], "wk": v["wk"], "mo": v["mo"],
+                "warn": ["Unusually heavy trading today or this week (often news): avoid buying in a rush today."] if v["spike"] else []}
+    if status == "over":
+        warn.append(f"₹{_words(amt)} is {amt / most_amt:.1f}× what this stock's trading supports (₹{_words(most_amt)}). "
+                    f"Buying it takes {days} days at {pace * 100:g}% of a normal day; selling in a hurry could take {exit_days} days.")
+    if v["grade"] <= 2:
+        warn.append(f"Thin trading (about ₹{_words(v['dep'] * s['p'])} a day): buy slowly, never more than {pace * 100:g}% of a day.")
+    if v["erratic"]:
+        warn.append("Trading jumps around from month to month: counted at half the usual pace.")
+    if v["spike"]:
+        warn.append("Unusually heavy trading today or this week (often news): not counted — don't buy in a rush on such a day.")
+    if v["trend"] == -1:
+        warn.append("Trading has been falling for weeks: the lower, recent level is used.")
+    return {"status": status, "grade": v["grade"], "grade_word": L.GRADE_WORD[v["grade"]], "dep": v["dep"], "norm": v["norm"],
+            "value": round(v["dep"] * s["p"]), "pace": pace, "per_day": per_int, "most": math.floor(most),
+            "most_amt": round(most_amt), "days": days, "exit_days": exit_days, "share": round(share * 100, 4), "light": False,
+            "push": L.price_push(v, min(qty, per_int)), "swing": v["swing"], "trend": v["trend"], "spike": v["spike"], "erratic": v["erratic"],
+            "wk": v["wk"], "mo": v["mo"], "warn": warn}
+
+
+def _volume_summary(picks, amount, o, thin):
+    known = [p for p in picks if p["liq"]["status"] != "unknown"]
+    inv = sum(p["amt"] for p in picks) or 1
+    push = [p for p in known if p["liq"].get("push") is not None]
+    return {"pace": o["pace"], "pace_pct": L.PACES[o["pace"]] * 100, "build_days": L.BUILD_DAYS, "by_volume": o["by_volume"],
+            "high_share": round(sum(p["amt"] for p in known if p["liq"]["grade"] >= 4) / inv * 100, 1),
+            "days": max((p["liq"]["days"] or 1 for p in picks), default=0),
+            "fits": sum(1 for p in picks if p["liq"]["status"] == "fits"), "capped": sum(1 for p in picks if p["liq"]["status"] == "capped"),
+            "over": sum(1 for p in picks if p["liq"]["status"] == "over"), "unknown": sum(1 for p in picks if p["liq"]["status"] == "unknown"),
+            "over_amt": round(sum(p["amt"] for p in picks if p["liq"]["status"] == "over"), 2),
+            "push": round(sum(p["liq"]["push"] * p["amt"] for p in push) / sum(p["amt"] for p in push), 2) if push else None,
+            "grades": {L.GRADE_WORD[g]: round(sum(p["amt"] for p in known if p["liq"]["grade"] == g) / inv * 100, 1) for g in (5, 4, 3, 2, 1)},
+            "replaced": [{"s": sym, "most_amt": round(vc)} for sym, vc, _ in thin],
+            # every position is tiny next to its stock's trading: the app shows one short line instead of the analysis
+            "light": bool(known) and all(p["liq"].get("light") for p in known) and not any(p["liq"]["status"] == "unknown" for p in picks)}
+
+
+def buying_plan(picks):
+    """Day-by-day order to buy (owner: "exact output and a better order to proceed"): every stock gets its daily
+    share count (the pace); day 1 buys the one-day stocks in full and the first slice of each multi-day stock; the slow
+    ones continue on the following days, the longest first, best-ranked first within a day. The first PLAN_DAYS_SHOWN
+    days are listed one by one, the rest as one line."""
+    items = [{"s": p["s"], "p": p["p"], "qty": p["qty"], "rank": i, "per_day": p["liq"].get("per_day") or p["qty"]} for i, p in enumerate(picks)]
+    for x in items:
+        x["days"] = max(1, math.ceil(x["qty"] / x["per_day"]))
+    order = sorted(items, key=lambda x: (-x["days"], x["rank"]))
+    total_days = max((x["days"] for x in items), default=0)
+    bought = lambda x, d: min(x["qty"], x["per_day"] * d)                  # shares bought by the end of day d
+    days, spent = [], 0.0
+    for d in range(1, min(total_days, PLAN_DAYS_SHOWN) + 1):
+        buys = [{"s": x["s"], "qty": q, "amt": round(q * x["p"], 2), "done": bought(x, d) == x["qty"]}
+                for x in order if (q := bought(x, d) - bought(x, d - 1)) > 0]
+        spent += sum(b["amt"] for b in buys)
+        days.append({"day": d, "buys": buys, "amt": round(sum(b["amt"] for b in buys), 2), "total": round(spent, 2)})
+    more = None
+    if total_days > PLAN_DAYS_SHOWN:
+        rest = [{"s": x["s"], "qty": x["qty"] - bought(x, PLAN_DAYS_SHOWN), "per_day": x["per_day"], "days": x["days"]}
+                for x in order if x["qty"] > bought(x, PLAN_DAYS_SHOWN)]
+        more = {"from": PLAN_DAYS_SHOWN + 1, "to": total_days, "stocks": rest,
+                "amt": round(sum(r["qty"] * next(x["p"] for x in items if x["s"] == r["s"]) for r in rest), 2)}
+    return {"days": days, "more": more, "total_days": total_days,
+            "one_day": sum(1 for x in items if x["days"] <= 1), "multi_day": sum(1 for x in items if x["days"] > 1)}

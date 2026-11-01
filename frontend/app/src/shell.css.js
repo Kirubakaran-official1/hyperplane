@@ -1066,4 +1066,10 @@ footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 @media (max-width:640px){.grid2{grid-template-columns:1fr}}
 @media (max-width:640px){.m-row .dirtag{display:none}}
 @media (max-width:640px){.t-tools .search{width:100%}}
+
+/* stock detail view link (customer admin only) */
+.stock-link{all:unset;cursor:pointer;border-radius:4px;text-decoration:underline dotted color-mix(in srgb,var(--acc,#2a78d6) 55%,transparent);text-underline-offset:3px}
+.stock-link:hover{color:var(--acc,#2a78d6);text-decoration-style:solid}
+.px-name .stock-link{align-self:flex-start;max-width:100%}
+.stock-link:focus-visible{outline:2px solid var(--acc,#2a78d6);outline-offset:2px}
 `;

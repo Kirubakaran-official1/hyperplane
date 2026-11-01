@@ -1,7 +1,7 @@
 // Research view (Control Tower) — a lazily loaded application module (micro-frontend): its code and styles load
 // only when the customer opens it.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addCss } from "../core.jsx";
+import { addCss, trackAction } from "../core.jsx";
 import { BG, BG_NAME, CAT, CopyBtns, DISCLAIMER, Info, MODES, Meter, ModeWeights, MultiSelect, OverallMeter, RG_FILTER, RG_INFO, RegimeBox, RegimeTag, SIZES, Seg, StrengthBar, StrengthTag, TFS, TF_NAME, categoryOf, colorOf, combinedView, dirKey, dirTf, dirVal, fmtDT, focusDir, focusOf, groupState, groupWord, isBi, levelOf, pct, regimeMatch, regimeOf, sizeOf, strengthCls, strengthLabel, summaryOf, weightPct } from "../core.jsx";
 import { InvestmentSummary } from "./portfolio-engine.jsx";
 import { CSS } from "./research.css.js";
@@ -151,6 +151,7 @@ function IndustryPanel({ rows, tfLabel, sectors, selected, onPick }) {
 // ─── stock card ──────────────────────────────────────────────────────────────
 function StockCard({ s, data, onOpen, onClose, origin = null }) {
   useEffect(() => { const k = e => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
+  useEffect(() => { trackAction("research", "stock_card"); }, [s && s.s]);
   const asOf = data && data.as_of;
   const rows = TFS.map(([k, l, hint], i) => ({ k, l, hint, v:s.sc[i], d:dirTf(s, i), held:(s.rh || "").includes(k) }));
   const ups = rows.filter(r => r.d === 1), dns = rows.filter(r => r.d === -1);
@@ -272,6 +273,8 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
   const [f, setF] = useState(EMPTY); const [tfs, setTfs] = useState([]);
   const [q, setQ] = useState(""); const [sort, setSort] = useState("best"); const [page, setPage] = useState(0);
   const [rgf, setRgf] = useState("all");                                         // Regime filter (master data)
+  const used = useRef(false);                                 // adoption: the customer used a filter or the search
+  useEffect(() => { if (used.current) trackAction("research", "filter"); used.current = true; }, [JSON.stringify(f), tfs.join(), q, rgf]);
   const [open, setOpenRaw] = useState(null); const [trail, setTrail] = useState([]);
   const setOpen = st => { setTrail([]); setOpenRaw(st); };                       // from the list / close
   // a peer inside the card: keep only the ORIGINAL stock to go back to (owner: back = the one I picked first)

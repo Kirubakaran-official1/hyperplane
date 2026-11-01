@@ -5,6 +5,8 @@ import os
 
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+from . import adoption
+from . import permissions as perms
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://hyperplane:hyperplane@db:5432/hyperplane")
 
@@ -174,6 +176,31 @@ CREATE TABLE IF NOT EXISTS customer_history (
     built_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS customer_history_day ON customer_history (trade_date, taken_at);
+-- which strength formula built a stored past day (publish.FORMULA_VERSION); older ones are rebuilt by the worker
+ALTER TABLE customer_history ADD COLUMN IF NOT EXISTS formula INT NOT NULL DEFAULT 0;
+-- Strength evidence (owner, 2026-11-01: "check all the combinations as much as possible … store the final output"):
+-- one row per stock per collection with its full combination (per timeframe: zone trend × price place × mother candle
+-- = 90 states; full = M × Q × Y = 729,000) and the exact results, so each combination can be checked against what the
+-- price did afterwards. Admin only (the customer service has no grant). ~100 bytes a row, ~240 KB a collection.
+CREATE TABLE IF NOT EXISTS stock_states (
+    snapshot_id  BIGINT      NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    trade_date   DATE        NOT NULL,
+    taken_at     TIMESTAMPTZ NOT NULL,
+    symbol       TEXT        NOT NULL,
+    price        REAL,
+    cap          CHAR(1),                 -- L / M / S, '' = other
+    rel          CHAR(1),                 -- reliability S / M / W
+    stretched    BOOLEAN     NOT NULL DEFAULT false,
+    regime       SMALLINT,                -- long-term (monthly) regime 1 / 0 / −1
+    m_state      SMALLINT, q_state SMALLINT, y_state SMALLINT,   -- 0 … 89 = trend × 18 + place × 3 + mother candle
+    m_st         SMALLINT, q_st SMALLINT, y_st SMALLINT,         -- timeframe strengths (after the regime gate)
+    m_nr         SMALLINT, q_nr SMALLINT, y_nr SMALLINT,         -- mother candle ±n (0 = none)
+    strength     SMALLINT,                -- long-term stock strength
+    colour       SMALLINT,                -- 1 Doing well (green) · 0 · −1
+    formula      INT         NOT NULL,
+    PRIMARY KEY (snapshot_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS stock_states_symbol ON stock_states (symbol, taken_at);
 CREATE OR REPLACE FUNCTION portal_history_enabled() RETURNS boolean
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
     AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'history'), false) $$;
@@ -238,6 +265,44 @@ END $$;
 DROP TRIGGER IF EXISTS customers_default_role ON customers;
 CREATE TRIGGER customers_default_role AFTER INSERT ON customers FOR EACH ROW EXECUTE FUNCTION customers_default_role();
 REVOKE ALL ON FUNCTION customers_default_role() FROM PUBLIC;
+-- Permissions (owner, 2026-11-01: "be clear with the RBAC … ai portfolio builder - permission, display, detail view").
+-- Standard RBAC (NIST): customer → roles → permissions, each permission = application:action. "application:view"
+-- (open and use it) is the role_modules row above; app_permissions lists the EXTRA actions inside an application.
+-- A permission only works while the customer can also open its application. Restricted = owner-level (shows how the
+-- results are worked out): never allowed on the default role.
+CREATE TABLE IF NOT EXISTS app_permissions (
+    key          TEXT PRIMARY KEY,                    -- portfolio:detail
+    module       TEXT NOT NULL REFERENCES app_modules(key) ON DELETE CASCADE,
+    action       TEXT NOT NULL,                       -- detail
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    restricted   BOOLEAN NOT NULL DEFAULT false,
+    sort         INT  NOT NULL DEFAULT 0
+);
+-- rows come from the catalogue in permissions.py (sync_catalogue, every start)
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id      BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    permission   TEXT   NOT NULL REFERENCES app_permissions(key) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, permission)
+);
+-- Monthly / quarterly / yearly candles of a collection (scanner sheet "Candles": current bar + the last 12), kept out
+-- of the collection itself so the dashboard does not download them. Only the stock detail view uses them.
+CREATE TABLE IF NOT EXISTS snapshot_candles (
+    snapshot_id  BIGINT PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+    stocks       INT,
+    data_gz      BYTEA NOT NULL                       -- gzip JSON [{Symbol, M0 … M12, Q0 …, Y0 …}] each "open high low close"
+);
+-- Stock detail view (customer-admin permission *:detail): everything behind one stock's result, per collection, built
+-- with the final output (detail.py), ~1.3 KB a stock (~3 MB a collection). Kept for the last DETAIL_DAYS days (worker cleanup). The customer service may read
+-- it only for a customer whose roles hold a detail permission (row-level security, policy in _setup_portal_role).
+CREATE TABLE IF NOT EXISTS stock_detail (
+    snapshot_id  BIGINT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    symbol       TEXT   NOT NULL,                     -- '~meta' = the formula's constants for that collection
+    formula      INT    NOT NULL,
+    data_gz      BYTEA  NOT NULL,                     -- gzip JSON (rows are too small for Postgres to compress them)
+    PRIMARY KEY (snapshot_id, symbol)
+);
+ALTER TABLE stock_detail ENABLE ROW LEVEL SECURITY;
 
 -- Activity log (Admin → Activity log): one session row per customer sign-in (device = the browser's qf_dev cookie),
 -- events for customers and dashboard users, and minutes per customer-app module (heartbeat while the page is visible).
@@ -328,12 +393,21 @@ def init_db():
     with pool.connection() as c:
         c.execute("SELECT pg_advisory_xact_lock(727001)")     # api and worker start together: one at a time
         c.execute(SCHEMA)
+        c.execute(perms.SCHEMA)                                # Access manager v2: one permission model + direct grants
+        c.execute(adoption.SCHEMA)                             # Adoption report: customer × day × application, 2 years
+        adoption.backfill(c)
+        perms.sync_catalogue(c)
+        perms.migrate_v2(c)
         _seed_roles(c)
+        perms.migrate_builder_plans(c)                         # builder for every role + its Customer plan
+        perms.rename_builder_levels(c)
         _setup_portal_role(c)
 
 
 CUSTOMER_APPS = ("research", "simple", "portfolio")     # the default "Customer" plan (owner, 2026-10-27)
 BUILDER_APPS = CUSTOMER_APPS + ("builder",)             # "AI Portfolio Builder" plan: every dashboard + the builder
+CUSTOMER_ADMIN_DESC = ("Owner only: every application plus the stock detail views (zones, mother candles, regime, "
+                       "strength steps, technicals) to check the results")
 
 
 def _seed_roles(c):
@@ -345,8 +419,8 @@ def _seed_roles(c):
         rid = c.execute("INSERT INTO roles (name, description, is_default, is_system, updated_by) VALUES "
                         "('Customer', 'Standard plan: Research view, AI Mode and AI Portfolio Analyser', "
                         "NOT EXISTS (SELECT 1 FROM roles WHERE is_default), true, 'system') RETURNING id").fetchone()["id"]
-        c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, key FROM app_modules WHERE key = ANY(%s) ON CONFLICT DO NOTHING",
-                  (rid, list(CUSTOMER_APPS)))
+        c.execute("INSERT INTO role_permissions (role_id, permission) SELECT %s, key FROM app_permissions WHERE key = ANY(%s) "
+                  "ON CONFLICT DO NOTHING", (rid, [f"{k}:view" for k in CUSTOMER_APPS]))
         c.execute("INSERT INTO customer_roles (customer_id, role_id, assigned_by) "
                   "SELECT id, %s, 'default role' FROM customers c WHERE NOT EXISTS (SELECT 1 FROM customer_roles r WHERE r.customer_id = c.id)",
                   (rid,))
@@ -355,9 +429,20 @@ def _seed_roles(c):
                       "'Every customer dashboard plus the Hyperplane AI Portfolio Builder', 'system') "
                       "ON CONFLICT DO NOTHING RETURNING id").fetchone()
         if r:
-            c.execute("INSERT INTO role_modules (role_id, module) SELECT %s, key FROM app_modules WHERE key = ANY(%s) ON CONFLICT DO NOTHING",
-                      (r["id"], list(BUILDER_APPS)))
+            c.execute("INSERT INTO role_permissions (role_id, permission) SELECT %s, key FROM app_permissions WHERE key = ANY(%s) "
+                      "ON CONFLICT DO NOTHING", (r["id"], [f"{k}:view" for k in BUILDER_APPS]))
         c.execute("INSERT INTO settings (key, value) VALUES ('builder_role_seeded', 'true'::jsonb) ON CONFLICT DO NOTHING")
+    if not c.execute("SELECT 1 FROM settings WHERE key = 'customer_admin_role_seeded'").fetchone():
+        # Owner 2026-11-01: "create one more role as the customer admin to have all the apps and these additional
+        # access … don't provide this access to anyone". Every application + every restricted permission, given to
+        # nobody. A role of that name made earlier by hand is reused (its customers keep it).
+        r = c.execute("SELECT id FROM roles WHERE lower(name) = 'customer admin'").fetchone() or c.execute(
+            "INSERT INTO roles (name, description, updated_by) VALUES ('Customer Admin', %s, 'system') RETURNING id",
+            (CUSTOMER_ADMIN_DESC,)).fetchone()
+        c.execute("UPDATE roles SET description = %s WHERE id = %s AND description = ''", (CUSTOMER_ADMIN_DESC, r["id"]))
+        c.execute("INSERT INTO role_permissions (role_id, permission) SELECT %s, key FROM app_permissions "
+                  "WHERE (action = 'view' OR restricted) AND NOT retired ON CONFLICT DO NOTHING", (r["id"],))
+        c.execute("INSERT INTO settings (key, value) VALUES ('customer_admin_role_seeded', 'true'::jsonb) ON CONFLICT DO NOTHING")
 
 
 def _setup_portal_role(c):
@@ -400,13 +485,23 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("CREATE POLICY portal_history ON customer_history FOR SELECT TO {} USING (portal_history_enabled())").format(role))
     # Access manager: read-only (roles are changed in Admin only). Activity: the service records sessions, events and
     # minutes per module but can never read the log back or change who holds which role.
-    c.execute(sql.SQL("GRANT SELECT ON app_modules, roles, role_modules, customer_roles TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT ON app_modules, roles, role_modules, customer_roles, app_permissions, role_permissions, "
+                      "customer_permissions, effective_permissions TO {}").format(role))
+    # Stock detail view: readable only while the signed-in customer (hp.cid, set per transaction) holds a detail
+    # permission — a bug in the service cannot hand it to a normal customer.
+    c.execute(sql.SQL("GRANT SELECT ON stock_detail TO {}").format(role))
+    c.execute("DROP POLICY IF EXISTS portal_detail ON stock_detail")
+    c.execute(sql.SQL("CREATE POLICY portal_detail ON stock_detail FOR SELECT TO {} USING (EXISTS ("
+                      "SELECT 1 FROM effective_permissions e JOIN app_permissions p ON p.key = e.key AND p.action = 'detail' "
+                      "WHERE e.customer_id::text = current_setting('hp.cid', true)))").format(role))
     c.execute(sql.SQL("GRANT SELECT, INSERT (id, customer_id, device_id, device, user_agent, ip, last_ip) ON customer_sessions TO {}").format(role))
     c.execute(sql.SQL("GRANT UPDATE (last_seen, last_ip, ended_at, end_reason) ON customer_sessions TO {}").format(role))
     c.execute(sql.SQL("GRANT INSERT (actor_kind, actor_id, actor_name, session_id, device_id, device, ip, app, module, event, detail) "
                       "ON activity_log TO {}").format(role))
     c.execute(sql.SQL("GRANT USAGE ON SEQUENCE activity_log_id_seq TO {}").format(role))
     c.execute(sql.SQL("GRANT SELECT, INSERT (session_id, customer_id, module, day), UPDATE (last_at, minutes) ON module_usage TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, day, module, minutes, visits, actions, first_action_at), "
+                      "UPDATE (minutes, visits, actions, first_action_at) ON adoption_daily TO {}").format(role))
     # Helpdesk: only the columns a customer needs, and row-level security on top — the service sets
     # hp.cid (the signed-in customer) per transaction, and the database itself hides every other row.
     for stmt in (

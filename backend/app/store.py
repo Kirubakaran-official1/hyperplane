@@ -5,6 +5,8 @@ Each collection is stored twice:
   snapshots.data_gz   the whole workbook as gzip JSON {sheet: rows} — the dashboard reads this as-is,
                       so new sheets from the scanner show up with no database change
   snapshot_stocks     one row per stock (price, change, bias, signals, health) for fast comparisons
+The scanner's "Candles" sheet (monthly / quarterly / yearly OHLC, only for the customer-admin stock detail view) goes
+to snapshot_candles instead, so the dashboard never downloads it.
 """
 import gzip
 import json
@@ -117,6 +119,8 @@ def stock_rows(sheets):
 
 
 def save_snapshot(sheets, taken_at, source, slot=None, label=None, excel_path=None):
+    sheets = dict(sheets)
+    candles = sheets.pop("Candles", None)
     raw = json.dumps(sheets, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     gz = gzip.compress(raw, compresslevel=6)
     rows = stock_rows(sheets)
@@ -136,6 +140,9 @@ def save_snapshot(sheets, taken_at, source, slot=None, label=None, excel_path=No
                 for r in rows:
                     cp.write_row((sid, r["symbol"], r["price"], r["change_pct"], r["sector"], r["industry"], r["bias"],
                                   len(r["signals"]), r["health"], r["is_fno"], "|".join(r["signals"])))
+            if candles:
+                c.execute("INSERT INTO snapshot_candles (snapshot_id, stocks, data_gz) VALUES (%s, %s, %s)",
+                          (sid, len(candles), gzip.compress(json.dumps(candles, separators=(",", ":")).encode(), compresslevel=6)))
     return sid
 
 
