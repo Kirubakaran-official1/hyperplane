@@ -2,6 +2,48 @@
 // by every application module (never by the admin dashboard).
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+// ─── icons (design system, owner 2026-11-03): Lucide line icons (https://lucide.dev, ISC licence) — no emoji or unicode
+// glyphs as icons. currentColor; stroke per K4K: 12 px → 1 px on screen (2 units), larger → 1.5 units. Decorative unless
+// a title is given.
+const ICON_PATHS = {
+  check: <path d="M20 6 9 17l-5-5"/>,
+  x: <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
+  plus: <><path d="M5 12h14"/><path d="M12 5v14"/></>,
+  minus: <path d="M5 12h14"/>,
+  alert: <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></>,
+  info: <><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></>,
+  sparkles: <><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></>,
+  eye: <><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></>,
+  flame: <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>,
+  lock: <><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></>,
+  menu: <><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></>,
+  star: <path d="M11.53 2.3a.53.53 0 0 1 .95 0l2.31 4.68a2.12 2.12 0 0 0 1.6 1.16l5.16.76a.53.53 0 0 1 .3.9l-3.74 3.64a2.12 2.12 0 0 0-.61 1.88l.88 5.14a.53.53 0 0 1-.77.56l-4.62-2.43a2.12 2.12 0 0 0-1.97 0L6.4 21.01a.53.53 0 0 1-.77-.56l.88-5.14a2.12 2.12 0 0 0-.61-1.88L2.16 9.8a.53.53 0 0 1 .3-.9l5.16-.76a2.12 2.12 0 0 0 1.6-1.16z"/>,
+  bulb: <><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></>,
+  bell: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
+  factory: <><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1"/><path d="M12 18h1"/><path d="M7 18h1"/></>,
+  layers: <><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></>,
+  table: <><path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/></>,
+  copy: <><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></>,
+  bubble: <><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/></>,
+  list: <><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/></>,
+  half: <><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor"/></>,
+  diamond: <path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z"/>,
+  chart: <><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></>,
+  percent: <><path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></>,
+  search: <><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></>,
+  help: <><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></>,
+};
+export function Icon({ name, size = 16, className = "", title }) {
+  return (
+    <svg className={`ic ${className}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={size <= 12 ? 2 : 1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden={title ? undefined : "true"}
+      role={title ? "img" : undefined} aria-label={title}>{ICON_PATHS[name]}</svg>);
+}
+// the "Hyperplane AI" mark (our purple) — beside AI-written content
+export const AiSpark = ({ size = 12 }) => <span className="ai-spark" aria-hidden="true"><Icon name="sparkles" size={size}/></span>;
+// a verdict's icon by its tone (combinedView): the colour comes from the tone, the word carries the meaning
+export const TONE_ICON = { good: "check", warn: "alert", bad: "x", watch: "eye", mid: "half" };
+
 // ─── vocabulary ──────────────────────────────────────────────────────────────
 export const TFS = [["D","Daily","short term"],["W","Weekly","weeks"],["M","Monthly","months"],["Q","Quarterly","quarters"],["Y","Yearly","long term"]];
 export const TF_NAME = { A:"Combined", ...Object.fromEntries(TFS.map(([k,l]) => [k,l])) };
@@ -95,17 +137,17 @@ export function combinedView(od, bi, sec, ind, os = null, stretched = false) {
   const weak = gs.filter(([, st]) => st === "down").map(([n]) => n), strong = gs.length > 0 && gs.every(([, st]) => st === "up");
   const which = weak.join(" and ");
   let v;
-  if (od === 1 && stretched) v = ["warn", "⚠ Overheated — don't chase", "The stock has run up 3x or more in about a year. Even if the trend looks strong, prices this stretched often fall back sharply — wait for it to cool down and build a base."];
-  else if (od === 1 && strong && os != null && Math.round(Math.abs(os)) <= 60) v = ["watch", "👁 Watch — stock still building", "Its sector and industry are strong, but the stock's own trend is only average. Keep it on your watch list and act when it turns strong."];
-  else if (od === 1) v = strong ? ["good", "✓ Best case — with the tide", "Strong stock in a strong industry and a strong sector. Everything points the same way."]
-    : weak.length ? ["warn", "⚠ Careful — against its group", `The stock is strong, but its ${which} ${weak.length > 1 ? "are" : "is"} weak. It is moving against its own group — avoid or wait (golden rule 2).`]
-    : ["mid", "◐ Okay — group is only average", "The stock is strong, but its group is only average. Candidates in stronger sectors / industries are better."];
-  else if (od === -1) v = strong ? ["watch", "👁 Watch only — a laggard", "A weak stock inside a strong group. It may catch up later — or keep lagging. Not a buy yet."]
-    : ["bad", "✕ Avoid for buying", weak.length ? `A weak stock in a weak ${which}. Nothing is supporting it.` : "The stock is in a downtrend and its group is not helping."];
-  else if (od === 0) v = ["mid", "◆ No edge yet", strong ? "No clear trend yet, but its group is strong — watch for the stock to pick a direction." : "No clear trend in the stock — there are better candidates."];
+  if (od === 1 && stretched) v = ["warn", "Overheated — don't chase", "The stock has run up 3x or more in about a year. Even if the trend looks strong, prices this stretched often fall back sharply — wait for it to cool down and build a base."];
+  else if (od === 1 && strong && os != null && Math.round(Math.abs(os)) <= 60) v = ["watch", "Watch — stock still building", "Its sector and industry are strong, but the stock's own trend is only average. Keep it on your watch list and act when it turns strong."];
+  else if (od === 1) v = strong ? ["good", "Best case — with the tide", "Strong stock in a strong industry and a strong sector. Everything points the same way."]
+    : weak.length ? ["warn", "Careful — against its group", `The stock is strong, but its ${which} ${weak.length > 1 ? "are" : "is"} weak. It is moving against its own group — avoid or wait (golden rule 2).`]
+    : ["mid", "Okay — group is only average", "The stock is strong, but its group is only average. Candidates in stronger sectors / industries are better."];
+  else if (od === -1) v = strong ? ["watch", "Watch only — a laggard", "A weak stock inside a strong group. It may catch up later — or keep lagging. Not a buy yet."]
+    : ["bad", "Avoid for buying", weak.length ? `A weak stock in a weak ${which}. Nothing is supporting it.` : "The stock is in a downtrend and its group is not helping."];
+  else if (od === 0) v = ["mid", "No edge yet", strong ? "No clear trend yet, but its group is strong — watch for the stock to pick a direction." : "No clear trend in the stock — there are better candidates."];
   else return null;
-  if (bi && v[0] === "good") v = ["mid", "◐ Good group, mixed timeframes", "Its sector and industry are strong, but the stock's timeframes disagree — wait for them to line up (golden rule 3)."];
-  return { tone: v[0], title: v[1], text: v[2] };
+  if (bi && v[0] === "good") v = ["mid", "Good group, mixed timeframes", "Its sector and industry are strong, but the stock's timeframes disagree — wait for them to line up (golden rule 3)."];
+  return { tone: v[0], title: v[1], text: v[2], icon: TONE_ICON[v[0]] };
 }
 
 // ─── Regime analyser (owner, 2026-10-31: "without the trend nothing is great") ───
@@ -297,14 +339,14 @@ export function CopyBtns({ syms, compact }) {
   const go = async kind => { if (await copyText(kind === "tv" ? syms.map(s => `NSE:${s},`).join("") : syms.join(","))) { setDone(kind); setTimeout(() => setDone(""), 1300); } };
   return (
     <span className="copybtns" onClick={e => e.stopPropagation()}>
-      <button className="cbtn" onClick={() => go("plain")} title="Copy as A,B,C">{done === "plain" ? "✓" : compact ? "⎘" : "⎘ Copy"}</button>
-      <button className="cbtn tv" onClick={() => go("tv")} title="Copy for a TradingView watchlist (NSE:A,NSE:B,)">{done === "tv" ? "✓" : "TV"}</button>
+      <button className="cbtn" onClick={() => go("plain")} title="Copy as A,B,C">{done === "plain" ? <Icon name="check" size={12}/> : compact ? <Icon name="copy" size={12}/> : <><Icon name="copy" size={12}/> Copy</>}</button>
+      <button className="cbtn tv" onClick={() => go("tv")} title="Copy for a TradingView watchlist (NSE:A,NSE:B,)">{done === "tv" ? <Icon name="check" size={12}/> : "TV"}</button>
     </span>
   );
 }
 
 export function Info({ text, right, wide, label, above }) {
-  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} aria-label={label || (typeof text === "string" ? text : "More info")}>i<span className={`info-pop ${right ? "r" : ""} ${wide ? "wide" : ""} ${above ? "above" : ""}`}>{text}</span></span>;
+  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} aria-label={label || (typeof text === "string" ? text : "More info")}><Icon name="info" size={14}/><span className={`info-pop ${right ? "r" : ""} ${wide ? "wide" : ""} ${above ? "above" : ""}`}>{text}</span></span>;
 }
 
 // Trading-mode ⓘ: how much each timeframe counts in each mode (the active one highlighted, top weights in bold)
@@ -428,9 +470,9 @@ export function StockSearch({ stocks, onPick, autoFocus, onClear = null, placeho
   const pick = x => { onPick(x.s); setQ(""); if (!keepOpen) setOpen(false); };
   return (
     <div className={`sv-search ${onClear ? "has-x" : ""}`} ref={ref}>
-      <span className="sv-mag" aria-hidden="true">⌕</span>
-      {onClear && <button type="button" className="sv-x" onClick={onClear} title="Clear this stock and search again" aria-label="Clear this stock">✕</button>}
-      <span className="sv-qai" title="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."><span className="ai-spark">✦</span>Hyperplane AI</span>
+      <span className="sv-mag" aria-hidden="true"><Icon name="search" size={16}/></span>
+      {onClear && <button type="button" className="sv-x" onClick={onClear} title="Clear this stock and search again" aria-label="Clear this stock"><Icon name="x" size={16}/></button>}
+      <span className="sv-qai" title="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."><AiSpark/>Hyperplane AI</span>
       <input value={q} autoFocus={autoFocus} placeholder={placeholder || "Ask Hyperplane AI — type a company name or ticker (e.g. Tata, INFY)"} aria-label="Search a stock"
         onChange={e => { setQ(e.target.value); setHi(0); setOpen(true); }} onFocus={() => setOpen(true)}
         onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setHi(i => Math.min(i + 1, found.length - 1)); }
@@ -441,7 +483,7 @@ export function StockSearch({ stocks, onPick, autoFocus, onClear = null, placeho
         <div className="sv-drop" role="listbox">
           {found.length ? found.map((x, i) => (
             <button key={x.s} type="button" role="option" aria-selected={i === hi} className={i === hi ? "on" : ""} onMouseEnter={() => setHi(i)} onClick={() => pick(x)}>
-              <b className="mono">{x.s}</b><span className="sv-dn">{x.n}</span><span className="sv-ds">{added && added.has(x.s) ? <span className="pf-added">✓ added</span> : x.sec}</span>
+              <b className="mono">{x.s}</b><span className="sv-dn">{x.n}</span><span className="sv-ds">{added && added.has(x.s) ? <span className="pf-added"><Icon name="check" size={12}/> added</span> : x.sec}</span>
             </button>)) : <div className="sv-none">No stock found for “{q}”.</div>}
         </div>
       )}

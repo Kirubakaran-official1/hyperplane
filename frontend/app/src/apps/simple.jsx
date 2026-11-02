@@ -1,6 +1,6 @@
 // Simplified view (AI Mode) — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addCss, trackAction } from "../core.jsx";
+import { AiSpark, addCss, trackAction } from "../core.jsx";
 import { CopyBtns, DivBar, Info, LEVEL, MODES, ModeWeights, OverallMeter, RELIABILITY, RegimeBox, StockSearch, aan, combinedView, dirToneOf, dirVal, fmtDT, isBi, levelOf, pct, regimeOf, signed, sizeOf, trendWordOf } from "../core.jsx";
 import { CSS } from "./simple.css.js";
 
@@ -26,16 +26,16 @@ function Stat({ label, name, sub, value, pct, d, signedBar = false, tone, word, 
 
 // combinedView title → professional wording for the Simplified view (the rule itself is unchanged)
 const PRO_VERDICT = {
-  "⚠ Overheated — don't chase": ["Overextended — avoid chasing", "The price has risen three times or more in about a year. Even with a strong trend, moves this extended often retrace; a consolidation is the safer point to consider it."],
-  "👁 Watch — stock still building": ["Watchlist — trend still developing", "Its sector and industry are strong, but the stock's own trend is only average. Worth monitoring until the stock's trend strengthens."],
-  "✓ Best case — with the tide": ["Strong set-up — fully aligned", "The stock is trending up, and both its sector and industry are Good or Strong — everything points the same way."],
-  "⚠ Careful — against its group": ["Caution — weak group backing", "The stock is trending up, but its sector or industry is Weak. A stock moving against its group carries more risk."],
-  "◐ Okay — group is only average": ["Positive — average group backing", "The stock is trending up, but its sector and industry are only Average. Stocks with Good or Strong group support are generally preferable."],
-  "👁 Watch only — a laggard": ["Laggard — weak stock in a strong group", "The group is strong, but the stock is in a downtrend. It may catch up or keep lagging; it is not a buying candidate yet."],
-  "✕ Avoid for buying": ["Unfavourable — no support", "The stock is in a downtrend and its sector and industry offer no support."],
-  "◐ Good group, mixed timeframes": ["Mixed — timeframes disagree", "Its sector and industry are strong, but the stock's short- and long-term trends point in different directions. Waiting for them to align lowers the risk."],
+  "Overheated — don't chase": ["Overextended — avoid chasing", "The price has risen three times or more in about a year. Even with a strong trend, moves this extended often retrace; a consolidation is the safer point to consider it."],
+  "Watch — stock still building": ["Watchlist — trend still developing", "Its sector and industry are strong, but the stock's own trend is only average. Worth monitoring until the stock's trend strengthens."],
+  "Best case — with the tide": ["Strong set-up — fully aligned", "The stock is trending up, and both its sector and industry are Good or Strong — everything points the same way."],
+  "Careful — against its group": ["Caution — weak group backing", "The stock is trending up, but its sector or industry is Weak. A stock moving against its group carries more risk."],
+  "Okay — group is only average": ["Positive — average group backing", "The stock is trending up, but its sector and industry are only Average. Stocks with Good or Strong group support are generally preferable."],
+  "Watch only — a laggard": ["Laggard — weak stock in a strong group", "The group is strong, but the stock is in a downtrend. It may catch up or keep lagging; it is not a buying candidate yet."],
+  "Avoid for buying": ["Unfavourable — no support", "The stock is in a downtrend and its sector and industry offer no support."],
+  "Good group, mixed timeframes": ["Mixed — timeframes disagree", "Its sector and industry are strong, but the stock's short- and long-term trends point in different directions. Waiting for them to align lowers the risk."],
 };
-const proVerdict = (view, groupStrong) => !view ? null : view.title === "◆ No edge yet"
+const proVerdict = (view, groupStrong) => !view ? null : view.title === "No edge yet"
   ? ["Neutral — no clear trend", groupStrong ? "There is no clear trend in the stock yet, although its group is strong. Wait for the stock to establish a direction." : "There is no clear trend in the stock. Better candidates are available."]
   : PRO_VERDICT[view.title] || [view.title.replace(/^[^A-Za-z]+/, ""), view.text];
 
@@ -56,7 +56,7 @@ function SimpleView({ data, mode, setMode, sym, setSym }) {
   if (!s) return (
     <div className="sv sv-empty">
       <div className="sv-hero">
-        <div className="sv-brand"><span className="ai-spark">✦</span> Hyperplane AI <span className="sv-pow">· powered by quant algorithms</span></div>
+        <div className="sv-brand"><AiSpark/> Hyperplane AI <span className="sv-pow">· powered by quant algorithms</span></div>
         <h1>Understand any stock in seconds</h1>
         <p>Type a company name or ticker. Hyperplane AI reads our quant algorithms and explains the stock's trend, its sector and industry, and its reliability — in plain language.</p>
         <StockSearch stocks={stocks} onPick={setSym} autoFocus/>
@@ -119,7 +119,7 @@ function SimpleView({ data, mode, setMode, sym, setSym }) {
           <div className="sx-price"><b>₹{s.p}</b>{s.c != null && <span className={`sx-chg ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}% today</span>}
             <span className="tcopy"><CopyBtns syms={[s.s]} compact/></span><span className="sx-meta2">{s.sec} › {s.ind} · {sizeOf(s)} cap</span></div>
           <div className={`sx-verdict ${vt}`}>
-            <div className="sx-lbl"><span className="ai-spark">✦</span> Hyperplane AI summary <Info text="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."/></div>
+            <div className="sx-lbl"><AiSpark/> Hyperplane AI summary <Info text="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."/></div>
             <div className="sx-vtitle">{title}</div>
             <p>{parts.join(" ")}</p>
           </div>

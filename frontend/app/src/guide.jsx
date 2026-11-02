@@ -1,6 +1,7 @@
 // Docs tab of the customer edition (file kept as guide.jsx): how to use Hyperplane and how to think with it, in plain words.
 // It explains what every part MEANS — never how anything is calculated (the method stays private).
 import React, { useEffect, useRef, useState } from "react";
+import { Icon } from "./core.jsx";
 import { addCss } from "./core.jsx";
 
 const Bars = ({ v, d = "up" }) => {
@@ -9,7 +10,7 @@ const Bars = ({ v, d = "up" }) => {
 };
 const Tag = ({ k, children }) => <span className={`dirtag ${k}`}>{children}</span>;
 const Tip = ({ kind = "tip", title, children }) => (
-  <div className={`g-note ${kind}`}><div className="g-note-t">{kind === "rule" ? "★ " : kind === "warn" ? "⚠ " : "💡 "}{title}</div><div>{children}</div></div>
+  <div className={`g-note ${kind}`}><div className="g-note-t"><Icon name={kind === "rule" ? "star" : kind === "warn" ? "alert" : "bulb"} size={14}/> {title}</div><div>{children}</div></div>
 );
 
 function Quadrants() {
@@ -34,15 +35,15 @@ const ALL_SECTIONS = [
       stock, and also for every <b>sector</b> and <b>industry</b>. It helps you find good candidates quickly and avoid weak ones.</p>
     <p><b>The side menu on the left</b> lists the applications on your plan — <b>Research view</b> (the Control Tower: filters, summary
       tiles, sector and industry charts and the full stock list), <b>Simplified view (AI Mode)</b> and <b>AI Portfolio Analyser</b> — and,
-      below them, <b>Docs</b> and <b>Helpdesk</b>. It starts narrow — each icon with its name underneath. Press <b>☰</b> at the top of the
+      below them, <b>Docs</b> and <b>Helpdesk</b>. It starts narrow — each icon with its name underneath. Press <b><Icon name="menu" size={14} title="menu"/></b> at the top of the
       menu to open it wider, and <b>«</b> to make it narrow again. Your choice is remembered on this device. The menu shows up to
       <b> 6 pinned apps</b>; <b>More apps</b> at the bottom lists every app on your plan — search them, open one, or press the pin to put it
-      in the menu (or take it out). Your pins are saved to your account. On a phone, tap <b>☰</b> (top left) to open
+      in the menu (or take it out). Your pins are saved to your account. On a phone, tap <b><Icon name="menu" size={14} title="menu"/></b> (top left) to open
       the menu. If an application is missing from your menu, it is not part of your plan — ask us in the Helpdesk. The menu under
       <b> your name</b> (top right) has:</p>
     <ul>
       <li><b>Account</b> — your details, your plan, its applications and how long your access lasts.</li>
-      <li><b>Helpdesk</b> — ask us anything; our replies arrive there and on the 🔔 bell.</li>
+      <li><b>Helpdesk</b> — ask us anything; our replies arrive there and on the <Icon name="bell" size={14}/> bell.</li>
       <li><b>Docs</b> — this page. Sections <b className="g-gold">9</b> and <b className="g-gold">10</b> are a must-read.</li>
       <li><b>Appearance</b> — switch between the dark and the light screen. Your choice is remembered on this device.</li>
       <li><b>Sign out</b>.</li>
@@ -73,7 +74,6 @@ const ALL_SECTIONS = [
       <div><Tag k="up">▲ Uptrend</Tag><span>Price is moving up on that timeframe.</span></div>
       <div><Tag k="down">▼ Downtrend</Tag><span>Price is moving down on that timeframe.</span></div>
       <div><Tag k="side">◆ Sideways</Tag><span>No clear direction — price is going nowhere. There is no edge here.</span></div>
-      <div><Tag k="bi">⇅ Bidirectional</Tag><span>Up on some timeframes and down on others. The picture is mixed — be careful.</span></div>
     </div>
     <h3>Trend strength — how strong and clean that trend is (0–100%)</h3>
     <p>Shown as a bar meter: more bars lit = stronger trend. Green = uptrend strength, red = downtrend strength, grey = sideways.</p>
@@ -117,8 +117,8 @@ const ALL_SECTIONS = [
     <p>How healthy the stock's longer-term price history is. <b>Strong</b> = healthy, <b>Moderate</b> = the price is more than
       50% below its highest level, or lower than 5 years ago, <b>Weak</b> = more than 70% below its highest level (a huge fall,
       e.g. Vodafone Idea). Prefer <b>Strong</b>.</p>
-    <p><b>🔥 Stretched</b> — the stock has run up <b>3× or more in about a year</b> (for example ₹100 → ₹1,000). A big winner,
-      but prices this stretched often fall back sharply. It is shown with a 🔥 and is never called a “best case” —
+    <p><b><Icon name="flame" size={14}/> Stretched</b> — the stock has run up <b>3× or more in about a year</b> (for example ₹100 → ₹1,000). A big winner,
+      but prices this stretched often fall back sharply. It is shown with a <Icon name="flame" size={14} title="flame"/> and is never called a “best case” —
       <b>don't chase it</b>; wait for it to cool down.</p>
     <h3>Sector and industry</h3>
     <p>A <b>sector</b> is a big group (for example Bank, IT, Healthcare). An <b>industry</b> is a smaller group inside it
@@ -143,12 +143,12 @@ const ALL_SECTIONS = [
           switches off; clear the timeframes to go back to it.</td></tr>
       <tr><td><b>Timeframe · several</b><span className="g-sub">e.g. D + W</span></td>
         <td>Pick more than one. A stock counts as an uptrend <b>only if it is up on all of them</b> — a stricter check.</td></tr>
-      <tr><td><b>Trend</b></td><td>All, ▲ Up, ▼ Down, ◆ Sideways or ⇅ Bidirectional on the chosen timeframe(s). Up / Down also sorts the list for you.</td></tr>
+      <tr><td><b>Trend</b></td><td>All, ▲ Up, ▼ Down or ◆ Sideways on the chosen timeframe(s). Up / Down also sorts the list for you.</td></tr>
       <tr><td><b>Market cap</b></td><td>Large, Mid, Small, Others — pick one or more.</td></tr>
       <tr><td><b>Stock reliability</b></td><td>Strong, Moderate, Weak — pick one or more.</td></tr>
       <tr><td><b>Segment</b></td><td>F&amp;O only — just stocks that trade in futures &amp; options.</td></tr>
       <tr><td><b>Sector / Industry</b></td><td>Pick one or more from the list (or click bubbles in the charts). Removing a sector also removes its industries.</td></tr>
-      <tr><td><b>✕ Reset</b></td><td>Clears every filter at once.</td></tr>
+      <tr><td><b><Icon name="x" size={14}/> Reset</b></td><td>Clears every filter at once.</td></tr>
     </tbody></table>
     <h3>How much each timeframe counts in each style</h3>
     <table className="g-table g-weights"><thead><tr><th>Style</th><th>D</th><th>W</th><th>M</th><th>Q</th><th>Y</th><th>Best for</th></tr></thead><tbody>
@@ -162,7 +162,7 @@ const ALL_SECTIONS = [
   { id: "tiles", t: "Summary tiles", body: <>
     <ul>
       <li><b>Stocks in view</b> — how many stocks match your filters.</li>
-      <li><b>▲ Uptrend / ▼ Downtrend / ◆ Sideways / ⇅ Bidirectional</b> — how many of them are in each state (each stock is counted once). The thin bar shows the share.
+      <li><b>▲ Uptrend / ▼ Downtrend / ◆ Sideways</b> — how many of them are in each state (each stock is counted once). The thin bar shows the share.
         This is the <b>market mood</b>: many more uptrends than downtrends = a supportive market.</li>
       <li><b>Strongest / Weakest sector</b> — the sector at the top and at the bottom of the strength ranking.</li>
     </ul>
@@ -192,7 +192,7 @@ const ALL_SECTIONS = [
       <tr><td><b>Stock</b></td><td>Symbol and name. <span className="fno">F&amp;O</span> = trades in F&amp;O. <b>⇅</b> = timeframes disagree.</td></tr>
       <tr><td><b>Sector · Industry</b></td><td>The groups the stock belongs to.</td></tr>
       <tr><td><b>Price</b></td><td>Last price and today's change in %. <b>This</b> is the price move.</td></tr>
-      <tr><td><b>Trend</b></td><td>Uptrend, Downtrend, Sideways or Bidirectional for the timeframe(s) you picked.</td></tr>
+      <tr><td><b>Trend</b></td><td>Uptrend, Downtrend or Sideways for the timeframe(s) you picked.</td></tr>
       <tr><td><b>Trend strength</b></td><td>How strong that trend is, 0–100%, with a bar.</td></tr>
       <tr><td><b>Trend strength by timeframe</b></td><td>One meter per timeframe, Daily to Yearly — see at a glance where the stock is strong.</td></tr>
       <tr><td><b>Ticker copy</b></td><td><b>⎘</b> copies the symbol, <b>TV</b> copies it in TradingView format.</td></tr>
@@ -213,11 +213,11 @@ const ALL_SECTIONS = [
       <li><b>Overall trend</b> — the same meter as in the Simplified view: the stock (50%), its sector (25%) and its industry (25%)
         combined into one needle, with the number below the dial (e.g. “38% · Average uptrend”) and the three inputs underneath.
         On the downtrend side the number is red with a minus, e.g. “−24%”. Next to it: the <b>Direction</b> (one-directional up /
-        down, or bidirectional), the verdict and a one-line summary of the stock.</li>
+        down, or sideways), the verdict and a one-line summary of the stock.</li>
       <li><b>AI insights</b> — the stock, its <b>sector</b> and its <b>industry</b> read together, three short lines
         (<b>Good</b> · <b>Watch out</b> · <b>Focus</b>) and a verdict:
-        <b> ✓ Best case</b> (all three strong), <b>⚠ Careful</b> (strong stock, weak group), <b>◐ Okay</b> (group only average),
-        <b> 👁 Watch</b> (strong group, but the stock is weak or only average) or <b>✕ Avoid for buying</b>. Sector and industry use the same
+         <b><Icon name="check" size={14}/> Best case</b> (all three strong), <b><Icon name="alert" size={14}/> Careful</b> (strong stock, weak group), <b><Icon name="half" size={14}/> Okay</b> (group only average),
+         <b><Icon name="eye" size={14}/> Watch</b> (strong group, but the stock is weak or only average) or <b><Icon name="x" size={14}/> Avoid for buying</b>. Sector and industry use the same
         words on their strength: <b>Weak</b> 0–30% · <b>Average</b> 31–60% · <b>Good</b> 61–80% · <b>Strong</b> 81–100%. A group backs the stock
         when it is Good or Strong, and counts against it when it is Weak.</li>
       <li><b>Timeframe rows</b> — Daily to Yearly, each with a bar, “xx% strength” and Uptrend / Downtrend / Sideways.</li>
@@ -242,14 +242,14 @@ const ALL_SECTIONS = [
       <tr><td><Tag k="down">Weak</Tag></td><td><Tag k="down">Weak</Tag></td><td><b>Avoid</b> for buying.</td></tr>
     </tbody></table>
     <Tip kind="rule" title="3 · Let the timeframes agree">The best trends are up on your timeframe <b>and</b> on the bigger ones. Up on Daily
-      but down on Monthly / Yearly is often just a bounce inside a downtrend. <b>Bidirectional</b> = the timeframes disagree — wait for them to line up.</Tip>
+      but down on Monthly / Yearly is often just a bounce inside a downtrend. When they disagree, wait for them to line up.</Tip>
     <Tip kind="rule" title="4 · Use the timeframe that matches how long you hold">Short-term trades → Daily and Weekly. Swing → Weekly and
       Monthly. Investing → Monthly, Quarterly and Yearly.</Tip>
     <Tip kind="rule" title="5 · Prefer Strong reliability">Weak-reliability stocks can gap and swing wildly even in a good trend.</Tip>
     <Tip kind="rule" title="6 · Sideways means no edge">If the trend is sideways on your timeframe, skip it — there are better candidates.</Tip>
     <Tip kind="rule" title="7 · Respect the market mood">When downtrends far outnumber uptrends in the tiles, be pickier and trade smaller.</Tip>
     <Tip kind="rule" title="8 · Strength is not a target — don't chase">A very strong trend is a reason to look, not a reason to buy at any price.
-      A stock marked <b>🔥 Stretched</b> (3× or more in a year) can fall sharply at any time. Plan your entry on the chart.</Tip>
+      A stock marked <b><Icon name="flame" size={14}/> Stretched</b> (3× or more in a year) can fall sharply at any time. Plan your entry on the chart.</Tip>
     <Tip kind="rule" title="9 · Always manage risk">Decide your stop-loss and position size before you enter. Hyperplane shows where the strength
       is — your plan protects your capital.</Tip>
   </> },
@@ -267,7 +267,7 @@ const ALL_SECTIONS = [
     <ol className="g-steps">
       <li>Trading mode: <b>Investing</b>. Trend: <b>▲ Up</b>. Market cap: <b>Large</b> and <b>Mid</b>. Reliability: <b>Strong</b>.</li>
       <li>Use the <b>Investing</b> mode in the Trading mode filter — it gives Quarterly and Yearly the most weight.</li>
-      <li>Shortlist stocks that are not <b>⇅ Bidirectional</b>, then study the businesses.</li>
+      <li>Shortlist stocks that are <b>One-directional up</b>, then study the businesses.</li>
     </ol>
     <h3>Spotting what to avoid</h3>
     <ul>
@@ -421,7 +421,7 @@ const ALL_SECTIONS = [
       <li>Write a short <b>Subject</b> and choose a <b>Severity</b>: <b>High</b> = something is broken or blocking you,
         <b> Medium</b> = something is not working as expected, <b>Low</b> = a question or a suggestion.</li>
       <li>Describe the issue. You can <b>paste or drop screenshots</b> right into the text (images only — other files are not allowed).</li>
-      <li>Press <b>Send</b>. Our replies appear in the conversation, with a red number on the <b>🔔 bell</b> and a red dot on your name. Click the bell to jump straight to the reply.</li>
+      <li>Press <b>Send</b>. Our replies appear in the conversation, with a red number on the <b><Icon name="bell" size={14}/> bell</b> and a red dot on your name. Click the bell to jump straight to the reply.</li>
       <li>When your question is solved, press <b>Close query</b>. Need more help later? Just raise a new one.</li>
     </ol>
   </> },
@@ -468,7 +468,7 @@ export default function Guide({ disclaimer, apps = null }) {
         </header>
         {SECTIONS.map((s, i) => (
           <section key={s.id} id={`g-${s.id}`} ref={el => { refs.current[s.id] = el; }} className={`g-sec ${s.must ? "must" : ""}`}>
-            <h2><span>{i + 1}</span>{s.t}{s.must && <em className="g-must">★ Must read</em>}</h2>
+            <h2><span>{i + 1}</span>{s.t}{s.must && <em className="g-must"><Icon name="star" size={12}/> Must read</em>}</h2>
             {s.body}
           </section>
         ))}
@@ -480,48 +480,48 @@ export default function Guide({ disclaimer, apps = null }) {
 
 export const GUIDE_CSS = `
 .guide{display:grid;grid-template-columns:230px minmax(0,1fr);gap:22px;margin-top:16px;align-items:start}
-.g-toc{position:sticky;top:12px;display:flex;flex-direction:column;gap:2px;background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:12px}
-.g-toc-t{font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:700;color:var(--t3);padding:2px 8px 8px}
-.g-toc button{display:flex;align-items:center;gap:9px;text-align:left;padding:7px 8px;border:0;border-radius:7px;background:none;color:var(--t2);font-size:12.5px;font-weight:600}
-.g-toc button span{width:20px;height:20px;border-radius:6px;background:var(--s2);border:1px solid var(--b2);font:700 10.5px/18px var(--mono);text-align:center;flex-shrink:0}
-.g-toc button:hover{color:var(--t1);background:var(--s2)}.g-toc button.on{color:var(--acc);background:var(--adim)}.g-toc button.on span{border-color:var(--acc);color:var(--acc)}
-.g-toc button.must span,.g-sec.must h2 span{border:1.5px solid #f5b301;color:#f5b301;background:rgba(245,179,1,.12);box-shadow:0 0 0 2px rgba(245,179,1,.12)}
-.g-toc button.must{color:var(--t1)}.g-sec.must{border-color:rgba(245,179,1,.45);box-shadow:inset 3px 0 0 #f5b301}
-.g-must{margin-left:auto;font:700 10.5px var(--sans);font-style:normal;letter-spacing:.6px;text-transform:uppercase;color:#f5b301;border:1px solid rgba(245,179,1,.5);background:rgba(245,179,1,.1);padding:2px 9px;border-radius:999px}
-.g-gold{display:inline-block;min-width:20px;text-align:center;border:1.5px solid #f5b301;color:#f5b301;border-radius:6px;font:700 11px/17px var(--mono)}
+.g-toc{position:sticky;top:12px;display:flex;flex-direction:column;gap:2px;background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:12px}
+.g-toc-t{font:600 10px/16px var(--sans);text-transform:uppercase;letter-spacing:.6px;color:var(--t2);padding:2px 8px 8px}
+.g-toc button{display:flex;align-items:center;gap:8px;text-align:left;padding:8px;border:0;border-radius:4px;background:none;color:var(--t2);font:500 13px/16px var(--sans)}
+.g-toc button span{width:20px;height:20px;border-radius:4px;background:var(--s2);border:1px solid var(--b2);font:600 11px/18px var(--sans);text-align:center;flex-shrink:0}
+.g-toc button:hover{color:var(--t1);background:var(--s2)}.g-toc button.on{color:var(--acc);background:var(--adim);font-weight:600}.g-toc button.on span{border-color:var(--acc);color:var(--acc)}
+.g-toc button.must span,.g-sec.must h2 span{border:1px solid var(--mixed);color:var(--mixed);background:var(--mixedd)}
+.g-toc button.must{color:var(--t1)}.g-sec.must{box-shadow:inset 3px 0 0 var(--mixed)}
+.g-must{margin-left:auto;display:inline-flex;align-items:center;gap:4px;height:24px;font:500 11px/16px var(--sans);font-style:normal;color:var(--mixed);background:var(--mixedd);padding:0 8px;border-radius:999px}
+.g-gold{display:inline-block;min-width:20px;text-align:center;border:1px solid var(--mixed);color:var(--mixed);border-radius:4px;font:600 11px/18px var(--sans)}
 .g-body{min-width:0;display:flex;flex-direction:column;gap:14px}
-.g-hero{padding:22px 24px;border-radius:12px;border:1px solid var(--b1);background:linear-gradient(135deg,rgba(0,229,255,.08),rgba(99,102,241,.06) 60%,transparent)}
-.g-hero-k{font:700 10.5px var(--mono);letter-spacing:1.5px;text-transform:uppercase;color:var(--acc)}
-.g-hero h1{margin:6px 0 4px;font-size:22px;line-height:1.25;color:var(--t1)}.g-hero p{margin:0;color:var(--t2);font-size:13.5px}
-.g-sec{background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:18px 22px;scroll-margin-top:12px;font-size:13.5px;line-height:1.7;color:var(--t1)}
-.g-sec h2{display:flex;align-items:center;gap:10px;margin:0 0 10px;font-size:17px}
-.g-sec h2 span{width:26px;height:26px;border-radius:8px;background:var(--adim);border:1px solid var(--accb);color:var(--acc);font:700 12px/24px var(--mono);text-align:center}
-.g-sec h3{margin:16px 0 6px;font-size:13.5px;color:var(--acc)}
+.g-hero{padding:24px;border-radius:8px;border:1px solid var(--b1);background:var(--s1);box-shadow:inset 3px 0 0 var(--acc)}
+.g-hero-k{font:600 10px/16px var(--sans);letter-spacing:.6px;text-transform:uppercase;color:var(--acc)}
+.g-hero h1{margin:4px 0;font:600 20px/28px var(--sans);letter-spacing:-.01em;color:var(--t1)}.g-hero p{margin:0;color:var(--t2);font-size:13px;line-height:20px}
+.g-sec{background:var(--s1);border:1px solid var(--b1);border-radius:8px;padding:20px 24px;scroll-margin-top:12px;font-size:13px;line-height:22px;color:var(--t1)}
+.g-sec h2{display:flex;align-items:center;gap:10px;margin:0 0 12px;font:600 18px/24px var(--sans);letter-spacing:-.01em}
+.g-sec h2 span{width:24px;height:24px;border-radius:6px;background:var(--adim);border:1px solid var(--accb);color:var(--acc);font:600 12px/22px var(--sans);text-align:center}
+.g-sec h3{margin:16px 0 4px;font:600 14px/20px var(--sans);color:var(--acc)}
 .g-sec p{margin:0 0 8px}.g-sec ul,.g-sec ol{margin:0 0 8px;padding-left:20px}.g-sec li{margin-bottom:5px}
 .g-sec code{font:12px var(--mono);background:var(--s2);border:1px solid var(--b2);border-radius:4px;padding:0 5px}
 .g-sec .dirtag{margin:0 3px;vertical-align:middle}
 .g-steps{counter-reset:s;list-style:none;padding-left:0!important}.g-steps li{counter-increment:s;position:relative;padding-left:36px;margin-bottom:9px}
-.g-steps li:before{content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;border-radius:50%;background:var(--acc);color:var(--on-acc);font:700 12px/24px var(--mono);text-align:center}
+.g-steps li:before{content:counter(s);position:absolute;left:0;top:-1px;width:24px;height:24px;border-radius:50%;background:var(--ds-action-bg);color:var(--on-acc);font:600 12px/24px var(--sans);text-align:center}
 .g-defs{display:flex;flex-direction:column;gap:8px;margin:6px 0 10px}.g-defs>div{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:center}
 .g-table{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:13px}.g-table td,.g-table th{padding:8px 10px;border-bottom:1px solid var(--b1);vertical-align:top;text-align:left}
-.g-table td:first-child{width:190px;white-space:nowrap}.g-table th{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--t3)}
+.g-table td:first-child{width:190px;white-space:nowrap}.g-table th{position:static;height:40px;font:700 12px/16px var(--sans);text-transform:uppercase;letter-spacing:.4px;color:var(--t2);background:var(--s2)}
 .g-matrix td:first-child,.g-matrix td:nth-child(2){width:130px}
-.g-sub{display:block;font-size:11px;font-weight:500;color:var(--t3);margin-top:2px}
+.g-sub{display:block;font-size:11px;font-weight:400;color:var(--t2);margin-top:2px}
 .g-weights td,.g-weights th{text-align:center}.g-weights td:first-child,.g-weights th:first-child,.g-weights td:last-child,.g-weights th:last-child{text-align:left}
-.g-weights td:first-child{width:110px}.g-weights td.hi{color:var(--acc);font-weight:700;background:var(--adim)}
-.g-note{border:1px solid var(--b2);border-left:3px solid var(--acc);border-radius:9px;padding:10px 14px;margin:10px 0;background:var(--s2)}
-.g-note-t{font-weight:700;margin-bottom:2px;color:var(--t1)}.g-note.warn{border-left-color:var(--mixed)}.g-note.rule{border-left-color:var(--long)}
+.g-weights td:first-child{width:110px}.g-weights td.hi{color:var(--acc);font-weight:600;background:var(--adim)}
+.g-note{border:1px solid var(--b2);border-left:3px solid var(--acc);border-radius:8px;padding:10px 14px;margin:10px 0;background:var(--s2)}
+.g-note-t{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:2px;color:var(--t1)}.g-note.warn{border-left-color:var(--mixed)}.g-note.rule{border-left-color:var(--long)}
 .g-quad{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;gap:6px 8px;margin:12px 0}
-.g-quad-y{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;color:var(--t3);text-align:center}
-.g-quad-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.g-quad-x{grid-column:2;text-align:center;font-size:11px;color:var(--t3)}
-.g-q{border-radius:9px;padding:10px 12px;border:1px solid var(--b2);display:flex;flex-direction:column;gap:3px;font-size:12.5px;line-height:1.5}
-.g-q b{font-size:12px;text-transform:uppercase;letter-spacing:.6px}.g-q span{color:var(--t2)}
-.q-good{background:var(--longd);border-color:rgba(0,200,150,.4)}.q-good b{color:var(--long)}
-.q-sb{background:var(--mixedd);border-color:rgba(255,170,0,.35)}.q-sb b{color:var(--mixed)}
-.q-bad{background:var(--shortd);border-color:rgba(255,68,84,.35)}.q-bad b{color:var(--short)}
-.q-wb{background:rgba(162,89,255,.08);border-color:rgba(162,89,255,.35)}.q-wb b{color:#a259ff}
-.g-faq dt{font-weight:700;margin-top:10px}.g-faq dd{margin:2px 0 0;color:var(--t2)}
-.g-disc p{color:var(--t2);font-size:12.5px}
+.g-quad-y{writing-mode:vertical-rl;transform:rotate(180deg);font-size:11px;color:var(--t2);text-align:center}
+.g-quad-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}.g-quad-x{grid-column:2;text-align:center;font-size:11px;color:var(--t2)}
+.g-q{border-radius:8px;padding:10px 12px;border:1px solid var(--b2);display:flex;flex-direction:column;gap:3px;font-size:12px;line-height:1.5}
+.g-q b{font:600 10px/16px var(--sans);text-transform:uppercase;letter-spacing:.6px}.g-q span{color:var(--t2)}
+.q-good{background:var(--longd);border-color:color-mix(in srgb,var(--long) 40%,transparent)}.q-good b{color:var(--long)}
+.q-sb{background:var(--mixedd);border-color:color-mix(in srgb,var(--mixed) 35%,transparent)}.q-sb b{color:var(--mixed)}
+.q-bad{background:var(--shortd);border-color:color-mix(in srgb,var(--short) 35%,transparent)}.q-bad b{color:var(--short)}
+.q-wb{background:var(--retd);border-color:color-mix(in srgb,var(--ret) 35%,transparent)}.q-wb b{color:var(--ret)}
+.g-faq dt{font-weight:600;margin-top:12px}.g-faq dd{margin:2px 0 0;color:var(--t2)}
+.g-disc p{color:var(--t2);font-size:12px}
 @media (max-width:900px){.guide{grid-template-columns:1fr}.g-toc{position:static;flex-direction:row;flex-wrap:wrap}.g-toc-t{width:100%}
   .g-defs>div{grid-template-columns:1fr;gap:4px}.g-table td:first-child{white-space:normal;width:auto}.g-sec{padding:16px}}
 `;

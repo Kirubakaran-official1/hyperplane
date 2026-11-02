@@ -252,7 +252,13 @@ def candidates(data, rel, opts=None):
         why.append(f"{REL_WORD[s['h']]} reliability")
         if ind is not None and ind >= 61:
             why.append("Strong industry")
-        out.append({"s": s, "tier": tier, "st": st, "score": round(score, 2), "why": why})
+        # the same key points, in the same order, for every stock (owner 2026-11-02: "some points are there in some
+        # stocks, some not — make it the same for all"); `why` stays for the download
+        brk = next(({"n": t[5], "unit": word} for t, word in ((y, "years"), (q, "quarters"), (m, "months")) if t and len(t) > 5 and t[5] > 0), None)
+        kp = {"st": st, "qstreak": qstreak, "qturn": bool(q[3] == 1), "qhold": bool(q[1] >= 1), "breakout": brk,
+              "regime": (None if not has_regime else "confirmed" if weekly == 1 else "changing" if weekly == -1 else "up"),
+              "rel": s["h"], "ind": round(ind) if ind is not None else None, "r3": r3}
+        out.append({"s": s, "tier": tier, "st": st, "score": round(score, 2), "why": why, "kp": kp})
     return out, skip
 
 
@@ -510,7 +516,7 @@ def build(data, amount, count, alloc, reliability, sector_max=DEFAULT_SECTOR, we
                       "qty": h["qty"], "amt": amt, "w": round(amt / amount * 100, 2), "st": h["x"]["st"],
                       "m": zv[2][2] if zv[2] else None, "q": zv[3][2] if zv[3] else None, "y": zv[4][2] if zv[4] else None,
                       "h": s["h"], "tier": h["x"]["tier"], "why": h["x"]["why"],
-                      "days": days(h), "liq": h["liq"], "ff": h["ff"]})
+                      "days": days(h), "liq": h["liq"], "ff": h["ff"], "kp": h["x"]["kp"]})
     by_cap = [{"k": c, "target": alloc[c], "amt": round(sum(p["amt"] for p in picks if p["cap"] == c), 2),
                "n": sum(1 for p in picks if p["cap"] == c)} for c in CAPS]
     by_cap.append({"k": "Cash", "target": alloc["Cash"], "amt": round(cash, 2), "n": 0})
@@ -559,7 +565,7 @@ def _liq(h, o, stock_cap, vcap):
         return {"status": status, "light": True, "grade": v["grade"], "grade_word": L.GRADE_WORD[v["grade"]], "dep": v["dep"],
                 "norm": v["norm"], "value": round(v["dep"] * s["p"]), "pace": pace, "per_day": per_int, "most": math.floor(most),
                 "most_amt": round(most_amt), "days": 1, "exit_days": 1, "share": round(share * 100, 4),
-                "push": L.price_push(v, qty), "swing": v["swing"], "trend": v["trend"], "spike": v["spike"], "erratic": v["erratic"], "wk": v["wk"], "mo": v["mo"],
+                "push": L.price_push(v, qty), "swing": v["swing"], "trend": v["trend"], "spike": v["spike"], "erratic": v["erratic"], "wk": v["wk"], "mo": v["mo"], "qt": v["qt"], "yrs": v["yrs"],
                 "warn": ["Unusually heavy trading today or this week (often news): avoid buying in a rush today."] if v["spike"] else []}
     if status == "over":
         warn.append(f"₹{_words(amt)} is {amt / most_amt:.1f}× what this stock's trading supports (₹{_words(most_amt)}). "
@@ -576,7 +582,7 @@ def _liq(h, o, stock_cap, vcap):
             "value": round(v["dep"] * s["p"]), "pace": pace, "per_day": per_int, "most": math.floor(most),
             "most_amt": round(most_amt), "days": days, "exit_days": exit_days, "share": round(share * 100, 4), "light": False,
             "push": L.price_push(v, min(qty, per_int)), "swing": v["swing"], "trend": v["trend"], "spike": v["spike"], "erratic": v["erratic"],
-            "wk": v["wk"], "mo": v["mo"], "warn": warn}
+            "wk": v["wk"], "mo": v["mo"], "qt": v["qt"], "yrs": v["yrs"], "warn": warn}
 
 
 def _float(h, o, stock_cap):

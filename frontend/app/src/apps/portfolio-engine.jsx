@@ -1,7 +1,7 @@
 // AI Portfolio engine (long-term read): shared by the AI Portfolio Analyser and the Research stock card's
 // "Long-term AI Investment Summary" — its own chunk, loaded with whichever of the two opens first.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DivBar, Info, TF_FULL, TREND_CUT, andJoin, dirTf, dirVal, regimeFull, regimeOf, signed, tc, trendWordOf } from "../core.jsx";
+import { AiSpark, DivBar, Info, TF_FULL, TREND_CUT, andJoin, dirTf, dirVal, regimeFull, regimeOf, signed, tc, trendWordOf } from "../core.jsx";
 import { addCss } from "../core.jsx";
 import { CSS } from "./engine.css.js";
 
@@ -231,7 +231,7 @@ export function InvestmentSummary({ s, data }) {
   const r = analyseHolding(s, data);
   return (
     <section className="blk inv">
-      <div className="px-aih"><span className="ai-spark">✦</span><b>Long-term</b><span>AI Investment Summary</span>
+      <div className="px-aih"><AiSpark/><b>Long-term</b><span>AI Investment Summary</span>
         <Info right text="A long-term reading by Hyperplane AI (the same engine as the AI Portfolio Analyser): the monthly, quarterly and yearly trend of this stock and how long each has lasted. It uses a different formula from the Research view's strength above, which also looks at daily and weekly signals. Information, not advice."/></div>
       <ul className="px-why">{r.why.map((w, i) => <li key={i}>{w}</li>)}</ul>
     </section>

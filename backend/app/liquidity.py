@@ -113,19 +113,24 @@ def analyse(m, price, atr, day):
             "grade": grade, "swing": swing, "n": n_used,
             "wk": [round(r) if r else None for r in (rate(f"Weekly_Volume_{k}") for k in range(4, 0, -1))],
             "mo": [round(r) if r else None for r in (rate(f"Monthly_Volume_{k}") for k in range(4, 0, -1))],
+            # owner 2026-11-02: the quarters too — the last 4 finished quarters, shares a day, oldest first
+            "qt": [round(r) if r else None for r in (rate(f"Quarterly_Volume_{k}") for k in range(4, 0, -1))],
+            # and the years (owner 2026-11-03): the last 4 finished calendar years, shares a day, oldest first
+            "yrs": [round(r) if r else None for r in (rate(f"Yearly_Volume_{k}") for k in range(4, 0, -1))],
             "yr": round(yr[0]) if yr else None, "today": round(today) if today else None}
 
 
 def pack(v):
-    """compact form for the published view: [dep, normal, trend, spike, erratic, grade, swing %, n, [4 weeks], [4 months], year]"""
-    return [v["dep"], v["norm"], v["trend"], v["spike"], v["erratic"], v["grade"], v["swing"], v["n"], v["wk"], v["mo"], v["yr"]] if v else None
+    """compact form for the published view: [dep, normal, trend, spike, erratic, grade, swing %, n, [4 weeks], [4 months],
+    year, [4 quarters], [4 years]] (new parts are added last, so older published views still unpack)"""
+    return [v["dep"], v["norm"], v["trend"], v["spike"], v["erratic"], v["grade"], v["swing"], v["n"], v["wk"], v["mo"], v["yr"], v["qt"], v["yrs"]] if v else None
 
 
 def unpack(a):
     if not a:
         return None
-    keys = ("dep", "norm", "trend", "spike", "erratic", "grade", "swing", "n", "wk", "mo", "yr")
-    return dict(zip(keys, a))
+    keys = ("dep", "norm", "trend", "spike", "erratic", "grade", "swing", "n", "wk", "mo", "yr", "qt", "yrs")
+    return {"qt": None, "yrs": None, **dict(zip(keys, a))}
 
 
 def pace_for(v, pace):

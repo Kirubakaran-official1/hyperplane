@@ -5,9 +5,11 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./shell.jsx";
 import { addCss, getTheme } from "./core.jsx";
+import { DS_CSS } from "./ds.css.js";
 import { CSS } from "./shell.css.js";
 import { QUICK_CSS } from "./quick.jsx";
 
 document.documentElement.dataset.theme = getTheme();
+addCss("ds", DS_CSS);                     // design system first (tokens + ds-* components); screens build on it
 addCss("shell", CSS + QUICK_CSS);
 createRoot(document.getElementById("root")).render(<App/>);

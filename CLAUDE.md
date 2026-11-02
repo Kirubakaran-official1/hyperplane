@@ -786,6 +786,58 @@ customer may not use: "this is the wrong way … this is not only for the AI por
 - Tests: `plan_api_test.py` (catalogue, migration, 8 Postman-style refusals, trader / admin limits, plan removal),
   `plan_ui_test.py`; other suites updated for "every customer has the builder".
 
+### Auto-publish safety check (owner, 2026-11-03) — `publish.quality_issues(sheets)`
+- A 23:43 "Sync now" got EMPTY ChartInk tables (master screener, Midcap 150, MicroCap 250); the scanner fell back to
+  raw-data-5 for Master_Stock_Data and auto-publish replaced the good data (no mid caps, no volumes, no free float).
+- Now, in auto mode, the worker publishes only when `quality_issues` is empty: master rows must carry the master
+  screener's volume columns (`Weekly_Volume_1`), every market-cap group (Large / Mid / Small) must have stocks, and
+  Zone_Levels must have ≥ 500 stocks. Otherwise the collection is stored but NOT published; the job log says why
+  ("⏸ Not published to customers automatically: …") and the last published data stays.
+
+### Customer app design system (owner, 2026-11-02) — `frontend/app/src/ds.css.js`
+- Owner: "I have the design system HTML file … themed maroon … use the existing colour, but for the features and slices
+  use the design system … make sure the design system primary is not our primary". Source: `frontend/Design System.html`
+  (K4K Design System showcase; a bundled page — template + gzip/base64 manifest; the rules live in `window.K4K_RULES`,
+  components in `window.SX_CARDS`). Unpacked copies are in the session scratchpad only, not the repo.
+- `ds.css.js` = the K4K structure with OUR colours, loaded first by `main.jsx` (`addCss("ds", …)`). Every K4K colour
+  role points at the theme variables in `shell.css.js`, so light and dark keep working:
+  primary / action / focus → `--acc` (never K4K's maroon #EE4961) · neutral 0/50/100 → `--s1/--s2/--bg` · borders →
+  `--b1/--b2` · text heading-default / label-light / disabled → `--t1 / --t2 / --t3` (t3 never for reading text) ·
+  success / warning / critical / information → `--long / --mixed / --short / --acc` (+ `…d` surfaces) · AI → `--ret`.
+- K4K rules adopted: controls 24/28/32/36/40 (xs–xl), padding-x = (h − 8) ÷ 2; radius 4 buttons · 6 fields / chips
+  (square in tables) · 8 cards / popovers / modals · 12 large cards · pill otherwise; type by role (headings 32–14 600,
+  body 14/13/12/11, caption 10 = the minimum, caps only for table headers + overlines, tabular numbers); tables header
+  40 caps + rows 40/48/56, one divider per row, no zebra, numbers right; status never by colour alone (dot + word);
+  one primary button per view; sentence case.
+- Components: `ds-h1…h6, ds-body-*, ds-caption, ds-overline, ds-num` · `ds-btn` (+ `--primary/--secondary/--subtle/
+  --link/--ai`, `--xs/--s/--l/--xl`, `--icon`) · `ds-field / ds-input` · `ds-chip` (+ tones, `--square`, `ds-chip-dot`)
+  · `ds-card / ds-well / ds-divider` · `ds-table` (+ `--compact/--comfortable`, `.num/.strong/.meta`) · `ds-stats /
+  ds-stat` (3px accent edge) · `ds-tabs / ds-tab` and `ds-seg` · `ds-note` · `ds-toast` · `ds-tip` · `ds-empty` ·
+  `ds-skel` · `ds-progress` · `ds-popover` · `ds-modal`. All names start with `ds-` (the app has global `.ok/.up`).
+- New customer-app UI uses these; existing screens are converted screen by screen (owner confirms the order).
+- **Conversion done (owner 2026-11-03: "proceed all")** — Builder, Analyser, Research, AI Mode, sign-in, Docs, Quick guide,
+  Helpdesk, top bar, owner detail view. What changed and the rules that now hold for every customer screen:
+  - One typeface: `--mono` is Inter (no IBM Plex Mono). Aligned figures via `font-feature-settings:"tnum"` on
+    `td, th, b, strong, input, output, .mono, .num, .sym, .pct, .ds-num` — NOT on the body (Inter's tnum widens hyphens in
+    prose) and NOT `font-variant-numeric` (the `font` shorthand resets it). Prose inside a table cell (the builder fact
+    sheet) sets `font-feature-settings:normal`.
+  - Scales (applied by a normaliser over every customer stylesheet): weights 400–700 only; sizes 10 · 11 · 12 · 13 · 14 ·
+    16 · 18 · 20 · 24 · 32; radius 4 buttons · 6 fields / chips / tiles · 8 cards / popovers · 12 large panels · pill.
+    Caps labels = 10/16 600 +0.6 px; table headers = 12/16 700 caps +0.4 px, 40 high; rows 48; numbers right-aligned.
+  - Readable secondary text: `--t3` darkened (light #66778e, dark #6a84a2) and `--t2` (dark #8da4bf) so meta text passes
+    4.5:1. Filled buttons in light mode use `--ds-action-bg` #0e7490 (white text 5.4:1); dark mode keeps cyan + dark text.
+  - Buttons: `.px-btn` = K4K l (36, radius 4, inset border), `.pf-go` / `.primary` = xl (40) filled; chips = pill 24–32
+    with tint + `--accb` border when selected; section tabs = underline (`.bd-tabs`, `.tabs`); switchers = pill
+    segmented (`.px-seg`, `.sv-pills`); summary tiles = 3 px accent edge on the LEFT (`.bd-kpi`, `.kpi`, `.sx-stat`).
+  - **Icons: no emoji / unicode glyphs.** `core.jsx` exports `Icon` (Lucide paths, ISC; stroke 2 at 12 px, else 1.5),
+    `AiSpark` (the "Hyperplane AI" mark, our purple `--ret`) and `TONE_ICON` (verdict tone → icon). `combinedView` titles
+    are plain words ("Best case — with the tide") + `icon`; never put a glyph back into a label. The shared Helpdesk has
+    its own small `HdIc` (admin uses it too). ⓘ = the Lucide info icon (`Info`). Add new icons to `ICON_PATHS`.
+  - The shared Helpdesk is styled for the customer app with `.shell …` overrides in shell.css.js (the module's own CSS
+    loads later; admin never loads the customer CSS). Top bar: help (Quick guide) and bell = 32 px subtle icon buttons,
+    account = ghost pill.
+  - Screenshots before / after: scratchpad `ds_shots.py <tag> [screens]`.
+
 ### Forgot password + customer email (owner, 2026-11-02) — `backend/app/mailer.py`
 - Owner: "people forget the password … provide the forget password option … I don't have a company email or a mail
   server". Sending goes through **Brevo** (transactional email, free tier) over SMTP — config.ini `[mail]`:
@@ -836,8 +888,33 @@ customer may not use: "this is the wrong way … this is not only for the AI por
   replaced (`small_float`). Per pick `ff` {status light / watch / over / capped / unknown, show, free, total, free_pct,
   held, held_total, most, most_amt, cap_pct, line}; response `float` (by_float, over, over_amt, capped, watch,
   unknown, replaced, max_held); notes.
-- UI: the option with ⓘ (`#bd-float`, `#bd-ff-y/n`); in a stock's expanded row a "Free float ⓘ" card (`FloatCard`,
-  `#ff-SYM`) ONLY when `ff.show` (so small portfolios see nothing); "⚠ x% of free float" under the Liquidity cell
+- **Holdings accordion (owner, same day: "Key points, Volume analyser and Free float for all the stocks … the content
+  looks clumsy … the accordion itself not so good … an accordion for the market-cap level")**: every stock's expanded
+  row = `KeyPoints` (`#kp-SYM`, full width) + `VolCard` (`#vc-SYM`) and `FloatCard` (`#ff-SYM`) side by side (stacked
+  below 1100 px). Each part is a `Section` card: title + ⓘ, verdict `Pill`s top right (ok / low / cap / bad / mute),
+  label · value · note `Row`s (`.bd-kv`), warnings in one "What to watch" box (`.bd-watch`, red when over). Small
+  positions keep short versions (no clutter) but all 3 parts always show. A click anywhere on a row opens it (links and
+  buttons excepted); the open row has an accent bar. Market-cap group rows are buttons (`#bd-grp-Large` …,
+  `aria-expanded`) that fold their stocks; `#bd-gall` folds / shows all groups. Test: `acc_ui_test.py`.
+- **Fact sheet (owner, same day: "the volume analyser for all … 4 weeks and months, the quarterly volume as well … the
+  same order for all … the boxy alignment is boring, make it professional")**: the open row is ONE sheet (`.fs-sheet`)
+  — Key points = the same 8 facts for every stock from `kp` (builder.candidates: st, qstreak, qturn, qhold, breakout,
+  regime, rel, ind, r3) with a status dot; Volume analyser = 4 headline numbers (normal trading, you can buy, days to
+  buy, price push) + `VolHistory` (last 4 weeks · months · quarters on one scale, real period names from `as_of`,
+  dashed normal level; quarters = liquidity `qt`, packed LAST in `vl` so older views still unpack) + 3 lines; Free
+  float = 3 headline numbers + `FloatMeter` (your share against the 1 % standard) + 3 lines. No short "light" version
+  any more; a missing figure is a dash. Status classes are `t-ok / t-low / t-bad …` — the customer app has a GLOBAL
+  `.ok` (sign-in message box) and `.up`, never reuse those names.
+- **Owner follow-ups (2026-11-03):** Key points = only 4 tiles — Long-term strength (−100…+100, first), Trend (quarterly),
+  Long-term regime, Reliability (`kp` still carries the rest for the download / later use). Volume history = compact mini
+  bars (`.fs-strip`, labels UNDER the bars) for 4 weeks · 4 months · 4 quarters · 4 years (liquidity `yrs`, packed last
+  in `vl`; republish to fill it). "Normal trading" is worded as an average: "Avg. daily volume 22.33 L · avg. shares a
+  day" (the word avg only: no ~ signs, no unit lessons such as "Cr = crore"). The 4 strips sit in one row at every width
+  (4-column grid, bars shrink). Old saved results (no `kp` / `qt` / `yrs`) fall back to the reasons list / fewer
+  strips. Research: Bidirectional removed everywhere (always 0 since the regime squeeze makes a timeframe against the
+  regime sideways, so G and W never meet); Master data tools compact (32 px, 12 px) on the right of the title.
+- UI (first version): the option with ⓘ (`#bd-float`, `#bd-ff-y/n`); in a stock's expanded row a "Free float ⓘ" card
+  (`FloatCard`, `#ff-SYM`; now for every stock — see the accordion above); "⚠ x% of free float" under the Liquidity cell
   (`.bd-ffx`); banner `#bd-ffbanner` / notes `#bd-ffcapped`, `#bd-ffrepl` in the Volume analyser; 5 download columns;
   a Guide bullet. Tests: `ff_parse_check.py`, `ff_api_test.py`, `ff_ui_test.py`.
 

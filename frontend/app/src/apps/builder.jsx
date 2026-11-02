@@ -1,6 +1,6 @@
 // Hyperplane AI Portfolio Builder — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addCss } from "../core.jsx";
+import { AiSpark, Icon, addCss } from "../core.jsx";
 import { CopyBtns, Info, MultiSelect, RELIABILITY, StockLink, api, colorOf, fmtDT, signed, tc, trackAction, trendWordOf } from "../core.jsx";
 import { CSS } from "./builder.css.js";
 
@@ -50,7 +50,7 @@ function SpreadNote({ chk, onFix, id }) {
   if (!chk) return null;
   return (
     <div className={`bd-spread is-${chk.tone}`} id={id} role={chk.tone === "warn" ? "alert" : undefined}>
-      <span className="bd-spi" aria-hidden="true">{chk.tone === "warn" ? "⚠" : chk.tone === "info" ? "ℹ" : "✓"}</span>
+      <span className="bd-spi" aria-hidden="true"><Icon name={chk.tone === "warn" ? "alert" : chk.tone === "info" ? "info" : "check"} size={16}/></span>
       <div><b>{chk.title}</b><span>{chk.text}</span></div>
       {onFix && chk.fix && chk.tone !== "ok" ? <button type="button" className="px-btn" onClick={() => onFix(chk.fix)}>Use {chk.fix} stocks</button> : null}
     </div>
@@ -134,7 +134,7 @@ const sh = n => n == null ? "—" : qtyTxt(Math.round(n));
 function VolCell({ p, open, onClick }) {
   const l = p.liq;
   if (!l || l.status === "unknown") return <button type="button" className="bd-vc unk" onClick={onClick} aria-expanded={open}><span className="vb">Not known</span></button>;
-  const st = l.status === "over" ? <span className="bd-vs is-over">⚠ {(p.amt / l.most_amt).toFixed(1)}× over limit</span>
+  const st = l.status === "over" ? <span className="bd-vs is-over"><Icon name="alert" size={12}/> {(p.amt / l.most_amt).toFixed(1)}× over limit</span>
     : l.status === "capped" ? <span className="bd-vs is-cap">Capped at limit</span>
     : l.light ? <span className="bd-vs is-ok">Easy to buy</span>
     : <span className="bd-vs is-ok">Within limit · {l.days <= 1 ? "1 day" : `${l.days} days`}</span>;
@@ -143,72 +143,179 @@ function VolCell({ p, open, onClick }) {
       <span className={`vb ${V_TONE[l.grade]}`}>{l.grade_word}</span>{st}</button>);
 }
 
-function Strip({ vals, label }) {
-  const v = (vals || []).map(x => x || 0), mx = Math.max(1, ...v);
-  if (!v.some(Boolean)) return <div className="bd-strip"><span>{label}</span><small className="dim">not enough history yet</small></div>;
-  return (
-    <div className="bd-strip"><span>{label}</span>
-      <div>{v.map((x, i) => <i key={i} style={{ height: `${Math.max(4, x / mx * 100)}%` }} title={`${qtyTxt(Math.round(x))} shares a day`}/>)}</div></div>);
-}
-
-// owner, 2026-11-01: "1 share can move the stock by 1 %?? … show the volume analyser based on the portfolio, don't show
-// the unnecessary things to a small holder". The push is now worked out from what YOU buy a day (server), and a
-// position that is a tiny part of the stock's trading gets one plain line instead of the full analysis.
 const pct = v => v == null ? "—" : v < 0.01 ? "under 0.01%" : `${+v.toFixed(v < 1 ? 2 : 1)}%`;
 const pushTxt = v => v == null ? null : v < 0.05 ? "negligible" : `about ${+v.toFixed(2)}%`;
 
-function VolCard({ p }) {
-  const l = p.liq || {};
-  if (l.status === "unknown") return <div className="bd-vcard" id={`vc-${p.s}`}><p>{(l.warn || [])[0]}</p></div>;
-  if (l.light) return (
-    <div className="bd-vcard light" id={`vc-${p.s}`}>
-      <p className="bd-vlight"><b>✓ Easily bought and sold.</b> Your {sh(p.qty)} share{p.qty === 1 ? "" : "s"} ({inrShort(p.amt)}) {p.qty === 1 ? "is" : "are"} {pct(l.share)} of
-        the {sh(l.dep)} shares it trades on a normal day (about {inrShort(l.value)}). Buy {p.qty === 1 ? "it" : "them"} in one go; {p.qty === 1 ? "it does" : "they do"} not move the price.</p>
-      {(l.warn || []).length > 0 && <ul className="bd-vwarn">{l.warn.map((w, i) => <li key={i}>{w}</li>)}</ul>}
-    </div>);
-  const trend = l.trend === 1 ? "rising" : l.trend === -1 ? "falling" : "steady";
-  const push = pushTxt(l.push);
+// ─── a stock's details: one fact sheet (owner, 2026-11-02: "the volume analyser for all … the 4 weeks and months, the
+// quarterly volume as well … the same order for all — some points are there in some stocks, some not … the boxy
+// alignment is boring, make it professional"). Every stock shows the same facts in the same order; a missing figure
+// is a dash, never a missing line.
+const Pill = ({ tone, children }) => <span className={`bd-pill t-${tone}`}>{children}</span>;
+const days = n => `${n.toLocaleString("en-IN")} day${n === 1 ? "" : "s"}`;
+const dash = "—";
+const FS_ICON = { kp: "check", vol: "chart", ff: "percent" };
+function Head({ icon, title, info, pills }) {
   return (
-    <div className="bd-vcard" id={`vc-${p.s}`}>
-      <div className="bd-vgrid">
-        <div><span className="px-label">Average daily volume <Info text="Shares the stock normally trades in a day, from its finished weeks, months and quarters. The lower, recent figure is used when trading is falling, and one unusually heavy day is never counted."/></span>
-          <b>{sh(l.dep)} shares a day</b><small>about {inrShort(l.value)} a day · dependable figure{l.norm > l.dep ? ` (normal ${sh(l.norm)})` : ""}</small>
-          <div className="bd-strips"><Strip vals={l.wk} label="Last 4 weeks"/><Strip vals={l.mo} label="Last 4 months"/></div>
-          <small>Trading is {trend}{l.spike ? " · unusually heavy today (not counted)" : ""}{l.erratic ? " · uneven month to month" : ""}</small></div>
-        <div><span className="px-label">Buying capacity · {+(l.pace * 100).toFixed(1)}% of a day <Info text="To avoid pushing the price, buy only a small share of a day's trading. The stock's limit is five days of buying at that pace, an amount that can also be sold within about ten days even if trading halves."/></span>
-          <b>{sh(l.per_day)} shares a day</b>
-          <small>supports up to {sh(l.most)} shares ({inrShort(l.most_amt)}) — five days of buying, and sellable within about ten days even if trading halves</small></div>
-        <div><span className="px-label">Your position <Info text="Your quantity compared with the stock's trading: share of one day, days to buy at your pace, days to sell in a hurry, and how much your own buying may push the price (from the shares you buy each day)."/></span>
-          <b className={l.status === "over" ? "bad" : ""}>{sh(p.qty)} shares · {inrShort(p.amt)}</b>
-          <small>{pct(l.share)} of one day's trading · {l.days <= 1 ? "bought in one day" : `${l.days.toLocaleString("en-IN")} days to buy`} · {l.exit_days.toLocaleString("en-IN")} day{l.exit_days === 1 ? "" : "s"} to sell in a hurry</small>
-          {push && <small>Price push from your own buying: {push}</small>}</div>
-      </div>
-      {(l.warn || []).length > 0 && <ul className="bd-vwarn">{l.warn.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+    <header className="fs-h">
+      <h4><span className={`fs-ic ${icon}`} aria-hidden="true"><Icon name={FS_ICON[icon]} size={12}/></span>{title}{info && <Info text={info}/>}</h4>
+      {pills && <span className="bd-pills">{pills}</span>}
+    </header>);
+}
+// a headline number: label, big value, one line under it
+function Stat({ label, info, value, note, tone = "" }) {
+  return (
+    <div className={`fs-stat ${tone ? `t-${tone}` : ""}`}>
+      <span className="fs-sl">{label}{info && <Info text={info}/>}</span>
+      <b>{value}</b>{note && <small>{note}</small>}
+    </div>);
+}
+// a detail line: label on the left, value (and a short note) on the right
+function Line({ label, info, value, note, bad }) {
+  return (
+    <div className="fs-line">
+      <dt>{label}{info && <Info text={info}/>}</dt>
+      <dd><b className={bad ? "bad" : ""}>{value}</b>{note && <small>{note}</small>}</dd>
+    </div>);
+}
+function Watch({ items, bad }) {
+  if (!items || !items.length) return null;
+  return <div className={`bd-watch ${bad ? "bad" : ""}`}><b>What to watch</b><ul className="bd-vwarn">{items.map((w, i) => <li key={i}>{w}</li>)}</ul></div>;
+}
+
+// Key points (owner 2026-11-03: "just these 4"): strength −100…+100, trend, regime, reliability — the same for every stock
+function KeyPoints({ p }) {
+  if (!p.kp) return (                                           // a result saved before the key points existed: its reasons
+    <section className="fs-sec" id={`kp-${p.s}`}>
+      <Head icon="kp" title="Key points"/>
+      <div className="bd-why lg">{p.why.map(w => <span key={w}>{w}</span>)}</div>
+    </section>);
+  const k = p.kp;
+  const facts = [
+    ["Long-term strength", k.st == null ? dash : `${k.st > 0 ? "+" : ""}${k.st}`, k.st == null ? "" : `${trendWordOf(k.st)} · scale −100 to +100`, k.st >= 40 ? "ok" : k.st >= 24 ? "mid" : "low"],
+    ["Trend", k.qstreak >= 2 ? `Up ${k.qstreak} quarters` : k.qturn ? "Turned up" : "Not rising yet", "quarter on quarter", k.qstreak >= 2 || k.qturn ? "ok" : "low"],
+    ["Long-term regime", k.regime === "confirmed" ? "Up · confirmed" : k.regime === "changing" ? "Up · starting to change" : k.regime === "up" ? "Up" : dash,
+      "monthly, checked by the weekly", k.regime === "confirmed" ? "ok" : k.regime === "changing" ? "low" : "mid"],
+    ["Reliability", k.rel ? (RELIABILITY[k.rel] || [k.rel])[0] : dash, "from its whole price history", k.rel === "S" ? "ok" : "low"],
+  ];
+  return (
+    <section className="fs-sec" id={`kp-${p.s}`}>
+      <Head icon="kp" title="Key points" pills={p.tier === 2 ? <Pill tone="low">Trend still building</Pill> : <Pill tone="ok"><Icon name="check" size={12}/>Passed every check</Pill>}/>
+      <div className="fs-kp">{facts.map(([l, v, n, t]) => (
+        <div key={l} className="fs-fact"><span className="fs-sl"><i className={`fs-dot t-${t}`}/>{l}</span><b>{v}</b>{n && <small>{n}</small>}</div>))}</div>
+    </section>);
+}
+
+// trading history (owner 2026-11-03: the compact mini bars, not a big chart): the last 4 finished weeks, months,
+// quarters and years, shares a day, oldest → newest; each strip on its own scale; the period and the figure on hover
+function periodLabels(asOf) {
+  const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(asOf ? new Date(asOf) : new Date()).split("-").map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d));
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monday = new Date(day); monday.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  const wk = [4, 3, 2, 1].map(k => { const a = new Date(monday); a.setUTCDate(monday.getUTCDate() - 7 * k); return `week of ${a.getUTCDate()} ${MON[a.getUTCMonth()]}`; });
+  const mo = [4, 3, 2, 1].map(k => MON[(m - 1 - k + 48) % 12]);
+  const q0 = Math.floor((m - 1) / 3) * 3;                                   // first month of the current quarter
+  const qt = [4, 3, 2, 1].map(k => { const s = (q0 - 3 * k + 48) % 12; return `${MON[s]}–${MON[(s + 2) % 12]}`; });
+  const yrs = [4, 3, 2, 1].map(k => String(y - k));
+  return { wk, mo, qt, yrs };
+}
+function VolHistory({ l, asOf }) {
+  const lab = periodLabels(asOf);
+  const groups = [["4 weeks", l.wk, lab.wk], ["4 months", l.mo, lab.mo], ...(l.qt ? [["4 quarters", l.qt, lab.qt]] : []),
+    ...(l.yrs ? [["4 years", l.yrs, lab.yrs]] : [])];
+  return (
+    <div className="fs-strips">
+      {groups.map(([g, v, labels]) => {
+        const vals = (v || []).map(x => x || 0), mx = Math.max(1, ...vals);
+        return (
+          <div key={g} className="fs-strip">
+            <span>{g}</span>
+            <div>{[0, 1, 2, 3].map(i => <i key={i} className={vals[i] ? "" : "none"} style={{ height: vals[i] ? `${Math.max(10, vals[i] / mx * 100)}%` : "3px" }}
+              title={`${labels[i]}: ${vals[i] ? `avg. ${qtyTxt(Math.round(vals[i]))} shares a day` : "no data"}`}/>)}</div>
+          </div>);
+      })}
     </div>);
 }
 
-// free float of one holding (server: builder._float) — shown in the stock's details only when it matters
+const VOL_INFO = "How easily this stock can be bought now and sold later, from how many shares it trades on a normal day.";
+function VolCard({ p, asOf }) {
+  const l = p.liq || {};
+  const known = l.status && l.status !== "unknown";
+  const pills = !known ? <Pill tone="mute">Not known</Pill> : <>
+    <Pill tone={V_TONE[l.grade]}>{l.grade_word} liquidity</Pill>
+    {l.status === "over" ? <Pill tone="bad"><Icon name="alert" size={12}/>{(p.amt / l.most_amt).toFixed(1)}× over limit</Pill>
+      : l.status === "capped" ? <Pill tone="cap">Capped at its limit</Pill>
+      : <Pill tone="ok"><Icon name="check" size={12}/>Within limit</Pill>}
+  </>;
+  const over = l.status === "over";
+  const trend = !known ? dash : [l.trend === 1 ? "Rising" : l.trend === -1 ? "Falling" : "Steady", l.spike ? "heavy today (not counted)" : "", l.erratic ? "uneven month to month" : ""].filter(Boolean).join(" · ");
+  return (
+    <section className="fs-sec" id={`vc-${p.s}`}>
+      <Head icon="vol" title="Volume analyser" info={VOL_INFO} pills={pills}/>
+      <div className="fs-stats">
+        <Stat label="Avg. daily volume" info="The average number of shares the stock trades in a day, worked out from its finished weeks, months and quarters — not a promise for any one day. The lower, recent figure is used when trading is falling, and one unusually heavy day is never counted."
+          value={known ? sh(l.dep) : dash} note={known ? `avg. shares a day · ${inrShort(l.value)}` : "not known"}/>
+        <Stat label="You can buy" info="To avoid pushing the price, buy only a small share of a day's trading. Stocks that trade little, or very unevenly, are always bought more slowly."
+          value={known ? sh(l.per_day) : dash} note={known ? `shares a day · ${+(l.pace * 100).toFixed(1)}% pace` : dash}/>
+        <Stat label="Days to buy" value={known ? (l.days <= 1 ? "1 day" : days(l.days)) : dash} tone={over ? "bad" : ""}
+          note={known ? `sell in a hurry: ${days(l.exit_days)}` : dash}/>
+        <Stat label="Price push" info="How much your own buying may move the price, from the shares you buy each day compared with what the stock trades."
+          value={known ? (pushTxt(l.push) || dash) : dash} note="from your own buying"/>
+      </div>
+      <dl className="fs-list">
+        <Line label="Your position" value={`${sh(p.qty)} shares · ${inrShort(p.amt)}`} bad={over} note={known ? `${pct(l.share)} of one day's trading` : ""}/>
+        <Line label="Most it supports" info="Five days of buying at your pace: an amount that can also be sold within about ten days even if trading halves."
+          value={known ? `${sh(l.most)} shares · ${inrShort(l.most_amt)}` : dash} note={known ? "five days of buying · sellable in about ten days" : ""}/>
+        <div className="fs-line"><dt>Trading pattern</dt>
+          <dd><b>{trend}</b>{known && <VolHistory l={l} asOf={asOf}/>}</dd></div>
+      </dl>
+      <Watch items={l.warn} bad={over}/>
+    </section>);
+}
+
+// free float of one holding (server: builder._float): the same facts for every stock, and a meter against the standard
+function FloatMeter({ f }) {
+  const scale = Math.max(2 * f.cap_pct, f.held * 1.15);                     // the 1% standard sits at half way or nearer
+  const tone = f.status === "over" ? "bad" : f.status === "watch" ? "low" : "ok";
+  const at = f.cap_pct / scale * 100;
+  return (
+    <div className="fs-meter" role="img" aria-label={`You would hold ${pct(f.held)} of the free float; the standard is ${f.cap_pct}%`}>
+      <div className="fs-mtrack"><i className={`t-${tone}`} style={{ width: `${Math.min(100, Math.max(f.held / scale * 100, 0.6))}%` }}/>
+        <span className="fs-mstd" style={{ left: `${at}%` }}/></div>
+      <div className="fs-mlab"><span>0</span><span className="std" style={{ left: `${at}%` }}>standard {f.cap_pct}%</span>
+        <span className={`you t-${tone}`}>you: {pct(f.held)}</span></div>
+    </div>);
+}
 function FloatCard({ p }) {
   const f = p.ff || {};
-  if (f.status === "unknown") return <div className="bd-vcard" id={`ff-${p.s}`}><p>The free float is not reported for this stock, so it could not be checked.</p></div>;
+  const known = f.status && f.status !== "unknown";
   const warn = [];
   if (f.status === "over") warn.push(`Your ${sh(p.qty)} shares are ${(f.held / f.cap_pct).toFixed(1)}× the ${f.cap_pct}% standard. Selling them later could take a long time and move the price: consider a smaller amount, or turn on “Size by free float” in More options.`);
   if (f.status === "capped") warn.push(`Kept to ${f.cap_pct}% of the free float; the rest of the money went to the other stocks.`);
   if (f.status === "watch") warn.push("A noticeable part of the shares the public can trade. It is within the standard: buy slowly and spread the orders.");
   if (f.line) warn.push(f.line);
+  const pill = !known ? <Pill tone="mute">Not reported</Pill>
+    : f.status === "over" ? <Pill tone="bad"><Icon name="alert" size={12}/>Above the standard</Pill>
+    : f.status === "capped" ? <Pill tone="cap">Kept to {f.cap_pct}%</Pill>
+    : f.status === "watch" ? <Pill tone="low">Noticeable part</Pill>
+    : <Pill tone="ok"><Icon name="check" size={12}/>Small part</Pill>;
   return (
-    <div className="bd-vcard" id={`ff-${p.s}`}>
-      <div className="bd-vgrid">
-        <div><span className="px-label">Tradable shares <Info text={FF_INFO}/></span>
-          <b>{sh(f.free)} shares</b><small>{+f.free_pct.toFixed(1)}% of all {sh(f.total)} shares · about {inrShort(f.free * p.p)}</small></div>
-        <div><span className="px-label">Standard · {f.cap_pct}% of the free float <Info text={`The most one portfolio should hold of a stock: ${f.cap_pct}% of its free float. Big investors keep each holding to a small part of the tradable shares, so they can sell later without trouble and stay well below the levels where SEBI's disclosure rules begin.`}/></span>
-          <b>{sh(f.most)} shares</b><small>about {inrShort(f.most_amt)} — the most within the standard</small></div>
-        <div><span className="px-label">Your position <Info text="Your quantity compared with the free float, and with all the company's shares."/></span>
-          <b className={f.status === "over" ? "bad" : ""}>{sh(p.qty)} shares · {pct(f.held)} of the free float</b>
-          <small>{pct(f.held_total)} of all the company's shares</small></div>
+    <section className="fs-sec" id={`ff-${p.s}`}>
+      <Head icon="ff" title="Free float" info={FF_INFO} pills={pill}/>
+      <div className="fs-stats three">
+        <Stat label="Tradable shares" info={FF_INFO} value={known ? sh(f.free) : dash} note={known ? `${+f.free_pct.toFixed(1)}% of all shares` : "not reported"}/>
+        <Stat label={`Standard · ${known ? f.cap_pct : 1}%`} info="The most one portfolio should hold of a stock: 1% of its free float. Big investors keep each holding to a small part of the tradable shares, so they can sell later without trouble and stay well below the levels where SEBI's disclosure rules begin."
+          value={known ? sh(f.most) : dash} note={known ? `shares · ${inrShort(f.most_amt)}` : dash}/>
+        <Stat label="Your share" value={known ? pct(f.held) : dash} note="of the free float" tone={f.status === "over" ? "bad" : ""}/>
       </div>
-      {warn.length > 0 && <ul className="bd-vwarn">{warn.map((w, i) => <li key={i}>{w}</li>)}</ul>}
-    </div>);
+      {known ? <FloatMeter f={f}/> : <p className="bd-vlight">The free float is not reported for this stock, so it could not be checked.</p>}
+      <dl className="fs-list">
+        <Line label="Your position" value={`${sh(p.qty)} shares · ${inrShort(p.amt)}`} bad={f.status === "over"} note={known ? `${pct(f.held_total)} of all the company's shares` : ""}/>
+        <Line label="All shares" value={known ? `${sh(f.total)} shares` : dash} note={known ? `promoters hold ${+(100 - f.free_pct).toFixed(1)}%` : ""}/>
+        <Line label="Free float value" value={known ? inrShort(f.free * p.p) : dash} note={known ? "at today's price" : ""}/>
+      </dl>
+      <Watch items={warn} bad={f.status === "over"}/>
+    </section>);
 }
 
 function FloatBanner({ res, picks }) {
@@ -217,7 +324,7 @@ function FloatBanner({ res, picks }) {
   const over = picks.filter(p => p.ff && p.ff.status === "over");
   return <>
     {over.length > 0 && <div className="bd-vbanner" id="bd-ffbanner">
-      <b>⚠ {over.length} stock{over.length === 1 ? " takes" : "s take"} more than {f.cap_pct}% of {over.length === 1 ? "its" : "their"} free float</b> <Info text={FF_INFO}/> ({inrShort(f.over_amt)}).
+      <b><Icon name="alert" size={14}/> {over.length} stock{over.length === 1 ? " takes" : "s take"} more than {f.cap_pct}% of {over.length === 1 ? "its" : "their"} free float</b> <Info text={FF_INFO}/> ({inrShort(f.over_amt)}).
       Buying that big a part of the shares the public can trade is hard to undo later. Turn on “Size by free float” in More options to keep each within {f.cap_pct}%.
       <div className="bd-vlist">{over.slice(0, 12).map(p => <span key={p.s}><b>{p.s}</b> {pct(p.ff.held)} · max {inrShort(p.ff.most_amt)}</span>)}{over.length > 12 && <span>+{over.length - 12} more</span>}</div></div>}
     {f.by_float && f.capped > 0 && <p className="bd-vnote" id="bd-ffcapped">{f.capped} stock{f.capped === 1 ? " was" : "s were"} kept to {f.cap_pct}% of {f.capped === 1 ? "its" : "their"} free float; the rest of the money went to the other stocks in the same group.</p>}
@@ -261,7 +368,7 @@ function VolumeSection({ res, picks }) {
   if (v.light) return (                                     // a small portfolio: nothing to manage, say so in one line
     <section className="px-card bd-volume light" id="bd-volume">
       <div className="px-ch"><div><h3>Volume analyser</h3>
-        <p className="bd-vlight"><b>✓ No volume concerns.</b> Every stock trades far more each day than this portfolio buys: each one can be bought in one go,
+        <p className="bd-vlight"><b><Icon name="check" size={14}/> No volume concerns.</b> Every stock trades far more each day than this portfolio buys: each one can be bought in one go,
           and your orders will not move the prices.</p></div></div>
       <FloatBanner res={res} picks={picks}/>
       <MarketTricks/>
@@ -282,7 +389,7 @@ function VolumeSection({ res, picks }) {
         {order.filter(k => g[k] > 0).map(k => <span key={k} className={`g${5 - order.indexOf(k)}`} style={{ flexGrow: g[k] }} title={`${k} trading: ${g[k]}% of the money`}>{g[k] >= 8 && <em>{k} {g[k]}%</em>}</span>)}</div>
       <div className="bd-glegend">{order.map(k => <span key={k}><i className={`g${5 - order.indexOf(k)}`}/>{k}</span>)}</div>
       {!v.by_volume && over.length > 0 && <div className="bd-vbanner" id="bd-vbanner">
-        <b>⚠ {over.length} stock{over.length === 1 ? " is" : "s are"} too big for {over.length === 1 ? "its" : "their"} trading</b> ({inrShort(v.over_amt)}).
+        <b><Icon name="alert" size={14}/> {over.length} stock{over.length === 1 ? " is" : "s are"} too big for {over.length === 1 ? "its" : "their"} trading</b> ({inrShort(v.over_amt)}).
         Buying them at your pace takes up to {Math.max(...over.map(p => p.liq.days)).toLocaleString("en-IN")} days and they are slow to sell. Turn on “Size by trading volume” in More options to keep each within what it supports.
         <div className="bd-vlist">{over.slice(0, 12).map(p => <span key={p.s}><b>{p.s}</b> {(p.amt / p.liq.most_amt).toFixed(1)}× · max {inrShort(p.liq.most_amt)}</span>)}{over.length > 12 && <span>+{over.length - 12} more</span>}</div></div>}
       {(v.replaced || []).length > 0 && <p className="bd-vnote">Left out because they trade too little to take a useful share: {v.replaced.slice(0, 10).map(r => `${r.s} (up to ${inrShort(r.most_amt)})`).join(", ")}{v.replaced.length > 10 ? ` and ${v.replaced.length - 10} more` : ""}.</p>}
@@ -333,12 +440,12 @@ function BuyingPlan({ plan, picks, res }) {
         {days.map(d => (
           <li key={d.day} className="bd-day" data-day={d.day}>
             <div className="bd-dh"><b>Day {d.day}</b><span>{inrShort(d.amt)}</span><small>{Math.round(d.total / res.invested * 100)}% bought</small></div>
-            <div className="bd-buys">{d.buys.map(b => <span key={b.s} className={b.done ? "done" : ""} title={b.done ? "Completes this stock" : "Part of this stock"}><b>{b.s}</b> {qtyTxt(b.qty)}{b.done ? " ✓" : ""}</span>)}</div>
+            <div className="bd-buys">{d.buys.map(b => <span key={b.s} className={b.done ? "done" : ""} title={b.done ? "Completes this stock" : "Part of this stock"}><b>{b.s}</b> {qtyTxt(b.qty)}{b.done ? <> <Icon name="check" size={12}/></> : ""}</span>)}</div>
           </li>))}
       </ol>
       {plan.days.length > 7 && <button type="button" className="px-btn" onClick={() => setAll(v => !v)} id="bd-plan-all">{all ? "Show fewer days" : `Show all ${plan.days.length} days`}</button>}
       {plan.more && <div className="bd-later" id="bd-plan-more">
-        <div className="bd-laterh">⚠ {plan.more.stocks.length} stock{plan.more.stocks.length === 1 ? "" : "s"} still need buying after day {plan.more.from - 1} — the last one finishes on day {plan.more.to.toLocaleString("en-IN")}{yearsTxt(plan.more.to)}.</div>
+        <div className="bd-laterh"><Icon name="alert" size={14}/> {plan.more.stocks.length} stock{plan.more.stocks.length === 1 ? "" : "s"} still need buying after day {plan.more.from - 1} — the last one finishes on day {plan.more.to.toLocaleString("en-IN")}{yearsTxt(plan.more.to)}.</div>
         <p>They trade too little for the amount planned: buying faster would push their prices up. Consider a smaller amount in them, or turn on “Size by trading volume”.</p>
         <div className="table-wrap"><table className="bd-t bd-latert">
           <thead><tr><th>Stock</th><th className="num">Shares a day</th><th className="num">Shares still to buy</th><th className="num">Money still to invest</th><th className="num">Finished on</th></tr></thead>
@@ -401,9 +508,11 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const changed = ["horizon", "quality", "confirmed", "stock_max", "run_up", "fno_only", "by_volume", "pace", "by_float"].filter(k => opt[k] !== B_OPT_DEFAULT[k]).length
     + (opt.exclude.length ? 1 : 0) + (inp.sector !== B_DEFAULT.sector) + (inp.weighting !== "equal");
   const [secSel, setSecSel] = useState([]);                       // sector filter on the plan's stock table
-  useEffect(() => { setSecSel([]); setOpenRows(new Set()); }, [res]);
+  useEffect(() => { setSecSel([]); setOpenRows(new Set()); setClosedCaps(new Set()); }, [res]);
   const [openRows, setOpenRows] = useState(() => new Set());       // stocks whose detail row is open
   const toggleRow = sym => setOpenRows(o => { const x = new Set(o); x.has(sym) ? x.delete(sym) : x.add(sym); return x; });
+  const [closedCaps, setClosedCaps] = useState(() => new Set());  // market-cap groups folded away in the holdings table
+  const toggleCap = c => setClosedCaps(o => { const x = new Set(o); x.has(c) ? x.delete(c) : x.add(c); return x; });
   // an equity slider moves only into the cash share (cash never below the buffer); the cash slider scales the equity
   const setPart = (k, raw) => {
     const v = Math.max(0, Math.round(Number(raw) || 0));
@@ -435,7 +544,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
       .catch(e => { if (e.status === 401) onOut(e.message); else setErr(e.message); })
       .finally(() => setBusy(false));
   };
-  const brand = <div className="px-eyebrow"><span className="ai-spark">✦</span> Hyperplane AI · Portfolio Builder <span>by QuantFriday</span></div>;
+  const brand = <div className="px-eyebrow"><AiSpark/> Hyperplane AI · Portfolio Builder <span>by QuantFriday</span></div>;
   const canPf = apps.some(x => x.key === "portfolio");
 
   if (res) {
@@ -478,7 +587,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             <span className="tcopy"><span className="lbl">Ticker copy · {picks.length}</span><CopyBtns syms={picks.map(p => p.s)}/></span>
             <button type="button" className="px-btn" id="bd-csv" onClick={csv}>Download (Excel)</button>
             {canPf && <button type="button" className="px-btn primary" id="bd-add" disabled={added === "busy" || done} onClick={ask}>
-              {done ? "✓ Sent to AI Portfolio" : "Send to AI Portfolio Analyser"}</button>}
+              {done ? <><Icon name="check" size={16}/> Sent to AI Portfolio</> : "Send to AI Portfolio Analyser"}</button>}
           </div>
         </header>
         {added === "ask" && <div className="bd-confirm" role="alert" id="bd-ask">
@@ -491,14 +600,14 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
           <button type="button" className="px-btn" onClick={() => setAdded("")}>Cancel</button></div>}
         {done && <div className="bd-confirm ok" id="bd-done">{added === "replace" ? `Your AI Portfolio Analyser list now holds only these ${picks.length} stocks.` : "Added to your AI Portfolio Analyser list; the stocks already there stay."}
           <button type="button" className="px-btn" onClick={() => onOpenApp("portfolio")}>Open the Analyser</button>
-          <button type="button" className="bd-x" onClick={() => setAdded("")} aria-label="Close this message" title="Close" id="bd-done-x">✕</button></div>}
+          <button type="button" className="bd-x" onClick={() => setAdded("")} aria-label="Close this message" title="Close" id="bd-done-x"><Icon name="x" size={16}/></button></div>}
         {added && !["ask", "busy", "add", "replace"].includes(added) && <div className="pf-miss">{added}</div>}
 
         <SectionTabs tabs={[["bd-kpis", "Overview"], ["bd-row", "Allocation"], ...(res.volume ? [["bd-volume", "Volume analyser"]] : []),
           ["bd-hold", "Holdings"], ...(res.plan ? [["bd-plan", "Execution plan"]] : [])]}/>
 
         <section className="bd-kpis" id="bd-kpis">
-          <div className="px-card bd-kpi"><span className="px-label">Amount</span><b><Money v={res.amount}/></b><small>{res.amount >= 1e7 ? "Cr = crore (1,00,00,000)" : inrShort(res.amount)}</small></div>
+          <div className="px-card bd-kpi"><span className="px-label">Amount</span><b><Money v={res.amount}/></b>{res.amount < 1e7 && <small>{inrShort(res.amount)}</small>}</div>
           <div className="px-card bd-kpi"><span className="px-label">Invested in stocks</span><b><Money v={res.invested}/></b><small>{(100 - res.cash_pct).toFixed(1)}% of the amount</small></div>
           <div className="px-card bd-kpi cash"><span className="px-label">Cash kept <Info text={`Cash for safety: your ${res.alloc.Cash}% choice plus what is left after buying whole shares or when too few stocks passed the checks. Keeping cash lets you add on dips and pay charges without selling.`}/></span><b><Money v={res.cash}/></b><small>{res.cash_pct.toFixed(1)}% of the amount</small></div>
           <div className="px-card bd-kpi"><span className="px-label">Stocks</span><b>{res.stocks}</b><small>{res.stocks < res.count ? `of the ${res.count} you asked for` : "as you asked"}</small></div>
@@ -517,7 +626,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
           </div>
           <div className="px-card bd-secs">
             <div className="bd-sh"><div className="px-label">Sectors · {res.by_sec.length} <Info text={`Share of the invested money in each sector. No sector gets more than ${res.sector_max === 100 ? "any limit (you chose no limit)" : `${res.sector_max}%`} of it. Click sectors to show only their stocks in the list below.`}/></div>
-              {secSel.length > 0 ? <button type="button" className="bd-clr" onClick={() => setSecSel([])}>Clear filter ✕</button> : <span className="bd-shint">click to filter the list</span>}</div>
+              {secSel.length > 0 ? <button type="button" className="bd-clr" onClick={() => setSecSel([])}>Clear filter <Icon name="x" size={12}/></button> : <span className="bd-shint">click to filter the list</span>}</div>
             <div className="bd-sl" id="bd-sectors">{res.by_sec.map(r => (
               <button type="button" key={r.k} className={`bd-s ${secSel.includes(r.k) ? "on" : ""}`} onClick={() => pickSec(r.k)} aria-pressed={secSel.includes(r.k)}
                 title={`${r.k}: ${r.pct.toFixed(1)}% of the invested money, ${r.n} stock${r.n === 1 ? "" : "s"}`}>
@@ -531,7 +640,10 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
 
         <section className="px-card px-hold bd-hold" id="bd-hold">
           <div className="px-ch"><div><h3>Portfolio holdings</h3><p>{secSel.length ? `${shown.length} of ${picks.length} stocks · ${secSel.join(", ")}` : "Whole shares at today's price. Prices move, so check the price before you buy."}</p></div>
-            <div className="bd-tf"><span className="px-label">Sector</span>
+            <div className="bd-tf">
+              <button type="button" className="px-btn bd-gall" id="bd-gall" onClick={() => setClosedCaps(o => o.size ? new Set() : new Set(caps))}>
+                {closedCaps.size ? "Show all groups" : "Collapse all groups"}</button>
+              <span className="px-label">Sector</span>
               <MultiSelect label="sectors" options={res.by_sec.map(r => r.k)} value={secSel} onChange={setSecSel} width={190}/></div></div>
           <div className="table-wrap"><table className="bd-t">
             <thead><tr><th className="bd-xh"><button type="button" className="bd-xall" id="bd-xall" onClick={() => setOpenRows(o => o.size ? new Set() : new Set(shown.map(p => p.s)))}
@@ -539,9 +651,14 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
               <th className="num" title="Long-term strength from −100 to +100 (AI Portfolio engine), not a price change">Strength</th>
               <th title="Liquidity grade and whether your amount fits the stock's trading — open the row for the full analysis">Liquidity</th></tr></thead>
             <tbody>{caps.filter(c => shown.some(p => p.cap === c)).map(c => <React.Fragment key={c}>
-              <tr className="bd-grp"><td colSpan={10}><i style={{ background: B_COL[c] }}/>{c} cap · {shown.filter(p => p.cap === c).length} stocks · <Money v={shown.filter(p => p.cap === c).reduce((t, p) => t + p.amt, 0)}/></td></tr>
-              {shown.filter(p => p.cap === c).map(p => (<React.Fragment key={p.s}>
-                <tr data-sym={p.s} className={`${p.liq && p.liq.status === "over" ? "bd-over" : ""} ${openRows.has(p.s) ? "bd-open" : ""}`}>
+              <tr className={`bd-grp ${closedCaps.has(c) ? "closed" : ""}`}><td colSpan={10}>
+                <button type="button" className="bd-gbtn" id={`bd-grp-${c}`} aria-expanded={!closedCaps.has(c)} onClick={() => toggleCap(c)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                  <i style={{ background: B_COL[c] }}/>{c} cap<span className="bd-gmeta">{shown.filter(p => p.cap === c).length} stocks · <Money v={shown.filter(p => p.cap === c).reduce((t, p) => t + p.amt, 0)}/></span>
+                  <span className="bd-ghint">{closedCaps.has(c) ? "Show stocks" : "Hide"}</span></button></td></tr>
+              {!closedCaps.has(c) && shown.filter(p => p.cap === c).map(p => (<React.Fragment key={p.s}>
+                <tr data-sym={p.s} className={`bd-row ${p.liq && p.liq.status === "over" ? "bd-over" : ""} ${openRows.has(p.s) ? "bd-open" : ""}`}
+                  onClick={e => { if (!e.target.closest("a,button,input,select,label")) toggleRow(p.s); }}>
                   <td className="bd-xc"><button type="button" className="bd-xbtn" aria-expanded={openRows.has(p.s)} aria-label={`${openRows.has(p.s) ? "Hide" : "Show"} details of ${p.s}`}
                     onClick={() => toggleRow(p.s)}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button></td>
                   <td className="mono dim">{picks.indexOf(p) + 1}</td>
@@ -553,14 +670,13 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
                   <td className="num mono">{p.w.toFixed(2)}%</td>
                   <td className={`num mono ${tc(p.st)}`}><b>{signed(p.st)}</b></td>
                   <td><VolCell p={p} open={openRows.has(p.s)} onClick={() => toggleRow(p.s)}/>
-                    {p.ff && p.ff.status === "over" && <button type="button" className="bd-ffx" onClick={() => toggleRow(p.s)} title="Open the row for the free-float check">⚠ {pct(p.ff.held)} of free float</button>}</td>
+                    {p.ff && p.ff.status === "over" && <button type="button" className="bd-ffx" onClick={() => toggleRow(p.s)} title="Open the row for the free-float check"><Icon name="alert" size={12}/> {pct(p.ff.held)} of free float</button>}</td>
                 </tr>
                 {openRows.has(p.s) && <tr className="bd-vrow"><td colSpan={10}>
-                  <div className="bd-detail" id={`bd-detail-${p.s}`}>
-                    <div className="bd-dsec"><div className="bd-dh2">Why it was picked</div><div className="bd-why lg">{p.why.map(w => <span key={w}>{w}</span>)}</div></div>
-                    <div className="bd-dsec"><div className="bd-dh2">Volume analyser</div><VolCard p={p}/></div>
-                    {p.ff && p.ff.show && <div className="bd-dsec"><div className="bd-dh2">Free float <Info text={FF_INFO}/></div><FloatCard p={p}/></div>}
-                  </div></td></tr>}</React.Fragment>))}
+                  <div className="bd-detail" id={`bd-detail-${p.s}`}><div className="fs-sheet">
+                    <KeyPoints p={p}/>
+                    <div className="fs-cols"><VolCard p={p} asOf={res.as_of}/><FloatCard p={p}/></div>
+                  </div></div></td></tr>}</React.Fragment>))}
             </React.Fragment>)}
               {!secSel.length && <tr className="bd-cash"><td></td><td></td><td colSpan={4}><i style={{ background: B_COL.Cash }}/>Cash kept for safety</td><td className="num mono"><Money v={res.cash}/></td><td className="num mono">{res.cash_pct.toFixed(2)}%</td><td colSpan={2}></td></tr>}
             </tbody></table></div>
@@ -623,7 +739,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
                 <small>{B_PARTS.map(([p]) => `${B_PRESETS[k][p]} ${p === "Cash" ? "cash" : p.toLowerCase()}`).join(" · ")}</small></button>))}</div>
             <div className="al" role="group" aria-label="Market-cap mix and cash">
               <div className="al-top"><MixBar thin parts={B_PARTS.map(([k]) => [k, a[k]])}/>
-                <span className="al-total" title="Large, mid and small cap plus cash">✓ 100% allocated</span></div>
+                <span className="al-total" title="Large, mid and small cap plus cash"><Icon name="check" size={12}/> 100% allocated</span></div>
               <div className="al-head" aria-hidden="true"><span>Segment</span><span>Allocation</span><span className="c">Share</span><span className="r">Amount</span></div>
               {B_PARTS.map(([k, l]) => (
                 <div key={k} className={`al-row ${k === "Cash" ? "cash" : ""}`} data-part={k}>
@@ -645,11 +761,11 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             <span className="bd-l">4 · Reliability <Info wide text={<><b>Reliability</b> comes from the stock's whole price history. <b>High</b>: it has stayed close to its highest price over the years.
               <b> Medium</b>: more than 50% below its highest price, or lower than 5 years ago. <b>Low</b>: it once fell more than 70% from its highest price, so the builder never uses it.</>}/></span>
             <div className="bd-chips">
-              <button type="button" className="on locked" disabled title="High reliability is always included">✓ High</button>
+              <button type="button" className="on locked" disabled title="High reliability is always included"><Icon name="check" size={12}/> High</button>
               {plan && !plan.reliability.includes("M")
-                ? <button type="button" id="bd-rel-m" className="off" disabled title="Medium reliability is not included in your access">🔒 Medium</button>
-                : <button type="button" id="bd-rel-m" className={inp.rel.includes("M") ? "on" : ""} onClick={() => setInp({ rel: inp.rel.includes("M") ? ["S"] : ["S", "M"] })}>{inp.rel.includes("M") ? "✓ " : "+ "}Medium</button>}
-              <button type="button" id="bd-rel-w" className="off" disabled title="Low reliability stocks once fell more than 70% from their highest price. The builder never uses them.">🔒 Low</button>
+                ? <button type="button" id="bd-rel-m" className="off" disabled title="Medium reliability is not included in your access"><Icon name="lock" size={12}/> Medium</button>
+                : <button type="button" id="bd-rel-m" className={inp.rel.includes("M") ? "on" : ""} onClick={() => setInp({ rel: inp.rel.includes("M") ? ["S"] : ["S", "M"] })}><Icon name={inp.rel.includes("M") ? "check" : "plus"} size={12}/> Medium</button>}
+              <button type="button" id="bd-rel-w" className="off" disabled title="Low reliability stocks once fell more than 70% from their highest price. The builder never uses them."><Icon name="lock" size={12}/> Low</button>
             </div>
           </div>
 
@@ -660,8 +776,8 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
           </div>}
 
           <details className="bd-more" id="bd-more">
-            <summary>More options <span>{locked ? "🔒 fixed for your access" : changed ? `${changed} changed` : "horizon · trend quality · regime · limits · sectors"}</span></summary>
-            {locked && <div className="bd-lock" id="bd-lock">🔒 These are the standard settings, fixed for your access.</div>}
+            <summary>More options <span>{locked ? <><Icon name="lock" size={12}/> fixed for your access</> : changed ? `${changed} changed` : "horizon · trend quality · regime · limits · sectors"}</span></summary>
+            {locked && <div className="bd-lock" id="bd-lock"><Icon name="lock" size={14}/> These are the standard settings, fixed for your access.</div>}
             <fieldset className="bd-fs" disabled={locked}>
             <div className="bd-f">
               <span className="bd-l">Time horizon <Info text="How the monthly, quarterly and yearly trends are blended. Long term follows the AI Portfolio Analyser. Medium term gives the month more weight."/></span>
@@ -698,7 +814,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             </div>
             <div className="bd-f">
               <span className="bd-l">Stocks</span>
-              <div className="bd-chips"><button type="button" id="bd-fno" className={opt.fno_only ? "on" : ""} onClick={() => setOpt({ fno_only: !opt.fno_only })}>{opt.fno_only ? "✓ " : ""}F&amp;O stocks only (easier to buy and sell)</button></div>
+              <div className="bd-chips"><button type="button" id="bd-fno" className={opt.fno_only ? "on" : ""} onClick={() => setOpt({ fno_only: !opt.fno_only })}>{opt.fno_only ? <><Icon name="check" size={12}/> </> : ""}F&amp;O stocks only (easier to buy and sell)</button></div>
             </div>
             <div className="bd-f">
               <span className="bd-l">Leave out sectors</span>
@@ -718,7 +834,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
 
           {(err || (problem && !amtProblem && !nProblem && problem !== "Loading…")) && <div className="pf-miss" role="alert">{err || problem}</div>}
           <button type="button" className="pf-go" id="bd-go" disabled={busy || !!problem} onClick={build}>
-            {busy ? "Hyperplane AI is checking every stock…" : "✦ Build my portfolio"}</button>
+            {busy ? "Hyperplane AI is checking every stock…" : <><Icon name="sparkles" size={16}/> Build my portfolio</>}</button>
         </div>
         <aside className="pf-sr">
           <h3>How it works</h3>
@@ -738,7 +854,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             <div><dt>Regime</dt><dd>{B_REGIME.find(([k]) => k === opt.confirmed)[1]}</dd></div>
             {pool && <div><dt>Today's pool</dt><dd>{pool.total.toLocaleString("en-IN")} stocks</dd></div>}
           </dl>
-          <div className="pf-trust"><span className="ai-spark">✦</span><span>Built on the same engine as the AI Portfolio Analyser. For education only, not investment advice.</span></div>
+          <div className="pf-trust"><AiSpark/><span>Built on the same engine as the AI Portfolio Analyser. For education only, not investment advice.</span></div>
         </aside>
       </section>
     </div>

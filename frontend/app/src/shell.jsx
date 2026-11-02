@@ -4,7 +4,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
 import { QuickGuideButton } from "./quick.jsx";
 import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
-import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, GridIcon, GuideIcon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, fmtDT, fmtDay, fmtTime, foldText, getMode, useTheme } from "./core.jsx";
+import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, GridIcon, GuideIcon, Icon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, fmtDT, fmtDay, fmtTime, foldText, getMode, useTheme } from "./core.jsx";
 
 // WhatsApp country code: every country (dial.js); it follows the Country choice until the user picks a code
 const DIAL_BY = Object.fromEntries(DIAL_CODES);
@@ -74,7 +74,7 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
       {acct && (
         <div className="overlay" onClick={() => setAcct(false)}>
           <div className="modal acct-modal" onClick={e => e.stopPropagation()} role="dialog" aria-label="Account">
-            <button className="x" onClick={() => setAcct(false)} aria-label="Close">✕</button>
+            <button className="x" onClick={() => setAcct(false)} aria-label="Close"><Icon name="x" size={16}/></button>
             <div className="acct-h big"><span className="avatar xl">{initial}</span><div><div className="m-name">{me.name}</div><div className="sub">Hyperplane by QuantFriday</div></div></div>
             <div className="acct-rows">
               <div><span className="lbl">Email</span><span>{me.email}</span></div>
@@ -120,7 +120,7 @@ function AppsPanel({ apps, pins, maxPins, current, onOpen, onPin, onClose, msg }
       <aside className="ap" role="dialog" aria-label="All apps" id="apps-panel">
         <div className="ap-head">
           <label className="ap-search"><SearchIcon/><input autoFocus placeholder="Search apps" value={q} onChange={e => setQ(e.target.value)} aria-label="Search apps" id="apps-search"/></label>
-          <button type="button" className="ap-x" onClick={onClose} aria-label="Close" id="apps-close">✕</button>
+          <button type="button" className="ap-x" onClick={onClose} aria-label="Close" id="apps-close"><Icon name="x" size={16}/></button>
         </div>
         <div className="ap-note"><b>{pins.length} of {maxPins}</b> pinned to your menu · pin the apps you use most</div>
         {msg && <div className="ap-msg" role="alert">{msg}</div>}
@@ -193,7 +193,7 @@ function Hero() {
       <p className="hero-p">Most losses start the same way — buying a weak stock, in a falling sector, against the bigger trend.
         Hyperplane checks every NSE stock, its industry and its sector across five timeframes, and tells you in plain words
         where the strength is and what to stay away from. You don't need more information — you need the right information.</p>
-      <ul className="feats">{feats.map(([h, t]) => <li key={h}><span className="tick">✓</span><div><b>{h}</b><span>{t}</span></div></li>)}</ul>
+      <ul className="feats">{feats.map(([h, t]) => <li key={h}><span className="tick"><Icon name="check" size={12}/></span><div><b>{h}</b><span>{t}</span></div></li>)}</ul>
       <div className="hero-demo">
         {demo.map(([l, k, v]) => (
           <div key={l} className="hd-row"><span>{l}</span>

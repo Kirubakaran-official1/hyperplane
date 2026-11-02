@@ -1,7 +1,7 @@
 // Research view (Control Tower) — a lazily loaded application module (micro-frontend): its code and styles load
 // only when the customer opens it.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addCss, trackAction } from "../core.jsx";
+import { AiSpark, Icon, addCss, trackAction } from "../core.jsx";
 import { BG, BG_NAME, CAT, CopyBtns, DISCLAIMER, Info, MODES, Meter, ModeWeights, MultiSelect, OverallMeter, RG_FILTER, RG_INFO, RegimeBox, RegimeTag, SIZES, Seg, StrengthBar, StrengthTag, TFS, TF_NAME, categoryOf, colorOf, combinedView, dirKey, dirTf, dirVal, fmtDT, focusDir, focusOf, groupState, groupWord, isBi, levelOf, pct, regimeMatch, regimeOf, sizeOf, strengthCls, strengthLabel, summaryOf, weightPct } from "../core.jsx";
 import { InvestmentSummary } from "./portfolio-engine.jsx";
 import { CSS } from "./research.css.js";
@@ -102,14 +102,14 @@ function QuadrantChart({ items, selected, onSelect, height = 360 }) {
   );
 }
 
-const ViewToggle = ({ v, set }) => <div className="seg">{[["bubble","◉ Bubble"],["list","☰ List"]].map(([k, l]) => <button key={k} className={v === k ? "on" : ""} onClick={() => set(k)}>{l}</button>)}</div>;
+const ViewToggle = ({ v, set }) => <div className="seg">{[["bubble","Bubble"],["list","List"]].map(([k, l]) => <button key={k} className={v === k ? "on" : ""} onClick={() => set(k)}><Icon name={k} size={12}/>{l}</button>)}</div>;
 
 function SectorPanel({ rows, tfLabel, selected, onPick }) {
   const [view, setView] = useState("bubble");
   const top = rows.slice(0, 10), max = Math.max(1, ...top.map(r => r.st));
   return (
     <div className="card panel">
-      <div className="panel-h"><div><div className="panel-t">🏭 Sector Strength Leaderboard <Info text="Each bubble is a sector. Right = more of it is in an uptrend, left = more of it is in a downtrend, up = stronger (0–100), bigger = more activity. Click a sector to filter the industries and the master data; click it again to clear."/></div><div className="sub">{tfLabel} · bubble size = activity · click to filter</div></div><ViewToggle v={view} set={setView}/></div>
+      <div className="panel-h"><div><div className="panel-t"><Icon name="factory" size={20} className="panel-ic"/>Sector Strength Leaderboard <Info text="Each bubble is a sector. Right = more of it is in an uptrend, left = more of it is in a downtrend, up = stronger (0–100), bigger = more activity. Click a sector to filter the industries and the master data; click it again to clear."/></div><div className="sub">{tfLabel} · bubble size = activity · click to filter</div></div><ViewToggle v={view} set={setView}/></div>
       {view === "bubble"
         ? <QuadrantChart selected={selected} onSelect={onPick} items={rows.map(r => ({ key:r.k, label:r.k, x:r.nb, y:r.st, size:r.sig || r.n, color:colorOf(r.k),
             tip:`${r.k}: strength ${r.st} (${strengthLabel(r.st)}) · net bias ${r.nb > 0 ? "+" : ""}${r.nb} · ${r.n} stocks · ${r.adv} up / ${r.dec} down · avg ${r.avg >= 0 ? "+" : ""}${r.avg}%` }))}/>
@@ -132,7 +132,7 @@ function IndustryPanel({ rows, tfLabel, sectors, selected, onPick }) {
   const bubbles = [...inSec].sort((a, b) => (b.sig || b.n) - (a.sig || a.n)).slice(0, 40);
   return (
     <div className="card panel">
-      <div className="panel-h"><div><div className="panel-t">📐 Industry Bias Momentum <Info right text="Each bubble is an industry, coloured by its sector. Same axes as the sector chart. Picking a sector shows only its industries. Click an industry to filter the master data."/></div><div className="sub">{tfLabel}{sectors.length ? ` · in ${sectors.length === 1 ? sectors[0] : `${sectors.length} sectors`}` : " · busiest 40"} · click to filter</div></div>
+      <div className="panel-h"><div><div className="panel-t"><Icon name="layers" size={20} className="panel-ic"/>Industry Bias Momentum <Info right text="Each bubble is an industry, coloured by its sector. Same axes as the sector chart. Picking a sector shows only its industries. Click an industry to filter the master data."/></div><div className="sub">{tfLabel}{sectors.length ? ` · in ${sectors.length === 1 ? sectors[0] : `${sectors.length} sectors`}` : " · busiest 40"} · click to filter</div></div>
         <div className="row-gap">{view === "list" && <div className="seg"><button className={side === "up" ? "on up" : ""} onClick={() => setSide("up")}>▲ Uptrend</button><button className={side === "down" ? "on down" : ""} onClick={() => setSide("down")}>▼ Downtrend</button></div>}<ViewToggle v={view} set={setView}/></div></div>
       {view === "bubble"
         ? <QuadrantChart selected={selected} onSelect={onPick} items={bubbles.map(r => ({ id:`${r.sec}|${r.k}`, key:r.k, label:r.k, x:r.nb, y:r.st, size:r.sig || r.n, color:colorOf(r.sec),
@@ -180,9 +180,9 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
   return (
     <div className="overlay" onClick={onClose}>
       <div className="modal stock" onClick={e => e.stopPropagation()} role="dialog" aria-label={s.n}>
-        <button className="x" onClick={onClose} aria-label="Close">✕</button>
+        <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>
         <div className="m-head">
-          <div><div className="m-name">{s.n}</div><div className="sub"><span className="sym">{s.s}</span> · {s.sec} › {s.ind} · {sizeOf(s)} cap{s.f ? " · F&O" : ""}{s.h && <> · <span className={`bgtag ${s.h}`}>{BG_NAME[s.h]} reliability</span></>}{s.x ? <> · <span className="stretch-tag" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase.">🔥 Stretched</span></> : null}</div></div>
+          <div><div className="m-name">{s.n}</div><div className="sub"><span className="sym">{s.s}</span> · {s.sec} › {s.ind} · {sizeOf(s)} cap{s.f ? " · F&O" : ""}{s.h && <> · <span className={`bgtag ${s.h}`}>{BG_NAME[s.h]} reliability</span></>}{s.x ? <> · <span className="stretch-tag" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase."><Icon name="flame" size={12}/> Stretched</span></> : null}</div></div>
           <div className="m-price"><div className="mono">₹{s.p}</div>{s.c != null && <div className={`mono ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}% today</div>}
             <span className="tcopy m-copy" title={`Copy ${s.s} only`}><span className="lbl">Copy {s.s}</span><CopyBtns syms={[s.s]}/></span></div>
         </div>
@@ -192,16 +192,16 @@ function StockCard({ s, data, onOpen, onClose, origin = null }) {
           <OverallMeter os={s.os} secA={secA} indA={indA} size={170} className="om-card"/>
           <div className="mo-side">
           <div className="mo-top">
-            <span className={`dirtag ${bi ? "bi" : od === 1 ? "up" : od === -1 ? "down" : "side"}`} title={summaryOf(s)}>{bi ? "⇅ Bidirectional" : ups.length && !dns.length ? "▲ One-directional up" : dns.length && !ups.length ? "▼ One-directional down" : "◆ Sideways"}</span>
-            {view && <div className={`cv-verdict ${view.tone}`}>{view.title}</div>}
+            <span className={`dirtag ${od === 1 ? "up" : od === -1 ? "down" : "side"}`} title={summaryOf(s)}>{ups.length && !dns.length ? "▲ One-directional up" : dns.length && !ups.length ? "▼ One-directional down" : "◆ Sideways"}</span>
+            {view && <div className={`cv-verdict ${view.tone}`}><Icon name={view.icon} size={12}/>{view.title}</div>}
           </div>
           <div className="mo-sum">
-            <div className="lbl ai-h"><span className="ai-spark">✦</span> AI insights <Info text="Short insights written automatically from Hyperplane's quant data for this stock, its industry and its sector (Combined timeframe) — information, not advice. A sector or industry backs the stock when it is Good or Strong (61%+) and counts against it when Weak (30% or less). The best ideas have all three pointing the same way — see Docs → golden rules."/></div>
+            <div className="lbl ai-h"><AiSpark/> AI insights <Info text="Short insights written automatically from Hyperplane's quant data for this stock, its industry and its sector (Combined timeframe) — information, not advice. A sector or industry backs the stock when it is Good or Strong (61%+) and counts against it when Weak (30% or less). The best ideas have all three pointing the same way — see Docs → golden rules."/></div>
             {grp("Sector", s.sec, secA)}
             {grp("Industry", s.ind, indA)}
             {ai && <div className={`ai-box ${view ? view.tone : "mid"}`}>
-              <div className="ai-l good"><b>✓ Good</b><span>{ai.good.length ? ai.good.join(" · ") : "No clear strength right now."}</span></div>
-              <div className="ai-l bad"><b>⚠ Watch out</b><span>{ai.bad.length ? ai.bad.join(" · ") : "Nothing major — stock, industry and sector point the same way."}</span></div>
+              <div className="ai-l good"><b><Icon name="check" size={12}/> Good</b><span>{ai.good.length ? ai.good.join(" · ") : "No clear strength right now."}</span></div>
+              <div className="ai-l bad"><b><Icon name="alert" size={12}/> Watch out</b><span>{ai.bad.length ? ai.bad.join(" · ") : "Nothing major — stock, industry and sector point the same way."}</span></div>
               <div className="ai-l focus"><b>◎ Focus</b><span>{ai.focus}</span></div>
             </div>}
           </div>
@@ -304,7 +304,7 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
     return arr;
   }, [filtered, sort, tfs]);
   const cats = useMemo(() => { const c = { up:0, down:0, bi:0, side:0 }; base.forEach(s => { const k = categoryOf(s, tfs); if (k) c[k]++; }); return c; }, [base, tfs]);
-  const nUp = cats.up, nDown = cats.down, nBi = cats.bi;
+  const nUp = cats.up, nDown = cats.down;
   const panelTf = tfs.length === 1 ? tfs[0] : "A";
   const tfLabel = tfs.length > 1 ? "Combined (pick one timeframe to see it alone)" : panelTf === "A" ? `${MODES[mode].label} (all timeframes)` : TF_NAME[panelTf];
   const focusLabel = !tfs.length ? `${MODES[mode].label} (all timeframes)` : tfs.length === 1 ? TF_NAME[tfs[0]] : `Avg ${tfs.join("+")}`;
@@ -328,8 +328,8 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
             isOn={k => !tfs.length && mode === k} onPick={k => { setMode(k); setTfs([]); }}/></div>
         <div className="fg"><span className="fl">Timeframe <Info text="Look at single timeframes only: D / W / M / Q / Y (several = they must all agree). Picking a timeframe switches the Trading mode off; clear the timeframes to go back to your mode."/></span>
           <Seg items={TFS.map(([k, l]) => [k, k, "tf", `${l} only`])} isOn={k => tfs.includes(k)} onPick={toggleTf}/></div>
-        <div className="fg"><span className="fl">Trend <Info text="Uptrend / Downtrend = direction on the chosen timeframe(s). Sideways = no clear direction. Bidirectional = up on some timeframes and down on others."/></span>
-          <Seg items={[["all","All"],["up","▲ Up","up"],["down","▼ Down","down"],["side","◆ Sideways","flat"],["bi","⇅ Bidirectional","bi"]]} isOn={k => f.trend === k} onPick={setTrend}/></div>
+        <div className="fg"><span className="fl">Trend <Info text="Uptrend / Downtrend = direction on the chosen timeframe(s). Sideways = no clear direction."/></span>
+          <Seg items={[["all","All"],["up","▲ Up","up"],["down","▼ Down","down"],["side","◆ Sideways","flat"]]} isOn={k => f.trend === k} onPick={setTrend}/></div>
         <div className="fg"><span className="fl">Market cap</span>
           <Seg items={SIZES.map(z => [z, z])} isOn={z => f.sizes.includes(z)} onPick={z => pick("sizes", z)}/></div>
         {hasBg && <div className="fg"><span className="fl">Stock reliability <Info text="How reliable the stock's longer-term price history is. Strong = healthy, Moderate = average, Weak = poor. Pick one or more."/></span>
@@ -338,7 +338,7 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
           <Seg items={[["fno","F&O only","up"]]} isOn={() => f.fno} onPick={() => setK("fno", !f.fno)}/></div>
         <div className="fg grow"><span className="fl">Sector</span><MultiSelect label="sectors" options={sectorOpts} value={f.sectors} onChange={v => setK("sectors", v)} width={138}/></div>
         <div className="fg grow"><span className="fl">Industry</span><MultiSelect label="industries" options={industryOpts} value={f.industries} onChange={v => setK("industries", v)} width={150}/></div>
-        {active ? <button className="reset" onClick={() => { setF(EMPTY); setTfs([]); setSort("best"); }} title="Clear every filter">✕ Reset</button> : null}
+        {active ? <button className="reset" onClick={() => { setF(EMPTY); setTfs([]); setSort("best"); }} title="Clear every filter"><Icon name="x" size={12}/> Reset</button> : null}
       </div>
 
       {err && <div className="card empty">{err}</div>}
@@ -349,7 +349,6 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
           <div className="card kpi up"><span className="lbl">▲ Uptrend <Info text="Stocks in an uptrend on the chosen timeframe(s)."/></span><b className="mono">{nUp.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? nUp / base.length * 100 : 0}%` }}/></div></div>
           <div className="card kpi down"><span className="lbl">▼ Downtrend <Info text="Stocks in a downtrend on the chosen timeframe(s)."/></span><b className="mono">{nDown.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? nDown / base.length * 100 : 0}%` }}/></div></div>
           <div className="card kpi side"><span className="lbl">◆ Sideways <Info text="Stocks with no clear trend on the chosen timeframe(s) — price is going nowhere."/></span><b className="mono">{cats.side.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? cats.side / base.length * 100 : 0}%` }}/></div></div>
-          <div className="card kpi bi"><span className="lbl">⇅ Bidirectional <Info text="Stocks in an uptrend on some timeframes and a downtrend on others — the timeframes disagree."/></span><b className="mono">{nBi.toLocaleString()}</b><div className="kbar"><div style={{ width:`${base.length ? nBi / base.length * 100 : 0}%` }}/></div></div>
           <div className="card kpi"><span className="lbl">Strongest sector <Info text="Highest sector strength (0–100) on the chosen timeframe."/></span><b className="kname">{secRows[0] ? secRows[0].k : "—"}</b>{secRows[0] && <small className="mono">strength {secRows[0].st}</small>}</div>
           <div className="card kpi"><span className="lbl">Weakest sector <Info right text="Lowest sector strength (0–100) on the chosen timeframe."/></span><b className="kname">{secRows.length ? secRows[secRows.length - 1].k : "—"}</b>{secRows.length > 0 && <small className="mono">strength {secRows[secRows.length - 1].st}</small>}</div>
         </div>
@@ -361,7 +360,7 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
 
         <section className="card table-card">
           <div className="t-head">
-            <div><div className="panel-t">🗂 Master data <Info text="Every stock with its trend and strength. Strength = how strong the trend is in its own direction, 0–100%. Click a stock for the full picture."/></div>
+            <div><div className="panel-t"><Icon name="table" size={20} className="panel-ic"/>Master data <Info text="Every stock with its trend and strength. Strength = how strong the trend is in its own direction, 0–100%. Click a stock for the full picture."/></div>
               <div className="sub">{sorted.length.toLocaleString()} stocks · {focusLabel} · click a stock for details</div></div>
             <div className="t-tools">
               <input className="search" placeholder="Search a stock" value={q} onChange={e => setQ(e.target.value)} aria-label="Search"/>
@@ -388,7 +387,7 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
                 {sorted.slice(page * PAGE, page * PAGE + PAGE).map((s, i) => { const v = focusOf(s, tfs), d = focusDir(s, tfs), cat = categoryOf(s, tfs); return (
                   <tr key={s.s} onClick={() => setOpen(s)} tabIndex={0} onKeyDown={e => e.key === "Enter" && setOpen(s)}>
                     <td className="mono dim">{page * PAGE + i + 1}</td>
-                    <td><span className="sym">{s.s}</span>{s.f ? <span className="fno">F&amp;O</span> : null}{s.x ? <span className="stretch-tag sm" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase.">🔥</span> : null}{isBi(s, []) && <span className="bi-tag" title="Uptrend on some timeframes, downtrend on others">⇅</span>}<div className="sub">{s.n} · {sizeOf(s)}</div></td>
+                    <td><span className="sym">{s.s}</span>{s.f ? <span className="fno">F&amp;O</span> : null}{s.x ? <span className="stretch-tag sm" title="Ran up 3x or more in about a year — stretched; sharp falls are common. Don't chase."><Icon name="flame" size={12}/></span> : null}{isBi(s, []) && <span className="bi-tag" title="Uptrend on some timeframes, downtrend on others">⇅</span>}<div className="sub">{s.n} · {sizeOf(s)}</div></td>
                     <td className="hide-sm"><span className="sec" style={{ color:colorOf(s.sec) }}>● {s.sec}</span><div className="sub">{s.ind}</div></td>
                     <td className="num mono">₹{s.p}{s.c != null && <div className={`small ${s.c >= 0 ? "up" : "down"}`}>{s.c >= 0 ? "+" : ""}{s.c}%</div>}</td>
                     <td>{cat ? <span className={`dirtag ${CAT[cat][1]}`}>{CAT[cat][0]}</span> : <span className="dim">—</span>}</td>

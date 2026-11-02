@@ -9,7 +9,7 @@
 // scale) → technicals with a plain reading. Raw numbers only under "For checking".
 // Every number comes from the server (detail.py, the same arithmetic as the strength customers see).
 import React, { useEffect, useRef, useState } from "react";
-import { addCss, api, fmtDT, levelOf } from "../core.jsx";
+import { Icon, addCss, api, fmtDT, levelOf } from "../core.jsx";
 import { CSS } from "./detail.css.js";
 
 addCss("detail", CSS);
@@ -27,7 +27,7 @@ const PLACE_SAY = { above: ["Above the zone", "ok"], near_top: ["At the top of t
   lower: ["Lower half", "no"], near_bottom: ["At the bottom of the zone", "no"], below: ["Below the zone", "no"] };
 const PLACE_SENTENCE = { above: "above", near_top: "at the top of", upper: "in the upper half of", lower: "in the lower half of",
   near_bottom: "at the bottom of", below: "below" };
-const MARK = { ok: "✓", no: "✗", mid: "–" };
+const MARK = { ok: <Icon name="check" size={12}/>, no: <Icon name="x" size={12}/>, mid: <Icon name="minus" size={12}/> };
 const BAND_NAMES = ["Above the zone", "Top band", "Upper half", "Lower half", "Bottom band", "Below the zone"];
 const afterRegime = (t, held, sq) => t.strength == null ? null : held ? pyRound(t.strength * sq) : t.strength;
 
@@ -104,7 +104,7 @@ function ScoreBuild({ d, held }) {
         </div>); })}
       <div className="db-total">
         <span>Final score</span><b className={tone(final)}>{plus(final)}</b>
-        <span className="dt-mut">{final != null ? `${levelOf(final)} ${dirWord(final).toLowerCase()}` : "No long-term view"}{total != null && total !== final ? ` · ⚠ the parts add up to ${plus(total)}` : ""}</span>
+        <span className="dt-mut">{final != null ? `${levelOf(final)} ${dirWord(final).toLowerCase()}` : "No long-term view"}{total != null && total !== final ? <> · <Icon name="alert" size={12}/> the parts add up to {plus(total)}</> : ""}</span>
       </div>
     </div>);
 }
@@ -281,8 +281,8 @@ function Verdict({ d, held }) {
       <div className="dv-score"><span>{plus(final)}</span><small>score, −100 to +100</small></div>
       <div>
         <div className="dv-w">{final == null ? "No long-term view for this stock" : `${levelOf(final)} ${dirWord(final).toLowerCase()}`}</div>
-        {good.length > 0 && <div className="dv-l ok">✓ Helping: {good.join(" · ")}</div>}
-        {bad.length > 0 && <div className="dv-l no">✗ Holding it back: {bad.join(" · ")}</div>}
+        {good.length > 0 && <div className="dv-l ok"><Icon name="check" size={12}/> Helping: {good.join(" · ")}</div>}
+        {bad.length > 0 && <div className="dv-l no"><Icon name="x" size={12}/> Holding it back: {bad.join(" · ")}</div>}
       </div>
     </div>);
 }
@@ -310,11 +310,11 @@ export default function StockDetail({ req, onClose, onOut }) {
       <aside className="dt-panel" role="dialog" aria-label={`Detail view of ${req.sym}`} onClick={e => e.stopPropagation()} ref={panel} tabIndex={-1} id="stock-detail">
         <header className="dt-head">
           <div style={{ minWidth: 0 }}>
-            <div className="dt-badge">🔒 Owner only · detail view</div>
+            <div className="dt-badge"><Icon name="lock" size={12}/> Owner only · detail view</div>
             <h2>{d ? d.n : req.sym} <span className="dt-sym">{req.sym}</span></h2>
             {d && <div className="dt-mut">{d.sec} · {d.ind}{d.cap ? ` · ${d.cap} cap` : ""} · price {n2(d.p)}{d.c != null ? ` (${d.c >= 0 ? "+" : "−"}${Math.abs(d.c).toFixed(2)}% today)` : ""} · data as of {fmtDT(meta.as_of)}{req.day ? ` (${req.day.part === "open" ? "day open" : "day end"})` : ""}</div>}
           </div>
-          <button type="button" className="dt-x" onClick={onClose} aria-label="Close">✕</button>
+          <button type="button" className="dt-x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>
         </header>
         {err && <div className="dt-empty" role="alert">{err}</div>}
         {!res && !err && <div className="dt-empty">Loading the detail…</div>}

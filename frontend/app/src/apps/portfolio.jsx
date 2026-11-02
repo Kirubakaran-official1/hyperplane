@@ -1,6 +1,6 @@
 // AI Portfolio Analyser — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addCss, trackAction } from "../core.jsx";
+import { AiSpark, Icon, addCss, trackAction } from "../core.jsx";
 import { G_ZONES, Info, RELIABILITY, RG_INFO, StockLink, StockSearch, TrendGauge, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
 import { LT_TF, PF_CAT, PF_CATS, PF_MIN_YEARS, PF_ORDER, StrengthTiles, analyseHolding, portfolioSummary, zDir } from "./portfolio-engine.jsx";
 import { placeLabels } from "../labels.js";
@@ -41,7 +41,7 @@ function HoldingItem({ r, flash }) {
         </>}
       </div>
       <div className="px-whyc">
-        <div className="px-aih"><span className="ai-spark">✦</span><b>Hyperplane AI</b><span>Research summary</span></div>
+        <div className="px-aih"><AiSpark/><b>Hyperplane AI</b><span>Research summary</span></div>
         <ul className="px-why">{(isNew ? r.why.slice(0, 1) : r.why).map((w, i) => <li key={i}>{w}</li>)}</ul>
       </div>
     </article>
@@ -178,7 +178,7 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
   const clearAll = <>{confirmClear
     ? <span className="pf-clr">Remove all {symbols.length}? <button type="button" onClick={() => { setSymbols([]); setConfirmClear(false); setStage("build"); }}>Yes, clear</button><button type="button" onClick={() => setConfirmClear(false)}>Cancel</button></span>
     : <button type="button" className="pf-clrbtn" onClick={() => setConfirmClear(true)}>Clear all</button>}</>;
-  const brand = <div className="px-eyebrow"><span className="ai-spark">✦</span> Hyperplane AI · Portfolio Analyser <span>by QuantFriday</span></div>;
+  const brand = <div className="px-eyebrow"><AiSpark/> Hyperplane AI · Portfolio Analyser <span>by QuantFriday</span></div>;
   const lock = <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>;
   const search = <StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Type a stock name or ticker to add it"/>;
   const privacy = <div className="pf-priv"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
@@ -197,7 +197,7 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
             <div className="pf-bhead"><b>Your list</b><span className="dim">{plural(symbols.length)}{status ? ` · ${status}` : ""}</span>{symbols.length > 0 && clearAll}</div>
             {symbols.length ? <div className="pf-blist pf-scroll">{symbols.map((k, i) => (
               <div key={k} className="pf-bi"><span className="pf-bn">{i + 1}</span><b className="mono">{k}</b><span className="pf-bname">{bySym[k] ? bySym[k].n : "not in today's data"}</span>
-                <button type="button" onClick={() => remove(k)} aria-label={`Remove ${k}`} title={`Remove ${k}`}>✕</button></div>))}</div>
+                <button type="button" onClick={() => remove(k)} aria-label={`Remove ${k}`} title={`Remove ${k}`}><Icon name="x" size={12}/></button></div>))}</div>
               : <div className="pf-bempty">Your list is empty. Type a stock name or ticker above to add your first stock.</div>}
             <button type="button" className="pf-go" disabled={!symbols.length} onClick={() => { setStage("result"); window.scrollTo(0, 0); }}>
               Analyse my portfolio{symbols.length ? ` (${symbols.length})` : ""}</button>
@@ -214,7 +214,7 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
           <div className="pf-key">{PF_CATS.map(([k, l, t]) => <div key={k} className={t}><i/>{l}</div>)}</div>
           <h3>Your privacy</h3>
           {privacy}
-          <div className="pf-trust"><span className="ai-spark">✦</span><span>Built on Hyperplane's own quant algorithms.</span></div>
+          <div className="pf-trust"><AiSpark/><span>Built on Hyperplane's own quant algorithms.</span></div>
         </aside>
       </section>
     </div>
@@ -277,7 +277,7 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
 
         <section className="px-row2">
           <div className="px-card px-sumc">
-            <div className="px-label"><span className="ai-spark">✦</span> Hyperplane AI summary <Info text="Built on Hyperplane's own quant algorithms: fixed rules on our trend data. No outside AI service is used and it never makes up a number. For information only, not investment advice."/></div>
+            <div className="px-label"><AiSpark/> Hyperplane AI summary <Info text="Built on Hyperplane's own quant algorithms: fixed rules on our trend data. No outside AI service is used and it never makes up a number. For information only, not investment advice."/></div>
             <div className="px-headline"><span className={`px-pill ${sum.tone}`}><i/>{KIND[sum.tone]}</span><h2>{sum.title}</h2></div>
             <ul className="px-points">{sum.lines.map(([t, txt], i) => <li key={i} className={`pl-${t}`}>{txt}</li>)}</ul>
           </div>

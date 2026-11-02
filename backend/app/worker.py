@@ -25,7 +25,7 @@ from . import mailer
 from .db import get_history_enabled, get_meta, get_settings, init_db, pool, set_meta
 from .adoption import ADOPTION_DAYS
 from .detail import DETAIL_DAYS
-from .publish import build_history, history_failed, history_missing, publish
+from .publish import build_history, history_failed, history_missing, publish, quality_issues
 from .schedule import due_slots, now
 from .store import save_snapshot, workbook_to_sheets
 
@@ -157,11 +157,16 @@ def run_job(job, bg):
             _drop_older_manual(started.date(), keep_id=sid)
         print(f"✓ Stored as collection #{sid} ({len(sheets)} sheets)")
         if get_settings().get("publish_mode") == "auto":
-            try:
-                pub = publish(sid, mode="auto", by="auto")
-                print(f"📣 Published to customers ({pub['stocks']} stocks)")
-            except Exception as e:                               # noqa: BLE001 — never fail the collection for this
-                print(f"⚠ Could not publish to customers: {e}")
+            issues = quality_issues(sheets)                      # incomplete data never replaces good data by itself
+            if issues:
+                print(f"⏸ Not published to customers automatically: {'; '.join(issues)}. The last published data stays — "
+                      "check this collection and publish it by hand in Admin → Customers → Publishing to customers if it is right.")
+            else:
+                try:
+                    pub = publish(sid, mode="auto", by="auto")
+                    print(f"📣 Published to customers ({pub['stocks']} stocks)")
+                except Exception as e:                           # noqa: BLE001 — never fail the collection for this
+                    print(f"⚠ Could not publish to customers: {e}")
         try:                                                     # final output stored for every collection (owner,
             r = build_history(sid)                               # 2026-11-01): past day (scheduled) + stock states
             print(f"🗓 Final output stored ({r and r['states']} stock states"

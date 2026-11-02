@@ -582,6 +582,29 @@ def history_failed(snapshot_id, error):
     set_meta("history_failed", failed)
 
 
+def quality_issues(sheets):
+    """Reasons NOT to publish a collection automatically (owner, 2026-11-03: a 23:43 "Sync now" got empty ChartInk
+    tables — no master data, no Midcap 150 — and auto-publish replaced the good data). Empty list = fine.
+    The collection is still stored; the admin can look at it and publish it by hand."""
+    master = sheets.get("Master_Stock_Data") or []
+    issues = []
+    # the master screener (sector, market cap, volumes, shares) came back empty → the scanner fell back to raw-data-5,
+    # whose rows have none of the master's volume columns
+    if not master or not any(r.get("Weekly_Volume_1") not in (None, "") for r in master[:500]):
+        issues.append("the master screener (market cap, volumes, shares) came back empty")
+    caps = {v: 0 for v in CAP.values()}
+    for r in master:
+        k = CAP.get(str(r.get("Marketcap") or "").replace(" ", "").lower())
+        if k:
+            caps[k] += 1
+    missing = [k for k, n in caps.items() if n == 0]
+    if master and missing:
+        issues.append(f"no {' / '.join(m.lower() for m in missing)} cap stocks")
+    if len(sheets.get("Zone_Levels") or []) < 500:
+        issues.append(f"only {len(sheets.get('Zone_Levels') or [])} stocks with zones")
+    return issues
+
+
 def publish(snapshot_id=None, mode="manual", by=None, dry_run=False):
     """Build the customer view from a collection (latest when snapshot_id is None) and store it."""
     with pool.connection() as c:

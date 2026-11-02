@@ -3,6 +3,22 @@
 // Messages travel as plain blocks [{t:"text",v}, {t:"img",src|id}] and are rendered as text — never as HTML.
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
+// icons (design system, 2026-11-03): Lucide line icons (ISC) — no emoji / unicode glyphs; currentColor
+const HD_ICONS = {
+  image: <><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/></>,
+  x: <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
+  send: <><path d="M14.54 21.69a.5.5 0 0 0 .94-.02l6.5-19a.5.5 0 0 0-.64-.64l-19 6.5a.5.5 0 0 0-.02.94l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/></>,
+  check: <path d="M20 6 9 17l-5-5"/>,
+  trash: <><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></>,
+  reopen: <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></>,
+  pencil: <><path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/></>,
+  mail: <><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></>,
+  bell: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
+};
+const HdIc = ({ n, size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={size <= 12 ? 2 : 1.5} strokeLinecap="round"
+    strokeLinejoin="round" aria-hidden="true" style={{ flex: "none", verticalAlign: "-.15em" }}>{HD_ICONS[n]}</svg>);
+
 // Line icon for the helpdesk (two speech bubbles) — used on the tabs of both apps
 export const HelpdeskIcon = ({ size = 15 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
@@ -117,7 +133,7 @@ const RichBox = forwardRef(function RichBox({ placeholder, minHeight = 160, onEr
 function ImageBtn({ onFiles, label = "Insert image" }) {
   const inp = useRef(null);
   return <>
-    <button type="button" className="hd-btn ghost" onClick={() => inp.current.click()} title="Add a screenshot or picture (PNG, JPEG, WebP)">🖼 {label}</button>
+    <button type="button" className="hd-btn ghost" onClick={() => inp.current.click()} title="Add a screenshot or picture (PNG, JPEG, WebP)"><HdIc n="image"/> {label}</button>
     <input ref={inp} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={e => { onFiles([...e.target.files]); e.target.value = ""; }} />
   </>;
 }
@@ -190,7 +206,7 @@ function Compose({ api, base, onSent, onCancel }) {
   };
   return (
     <div className="hd-compose">
-      <div className="hd-compose-h"><span>New query</span><button type="button" className="hd-x" onClick={onCancel} aria-label="Discard">✕</button></div>
+      <div className="hd-compose-h"><span>New query</span><button type="button" className="hd-x" onClick={onCancel} aria-label="Discard"><HdIc n="x" size={16}/></button></div>
       <div className="hd-field"><label>To</label><span className="hd-to"><span className="hd-to-av">Q</span>QuantFriday Helpdesk</span></div>
       <div className="hd-field"><label htmlFor="hd-subj">Subject</label><input id="hd-subj" maxLength={150} value={subject} onChange={e => setSubject(e.target.value)} placeholder="A short summary of your query" autoFocus /></div>
       <div className="hd-field"><label>Severity</label>
@@ -204,7 +220,7 @@ function Compose({ api, base, onSent, onCancel }) {
         <RichBox ref={box} placeholder="Describe your query… you can paste or drop screenshots right here." minHeight={230} onError={setMsg} onSubmit={send} />
       </div>
       <div className="hd-compose-f">
-        <button type="button" className="hd-btn send" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"} <span aria-hidden="true">➤</span></button>
+        <button type="button" className="hd-btn send" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"} <HdIc n="send"/></button>
         <ImageBtn onFiles={f => box.current.addFiles(f)} />
         <span className="hd-hint">Images only (PNG, JPEG, WebP) · up to {MAX_IMAGES} · no files · Ctrl+Enter sends</span>
         <span className="hd-grow" />
@@ -258,16 +274,16 @@ function Thread({ api, base, id, staff, onChanged, onBack, onNew }) {
         </div>
         <div className="hd-th-a">
           {t.status === "open"
-            ? <button type="button" className="hd-btn" onClick={() => act("/close")} title="Mark this query as resolved">✓ Close query</button>
+            ? <button type="button" className="hd-btn" onClick={() => act("/close")} title="Mark this query as resolved"><HdIc n="check"/> Close query</button>
             : staff && <button type="button" className="hd-btn" onClick={() => act("/reopen")}>↺ Reopen</button>}
           {staff && (confirmDel
             ? <><button type="button" className="hd-btn danger" onClick={() => act("", "DELETE")}>Delete for good</button><button type="button" className="hd-btn ghost" onClick={() => setConfirmDel(false)}>Keep</button></>
-            : <button type="button" className="hd-btn ghost" onClick={() => setConfirmDel(true)} title="Delete this query and its images">🗑</button>)}
+            : <button type="button" className="hd-btn ghost" onClick={() => setConfirmDel(true)} title="Delete this query and its images"><HdIc n="trash"/></button>)}
         </div>
       </div>
       <div className="hd-msgs" ref={scroller}>
         {d.messages.map(m => m.kind === "system"
-          ? <div key={m.id} className="hd-event">{(m.body[0] && m.body[0].v) === "closed" ? "✓ Closed" : "↺ Reopened"} by {m.mine && !staff ? "you" : m.name} · {fmt(m.at)}</div>
+          ? <div key={m.id} className="hd-event">{(m.body[0] && m.body[0].v) === "closed" ? <><HdIc n="check" size={12}/> Closed</> : <><HdIc n="reopen" size={12}/> Reopened</>} by {m.mine && !staff ? "you" : m.name} · {fmt(m.at)}</div>
           : (
             <div key={m.id} className={`hd-msg ${m.side} ${m.mine ? "mine" : ""}`}>
               <div className="hd-msg-h">
@@ -288,7 +304,7 @@ function Thread({ api, base, id, staff, onChanged, onBack, onNew }) {
         <div className="hd-reply">
           <RichBox ref={box} placeholder={staff ? "Write a reply to the customer / user…" : "Write a reply… paste or drop screenshots here"} minHeight={74} onError={setMsg} onSubmit={send} />
           <div className="hd-reply-f">
-            <button type="button" className="hd-btn send" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"} <span aria-hidden="true">➤</span></button>
+            <button type="button" className="hd-btn send" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"} <HdIc n="send"/></button>
             <ImageBtn onFiles={f => box.current.addFiles(f)} label="Image" />
             <span className="hd-hint">Ctrl+Enter sends</span>
             <span className="hd-grow" />
@@ -333,7 +349,7 @@ export function Helpdesk({ api, base, staff = false, openReq = null, onChanged =
         <div className="hd-list-h">
           <div><div className="hd-title">{staff ? "Helpdesk inbox" : "My queries"}</div>
             <div className="hd-sub">{staff ? "Every query from customers and users" : "Ask QuantFriday anything — we reply here"}{unreadTotal ? ` · ${unreadTotal} new` : ""}</div></div>
-          {!staff && <button type="button" className="hd-btn primary" onClick={() => setSel("new")}>✎ New query</button>}
+          {!staff && <button type="button" className="hd-btn primary" onClick={() => setSel("new")}><HdIc n="pencil"/> New query</button>}
         </div>
         <div className="hd-tabs">
           {[["open", "Open", counts.open || 0], ["closed", "Closed", counts.closed || 0], ["all", "All", (counts.open || 0) + (counts.closed || 0)]].map(([k, l, n]) => (
@@ -363,10 +379,10 @@ export function Helpdesk({ api, base, staff = false, openReq = null, onChanged =
         {sel === "new" ? <Compose api={call} base={base} onSent={id => { setStatus("open"); setSel(id); changed(); }} onCancel={() => setSel(null)} />
           : sel ? <Thread key={sel} api={call} base={base} id={sel} staff={staff} onChanged={changed} onBack={() => setSel(null)} onNew={() => setSel("new")} />
           : <div className="hd-empty">
-              <div className="hd-empty-ic">✉</div>
+              <div className="hd-empty-ic"><HdIc n="mail" size={32}/></div>
               <b>{staff ? "Pick a query to read and reply" : "Pick a query, or raise a new one"}</b>
-              <span>{staff ? "New messages show a badge here and on the 🔔 bell." : "Our replies show up here and on the 🔔 bell at the top."}</span>
-              {!staff && <button type="button" className="hd-btn primary" onClick={() => setSel("new")}>✎ New query</button>}
+              <span>{staff ? <>New messages show a badge here and on the <HdIc n="bell" size={12}/> bell.</> : <>Our replies show up here and on the <HdIc n="bell" size={12}/> bell at the top.</>}</span>
+              {!staff && <button type="button" className="hd-btn primary" onClick={() => setSel("new")}><HdIc n="pencil"/> New query</button>}
             </div>}
       </section>
     </div>
