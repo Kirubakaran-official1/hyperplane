@@ -191,6 +191,8 @@ button.bd-s:hover{background:var(--s2)}button.bd-s.on{background:var(--adim);box
 .vb.bad{color:var(--short);border-color:color-mix(in srgb,var(--short) 45%,transparent);background:var(--shortd)}
 .bd-vs{font:600 11.5px var(--sans);white-space:nowrap}
 .bd-vs.is-ok{color:var(--t2)}.bd-vs.is-cap{color:var(--acc)}.bd-vs.is-over{color:var(--short)}
+.bd-ffx{all:unset;cursor:pointer;display:block;margin:2px 6px 0;font:600 11px var(--sans);color:var(--short);white-space:nowrap}
+.bd-ffx:hover{text-decoration:underline}.bd-ffx:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:4px}
 tr.bd-over td{background:color-mix(in srgb,var(--short) 5%,transparent)}
 tr.bd-vrow td{background:var(--s2);padding:0!important}
 .bd-vcard{padding:14px 16px;display:flex;flex-direction:column;gap:10px;position:sticky;left:0;box-sizing:border-box;width:min(1180px,calc(100vw - 140px))}

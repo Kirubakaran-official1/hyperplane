@@ -55,6 +55,24 @@ def session_hours():
     return _load().getint("app", "session_hours", fallback=72)
 
 
+def mail():
+    """[mail] — the SMTP service that sends customer emails (owner 2026-11-02: Brevo, no mail server of our own).
+    None until smtp_host, from_email and public_url are filled in."""
+    cfg = _load()
+    if not cfg.has_section("mail"):
+        return None
+    g = lambda k, d="": cfg.get("mail", k, fallback=d).strip()
+    out = {"host": g("smtp_host"), "port": int(g("smtp_port", "587") or 587), "user": g("smtp_user"),
+           "password": g("smtp_password"), "from_email": g("from_email"), "from_name": g("from_name", "Hyperplane") or "Hyperplane",
+           # where a customer's "Reply" goes (e.g. support@ while sending from no-reply@); empty = back to the sender
+           "reply_to": g("reply_to"),
+           # links in emails start with this address (never the request's Host header, which a caller can fake)
+           "public_url": g("public_url").rstrip("/"),
+           # starttls (port 587, Brevo) · ssl (port 465) · none (a local test inbox only)
+           "security": (g("security") or ("ssl" if g("smtp_port") == "465" else "starttls")).lower()}
+    return out if out["host"] and out["from_email"] and out["public_url"] else None
+
+
 def telegram():
     cfg = _load()
     token = cfg.get("telegram", "bot_token", fallback="NIL").strip()

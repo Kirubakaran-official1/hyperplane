@@ -143,6 +143,36 @@ const toForm = st => ({ ...st, skip_text: (st.skip_dates || []).join("\n"),
   add_text: (st.index_add || []).join("\n"), keep_text: (st.index_keep || []).join("\n") });
 const symList = t => (t || "").split(/[\s,]+/).map(x => x.trim().toUpperCase().replace(/^NSE:/, "")).filter(Boolean);
 
+// Email for customers (Forgot password, owner 2026-11-02): set up in config.ini [mail] (Brevo), checked with one test email
+function MailCard() {
+  const [st, setSt] = useState(null); const [to, setTo] = useState(""); const [res, setRes] = useState(null); const [busy, setBusy] = useState(false);
+  const load = () => api("/api/admin/mail").then(setSt).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const test = async () => {
+    setBusy(true); setRes(null);
+    try { const r = await api("/api/admin/mail/test", { method: "POST", json: { to } }); setRes({ ok: true, text: r.message }); }
+    catch (e) { setRes({ ok: false, text: e.message }); } finally { setBusy(false); load(); }
+  };
+  if (!st) return null;
+  return (
+    <div id="mail-card" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", background: "var(--s1)", border: "1px solid var(--b1)", borderRadius: 10, padding: "10px 12px", marginBottom: 12, fontSize: 12 }}>
+      <b style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".6px" }}>Customer email</b>
+      {st.configured
+        ? <span id="mail-on" style={{ color: "var(--long)", fontWeight: 700 }}>● On</span>
+        : <span id="mail-off" style={{ color: "var(--mixed)", fontWeight: 700 }}>● Not set up</span>}
+      <span style={{ color: "var(--t2)" }}>{st.configured ? <>from {st.from} via {st.host} · links open {st.public_url}</>
+        : <>Forgot-password emails wait until <b>[mail]</b> is filled in config.ini (smtp_host, smtp_user, smtp_password, from_email, public_url).</>}</span>
+      <span style={{ color: "var(--t3)" }}>Last 24 h: {st.sent} sent{st.queued ? ` · ${st.queued} waiting` : ""}{st.failed ? ` · ${st.failed} not sent` : ""}</span>
+      {st.last_error && (st.queued || st.failed) ? <span style={{ color: "var(--short)", flexBasis: "100%" }}>Last problem: {st.last_error}</span> : null}
+      <span style={{ display: "inline-flex", gap: 6, marginLeft: "auto" }}>
+        <input id="mail-to" type="email" value={to} onChange={e => setTo(e.target.value)} placeholder="your@email.com" style={{ ...input, width: 190 }} aria-label="Send a test email to" />
+        <button id="mail-test" onClick={test} disabled={busy || !to} style={btn()}>{busy ? "Sending…" : "Send test email"}</button>
+      </span>
+      {res && <span id="mail-res" role="status" style={{ flexBasis: "100%", color: res.ok ? "var(--long)" : "var(--short)" }}>{res.ok ? "✓ " : "✗ "}{res.text}</span>}
+    </div>
+  );
+}
+
 function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
   const [sys, setSys] = useState(null);
   const running = sync && (sync.status === "queued" || sync.status === "running");
@@ -213,6 +243,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
         <Tile label="Next collection" value={cfg.next_runs[0] ? fmtTime(cfg.next_runs[0]) : "—"} sub={cfg.next_runs[0] ? fmtDay(cfg.next_runs[0]) : "no schedule"} color="var(--acc)" />
         <Tile label="Telegram" value={!form.telegram_enabled ? "Off" : sys.telegram_configured ? "On" : "Not set up"} color={form.telegram_enabled && sys.telegram_configured ? "var(--long)" : "var(--t2)"} sub={sys.telegram_configured ? "bot token in config.ini" : "add bot_token / chat_id in config.ini"} />
       </div>
+      <MailCard />
 
       <EqRow height={460} cols="minmax(0,1fr) minmax(0,1.3fr)" min={320}>
         <FocusCard icon="🕘" title="Collection schedule" sub="Times are IST. Each time creates one stored collection per trading day.">

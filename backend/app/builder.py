@@ -38,6 +38,10 @@ the owner may tune the constants):
     "Size by trading volume" ON: no stock above what it supports (the rest goes to the other stocks in its group) and
     a stock that supports < 30 % of its share is replaced by the next; OFF: the plan stays, every over-sized stock is
     warned. A day-by-day buying plan (which stock, how many shares, which day) comes with every build.
+  Free float (owner 2026-11-02, liquidity.FLOAT_CAP): the shares the public can trade (all shares − promoters).
+    "Size by free float" ON: no stock above 1 % of its free float (the rest goes to the others, a stock that can take
+    < 30 % of its share is replaced); OFF: the plan stays, and a holding from 0.25 % of the free float is shown in the
+    stock's details (above 1 % warned), with the SEBI line it reaches on all the company's shares.
 Customers receive the plan and plain reasons — never the weights above.
 """
 import math
@@ -75,7 +79,7 @@ PLAN_DAYS_SHOWN = 30                             # the buying plan lists the fir
 # from the standard settings below. Customer = up to ₹1 lakh, 20 stocks, High reliability, standard settings;
 # Trader = up to ₹10,000 crore and 1,000 stocks, High / Medium, every option; Admin = any amount, every option.
 DEFAULT_OPTS = {"horizon": "long", "quality": "good", "confirmed": True, "stock_max": 5, "run_up": 30, "fno_only": False,
-                "exclude": [], "by_volume": False, "pace": "standard"}
+                "exclude": [], "by_volume": False, "pace": "standard", "by_float": False}
 DEFAULT_SECTOR, DEFAULT_WEIGHTING = 10, "equal"          # owner 2026-11-01: the standard settings for every plan
 ADMIN_AMOUNT_CEIL = 1e15                                 # admin: no business limit, only a sanity bound on the number
 TIERS = {
@@ -134,7 +138,7 @@ def check_options(o):
     out = {"horizon": o.get("horizon", d["horizon"]), "quality": o.get("quality", d["quality"]), "confirmed": bool(o.get("confirmed", d["confirmed"])),
            "stock_max": o.get("stock_max", d["stock_max"]), "run_up": o.get("run_up", d["run_up"]), "fno_only": bool(o.get("fno_only", False)),
            "exclude": sorted(str(x) for x in (o.get("exclude") or []))[:100], "by_volume": bool(o.get("by_volume", d["by_volume"])),
-           "pace": o.get("pace", d["pace"])}
+           "pace": o.get("pace", d["pace"]), "by_float": bool(o.get("by_float", d["by_float"]))}
     if out["horizon"] not in HORIZONS:
         raise BuildError("Choose a time horizon")
     if out["quality"] not in QUALITY:
@@ -347,17 +351,32 @@ def build(data, amount, count, alloc, reliability, sector_max=DEFAULT_SECTOR, we
             vol[s["s"]] = L.capacity(v, s["p"], o["pace"])[2] if v and v["dep"] else None
         return vol[s["s"]]
 
+    def floatcap(s):
+        """the most money within FLOAT_CAP of the stock's free float (None = free float not known)"""
+        ff = s.get("ff")
+        return L.FLOAT_CAP * ff[0] * s["p"] if ff else None
+
     def capof(s):
-        """the most money one stock may take: the single-stock limit, and with 'size by volume' its trading volume too"""
-        vc = volcap(s)
-        return min(stock_cap, vc) if o["by_volume"] and vc is not None else stock_cap
+        """the most money one stock may take: the single-stock limit, with 'size by volume' its trading volume too, and
+        with 'size by free float' its free float"""
+        cap, vc, fc = stock_cap, volcap(s), floatcap(s)
+        if o["by_volume"] and vc is not None:
+            cap = min(cap, vc)
+        if o["by_float"] and fc is not None:
+            cap = min(cap, fc)
+        return cap
 
     thin = []                                                # size by volume: replaced because they support too little
+    small_float = []                                         # size by free float: replaced, too few shares to trade
 
     def fits(s, slice_):
         if o["by_volume"] and volcap(s) is not None and volcap(s) < L.MIN_USEFUL * slice_:
             if s["s"] not in [t[0] for t in thin]:
                 thin.append((s["s"], volcap(s), slice_))
+            return False
+        if o["by_float"] and floatcap(s) is not None and floatcap(s) < L.MIN_USEFUL * slice_:
+            if s["s"] not in [t[0] for t in small_float]:
+                small_float.append((s["s"], floatcap(s), slice_))
             return False
         return (sec_money.get(s["sec"], 0) + slice_ <= sec_cap + 1e-6
                 and ind_n.get((s["sec"], s["ind"]), 0) < ind_cap and capof(s) >= s["p"])
@@ -437,6 +456,7 @@ def build(data, amount, count, alloc, reliability, sector_max=DEFAULT_SECTOR, we
                      f"portfolio spread out (at most {o['stock_max']}% of the money in one stock"
                      + (f" and {sector_max}% in one sector" if sector_max < 100 else "")
                      + (", and no more than " + str(LIQ_DAYS) + " days of normal trading per stock" if o["by_volume"] else "")
+                     + (f", and no more than {L.FLOAT_CAP * 100:g}% of a stock's free float" if o["by_float"] else "")
                      + "), or one share costs more than its share of the money.")
     per = amount * (1 - alloc["Cash"] / 100) / count
     if per < 5000:
@@ -445,6 +465,15 @@ def build(data, amount, count, alloc, reliability, sector_max=DEFAULT_SECTOR, we
         notes.append("Adding Medium reliability gives the builder more stocks to choose from.")
     for h in holdings:
         h["liq"] = _liq(h, o, stock_cap, volcap(h["x"]["s"]))
+        h["ff"] = _float(h, o, stock_cap)
+    f_over = [h for h in holdings if h["ff"]["status"] == "over"]
+    if f_over:
+        notes.append(f"{len(f_over)} stock{'s are' if len(f_over) > 1 else ' is'} more than {L.FLOAT_CAP * 100:g}% of the shares "
+                     "the public can trade (free float) — see the stock details. Turn on 'Size by free float' to keep each within it.")
+    if small_float:
+        names = ", ".join(f"{sym} (up to ₹{_words(fc)})" for sym, fc, _ in small_float[:6])
+        notes.append(f"Replaced by the next best stock because too few of their shares are traded by the public: {names}"
+                     + (f" and {len(small_float) - 6} more" if len(small_float) > 6 else "") + ".")
     days = lambda h: h["liq"].get("days")
     over = [h for h in holdings if h["liq"]["status"] == "over"]
     if over:
@@ -481,7 +510,7 @@ def build(data, amount, count, alloc, reliability, sector_max=DEFAULT_SECTOR, we
                       "qty": h["qty"], "amt": amt, "w": round(amt / amount * 100, 2), "st": h["x"]["st"],
                       "m": zv[2][2] if zv[2] else None, "q": zv[3][2] if zv[3] else None, "y": zv[4][2] if zv[4] else None,
                       "h": s["h"], "tier": h["x"]["tier"], "why": h["x"]["why"],
-                      "days": days(h), "liq": h["liq"]})
+                      "days": days(h), "liq": h["liq"], "ff": h["ff"]})
     by_cap = [{"k": c, "target": alloc[c], "amt": round(sum(p["amt"] for p in picks if p["cap"] == c), 2),
                "n": sum(1 for p in picks if p["cap"] == c)} for c in CAPS]
     by_cap.append({"k": "Cash", "target": alloc["Cash"], "amt": round(cash, 2), "n": 0})
@@ -499,7 +528,8 @@ def build(data, amount, count, alloc, reliability, sector_max=DEFAULT_SECTOR, we
             "by_cap": by_cap, "by_sec": by_sec, "picks": picks, "notes": notes,
             "checked": len(data.get("stocks", [])), "qualified": len(pool_),
             "strong": sum(1 for x in pool_ if x["tier"] == 1), "left_out": skip,
-            "volume": _volume_summary(picks, amount, o, thin), "plan": buying_plan(picks)}
+            "volume": _volume_summary(picks, amount, o, thin), "float": _float_summary(picks, o, small_float),
+            "plan": buying_plan(picks)}
 
 
 def _words(n):
@@ -547,6 +577,42 @@ def _liq(h, o, stock_cap, vcap):
             "most_amt": round(most_amt), "days": days, "exit_days": exit_days, "share": round(share * 100, 4), "light": False,
             "push": L.price_push(v, min(qty, per_int)), "swing": v["swing"], "trend": v["trend"], "spike": v["spike"], "erratic": v["erratic"],
             "wk": v["wk"], "mo": v["mo"], "warn": warn}
+
+
+def _float(h, o, stock_cap):
+    """one position against the stock's free float: how much of the tradable shares it takes, the most within the
+    standard, the SEBI line it reaches on all the company's shares; `show` = worth showing in the stock's details"""
+    s, qty = h["x"]["s"], h["qty"]
+    ff = s.get("ff")
+    if not ff:
+        return {"status": "unknown", "show": bool(o["by_float"])}
+    free, total = ff
+    held, held_total = qty / free, qty / total
+    most = math.floor(L.FLOAT_CAP * free)
+    most_amt = most * s["p"]
+    if o["by_float"] and most_amt < stock_cap and qty >= most * 0.97 - 1:
+        status = "capped"
+    elif held > L.FLOAT_CAP * 1.0001:
+        status = "over"
+    elif held >= L.FLOAT_WATCH:
+        status = "watch"
+    else:
+        status = "light"
+    line = ("More shares than the company has in total: this amount cannot be bought at all." if held_total >= 1
+            else "More than every share the public can trade (the promoters hold the rest): this amount cannot be bought."
+            if held >= 1 else L.sebi_line(held_total))
+    return {"status": status, "show": status != "light" or bool(line), "free": free, "total": total,
+            "free_pct": round(free / total * 100, 2), "held": round(held * 100, 4), "held_total": round(held_total * 100, 4),
+            "most": most, "most_amt": round(most_amt), "cap_pct": L.FLOAT_CAP * 100, "line": line}
+
+
+def _float_summary(picks, o, small_float):
+    st = lambda k: [p for p in picks if p["ff"]["status"] == k]
+    return {"by_float": o["by_float"], "cap_pct": L.FLOAT_CAP * 100, "watch_pct": L.FLOAT_WATCH * 100,
+            "known": sum(1 for p in picks if p["ff"]["status"] != "unknown"), "unknown": len(st("unknown")),
+            "over": len(st("over")), "over_amt": round(sum(p["amt"] for p in st("over")), 2), "capped": len(st("capped")),
+            "watch": len(st("watch")), "max_held": max((p["ff"].get("held", 0) for p in picks), default=0),
+            "replaced": [{"s": sym, "most_amt": round(fc)} for sym, fc, _ in small_float]}
 
 
 def _volume_summary(picks, amount, o, thin):

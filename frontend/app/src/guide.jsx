@@ -378,8 +378,8 @@ const ALL_SECTIONS = [
       same engine as the AI Portfolio Analyser. Depending on your access, the amount, the number of stocks and the options you
       can change may be limited; the page shows your limits under the amount.</p>
     <ol className="g-steps">
-      <li><b>Amount to invest.</b> Type it, or pick one of the amounts shown (up to your plan's limit).</li>
-      <li><b>Number of stocks.</b> Pick one, or <b>Custom</b> for any number from 5 up to your plan's limit. The page shows about
+      <li><b>Amount to invest.</b> Type it, or pick one of the amounts shown (up to what your access allows).</li>
+      <li><b>Number of stocks.</b> Pick one, or <b>Custom</b> for any number from 5 up to what your access allows. The page shows about
         how much goes into each stock.</li>
       <li><b>Market cap and cash.</b> Pick a starting mix, then move the sliders to make it your own. <b>Large cap</b>: 70% large,
         10% mid, 10% small, 10% cash. <b>Mid cap</b>: 20% large, 50% mid, 20% small, 10% cash. <b>Small cap</b>: 15% large, 15% mid,
@@ -401,7 +401,12 @@ const ALL_SECTIONS = [
         year): most of their move has already happened.</li>
       <li>At least 3 years of price history, and no sector or industry gets too big a share.</li>
       <li>If fewer stocks pass the checks than you asked for, each stock that passed gets a bigger share, so your cash stays
-        as you chose. No stock gets more than 10% of the money, and the page tells you when that limit leaves extra cash.</li>
+        as you chose. No stock gets more than the single-stock limit (5% of the money as standard), and the page tells you
+        when that limit leaves extra cash.</li>
+      <li><b>Free float</b> is the part of a company's shares that the public can actually buy and sell: all its shares minus
+        those held by the promoters (the founders and their group). One portfolio should hold only a small part of it, so it
+        can be sold later without trouble. When a stock would take a large part of its free float, its details say so; with
+        <b> Size by free float</b> (More options), no stock gets more than 1% of its free float.</li>
     </ul>
     <p><b>Download (Excel)</b> saves the list and <b>Ticker copy</b> copies the tickers for TradingView. <b>Send to AI Portfolio
       Analyser</b> puts the stocks in your Analyser list so you can follow them: choose <b>Add to my list</b> to keep the stocks

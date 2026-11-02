@@ -11,7 +11,9 @@ from fastapi.routing import APIRoute
 
 # open on purpose (signing in / up / out, health)
 PUBLIC = {"/api/login", "/api/logout", "/api/health",
-          "/app/api/login", "/app/api/logout", "/app/api/register", "/app/api/signup-info", "/app/api/health"}
+          "/app/api/login", "/app/api/logout", "/app/api/register", "/app/api/signup-info", "/app/api/health",
+          # Forgot password: used while signed out; the emailed one-time link is the proof (mailer.py)
+          "/app/api/password/forgot", "/app/api/password/check", "/app/api/password/reset"}
 # the check runs inside the function (the permission depends on a query value): name the check here
 INSIDE = {"/app/api/detail/{symbol}": "need_perm(f'{app_key}:detail') + row-level security on stock_detail"}
 # what a route under each prefix must run

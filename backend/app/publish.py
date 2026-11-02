@@ -320,6 +320,8 @@ def build_public(sheets, settings, as_of, earlier=None):
                        # average shares traded per day (AI Portfolio Builder: can a position be bought without moving the price)
                        # volume analyser (liquidity.py): av = dependable shares a day, vl = the full reading (builder)
                        **({"av": vla["dep"], "vl": liquidity.pack(vla)} if (vla := liquidity.analyse(m, price, atr.get(sym), day)) else {}),
+                       # free float (liquidity.free_float): [shares the public can trade, all shares] — builder sizing
+                       **({"ff": ffl} if (ffl := liquidity.free_float(m)) else {}),
                        "p": round(price, 2), "c": _num(m.get("Change_Pct") if m else z.get("Change_Pct")),
                        "r": rating, "sc": sc, "os": overall_sc, "o": overall,
                        # background (Price_Health): S = Healthy, M = Weak or unrated (as the Control Tower), W = Poor

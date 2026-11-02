@@ -148,6 +148,48 @@ def capacity(v, price, pace):
 LIGHT_SHARE = 0.01                  # a position under 1 % of one day's trading: no volume concern at all
 
 
+# ─── Free float (owner, 2026-11-02: "is there such an amount of shares to trade? … calculate the free float … don't go to
+# the max, only some amount is possible — check how much an institution can buy … the option to size by free float,
+# else show it in the stock's details once the share count is alarming").
+# free float = total shares − foreign promoter & group − Indian promoter & group (master screener columns
+# grand_total_number, total_foreign_promoter_and_group_number, indian_promoter_and_group_number).
+# Standard (Claude's proposal, owner may tune): one portfolio holds at most FLOAT_CAP of a stock's free float — small
+# enough to sell later without trouble, and always below the line where SEBI's rules start to apply (below).
+FLOAT_CAP = 0.01                    # at most 1 % of the free float in one stock ("size by free float")
+FLOAT_WATCH = 0.0025                # from 0.25 % of the free float the holding is shown in the stock's details
+# SEBI lines, on ALL the company's shares (paid-up capital); the highest one reached is shown
+SEBI_LINES = (
+    (0.25, "25% or more of all the company's shares: SEBI's takeover rules require an open offer to buy shares from "
+           "every other shareholder."),
+    (0.10, "10% or more of all the company's shares: the most a mutual fund house may own of one company, and the line "
+           "above which a foreign investor counts as a direct (FDI) investor."),
+    (0.05, "5% or more of all the company's shares: SEBI requires you to tell the company and the stock exchanges within "
+           "2 working days, and again with every 2% change."),
+    (0.01, "More than 1% of all the company's shares: holders above 1% are named in the company's quarterly "
+           "shareholding report."),
+)
+
+
+def free_float(m):
+    """[free-float shares, total shares] from a Master_Stock_Data row, or None when the screener did not give them
+    (blank total, both promoter counts blank, or numbers that do not add up)"""
+    total = _num((m or {}).get("Total_Shares"))
+    fp, ip = (m or {}).get("Promoter_Foreign_Shares"), (m or {}).get("Promoter_Indian_Shares")
+    if not total or all(str(x if x is not None else "").strip() == "" for x in (fp, ip)):
+        return None
+    promoters = (_num(fp) or 0) + (_num(ip) or 0)
+    ff = total - promoters
+    return [round(ff), round(total)] if 0 < ff <= total else None
+
+
+def sebi_line(share_of_total):
+    """the plain SEBI note for a holding that is this share of ALL the company's shares, or None"""
+    for cut, txt in SEBI_LINES:
+        if share_of_total > cut or (share_of_total == cut and cut > 0.01):    # 1 %: "more than"; the others: "or more"
+            return txt
+    return None
+
+
 def price_push(v, shares_a_day):
     """estimated % the price moves while buying `shares_a_day` shares a day: daily swing × √(share of the day's volume)
     — one share of a stock trading lakhs a day moves nothing; buying 10 % of a day moves it about a third of a swing"""

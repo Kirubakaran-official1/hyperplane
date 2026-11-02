@@ -90,6 +90,8 @@ input:focus,select:focus{outline:2px solid var(--accb);border-color:var(--acc)}
 .agree input{width:22px;height:22px;flex-shrink:0;margin:1px 0 0;accent-color:#00e5ff;cursor:pointer}
 .agree b{color:var(--t1);font-size:12.5px}
 .switch{font-size:13px;text-align:center;color:var(--t2)}
+.forgot{margin-top:-6px;text-align:right;font-size:12.5px}
+.auth .small{font-size:12.5px;margin:0}
 /* page */
 .page{max-width:1440px;margin:0 auto;padding:0 20px 30px}
 .tabs{display:flex;gap:4px;margin:12px 0 0;border-bottom:1px solid var(--b1)}

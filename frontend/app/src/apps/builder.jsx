@@ -63,18 +63,22 @@ const B_CASH_MIN = 5, B_MIN_AMT = 10000, B_MAX_AMT = 100000000000, B_MIN_N = 5, 
 const B_KEY = "qf_builder_v2";                               // the customer's last inputs, this device only (v2: new standard settings)
 // "More options" (owner, 2026-11-01: "add more fields … based on the quant — zones along with the regime")
 // standard settings for every plan (owner, 2026-11-01); the Customer plan cannot change them (the server checks it)
-const B_OPT_DEFAULT = { horizon: "long", quality: "good", confirmed: true, stock_max: 5, run_up: 30, fno_only: false, exclude: [], by_volume: false, pace: "standard" };
+const B_OPT_DEFAULT = { horizon: "long", quality: "good", confirmed: true, stock_max: 5, run_up: 30, fno_only: false, exclude: [], by_volume: false, pace: "standard", by_float: false };
 const B_HORIZON = [["long", "Long term", "Months to years · quarter and year count most"], ["medium", "Medium term", "Weeks to months · the month counts more"]];
 // names (owner, 2026-11-01: "most of the words look similar")
 const B_QUALITY = [["strong", "Leaders only", "Strength 40 and above · the fewest, strongest stocks"],
   ["good", "Proven trends", "Strength 24 and above"], ["building", "Proven + emerging", "Adds rising trends when proven ones run out"]];
 const B_REGIME = [[false, "Uptrend regime", "The long-term regime is up"], [true, "Confirmed uptrend", "Long- and short-term regimes both up · stricter"]];
 const B_VOLUME = [[false, "No", "Your plan stays · stocks too big for their trading are warned"], [true, "Yes", "No stock bigger than its trading supports · the rest goes to the others"]];
+// free float (owner, 2026-11-02: "give the i button because people don't know what free float is")
+const FF_INFO = "Free float is the part of a company's shares that the public can actually buy and sell: all its shares minus those held by the promoters (the founders and their group), which rarely change hands. A stock can trade lakhs of shares a day, yet only its free float can ever be bought.";
+const B_FLOAT = [[false, "No", "Your plan stays · a stock that takes a large part of its free float is shown in its details"], [true, "Yes", "No stock above 1% of its free float · the rest goes to the others"]];
 // buying pace = the share of a stock's normal day of trading you buy each day (thin or jumpy stocks always slower)
 const B_PACE = [["careful", "Careful", "5% of a normal day · least price push"], ["standard", "Standard", "10% of a normal day · the usual rule"],
   ["fast", "Fast", "20% of a normal day · quicker, pushes the price more"]];
 const V_TONE = { 5: "up", 4: "up", 3: "mid", 2: "low", 1: "bad" };
 const V_STATUS = { fits: "Fits", capped: "Kept to its limit", over: "Too big", unknown: "Not known" };
+const FF_STATUS = { light: "Small part", watch: "Noticeable part", capped: "Kept to the standard", over: "Above the standard", unknown: "Not reported" };
 const B_STOCK = [5, 10, 15, 20, 25];
 const B_RUNUP = [[20, "20%"], [30, "30%"], [50, "50%"], [0, "Don't leave out"]];
 const B_DEFAULT = { amount: 100000, count: 20, alloc: B_PRESETS.multi, rel: ["S"], sector: 10, weighting: "equal", opts: B_OPT_DEFAULT };
@@ -93,7 +97,7 @@ const cleanOpts = o => {                                      // saved "More opt
     confirmed: typeof o.confirmed === "boolean" ? o.confirmed : d.confirmed, stock_max: B_STOCK.includes(o.stock_max) ? o.stock_max : d.stock_max,
     run_up: B_RUNUP.some(([v]) => v === o.run_up) ? o.run_up : d.run_up,
     fno_only: !!o.fno_only, exclude: Array.isArray(o.exclude) ? o.exclude.filter(x => typeof x === "string").slice(0, 100) : [], by_volume: !!o.by_volume,
-    pace: B_PACE.some(([k]) => k === o.pace) ? o.pace : "standard" };
+    pace: B_PACE.some(([k]) => k === o.pace) ? o.pace : "standard", by_float: !!o.by_float };
 };
 const loadBuilder = () => {                                   // saved inputs, checked (an old or edited value falls back)
   let v = {};
@@ -183,6 +187,44 @@ function VolCard({ p }) {
     </div>);
 }
 
+// free float of one holding (server: builder._float) — shown in the stock's details only when it matters
+function FloatCard({ p }) {
+  const f = p.ff || {};
+  if (f.status === "unknown") return <div className="bd-vcard" id={`ff-${p.s}`}><p>The free float is not reported for this stock, so it could not be checked.</p></div>;
+  const warn = [];
+  if (f.status === "over") warn.push(`Your ${sh(p.qty)} shares are ${(f.held / f.cap_pct).toFixed(1)}× the ${f.cap_pct}% standard. Selling them later could take a long time and move the price: consider a smaller amount, or turn on “Size by free float” in More options.`);
+  if (f.status === "capped") warn.push(`Kept to ${f.cap_pct}% of the free float; the rest of the money went to the other stocks.`);
+  if (f.status === "watch") warn.push("A noticeable part of the shares the public can trade. It is within the standard: buy slowly and spread the orders.");
+  if (f.line) warn.push(f.line);
+  return (
+    <div className="bd-vcard" id={`ff-${p.s}`}>
+      <div className="bd-vgrid">
+        <div><span className="px-label">Tradable shares <Info text={FF_INFO}/></span>
+          <b>{sh(f.free)} shares</b><small>{+f.free_pct.toFixed(1)}% of all {sh(f.total)} shares · about {inrShort(f.free * p.p)}</small></div>
+        <div><span className="px-label">Standard · {f.cap_pct}% of the free float <Info text={`The most one portfolio should hold of a stock: ${f.cap_pct}% of its free float. Big investors keep each holding to a small part of the tradable shares, so they can sell later without trouble and stay well below the levels where SEBI's disclosure rules begin.`}/></span>
+          <b>{sh(f.most)} shares</b><small>about {inrShort(f.most_amt)} — the most within the standard</small></div>
+        <div><span className="px-label">Your position <Info text="Your quantity compared with the free float, and with all the company's shares."/></span>
+          <b className={f.status === "over" ? "bad" : ""}>{sh(p.qty)} shares · {pct(f.held)} of the free float</b>
+          <small>{pct(f.held_total)} of all the company's shares</small></div>
+      </div>
+      {warn.length > 0 && <ul className="bd-vwarn">{warn.map((w, i) => <li key={i}>{w}</li>)}</ul>}
+    </div>);
+}
+
+function FloatBanner({ res, picks }) {
+  const f = res.float;
+  if (!f) return null;
+  const over = picks.filter(p => p.ff && p.ff.status === "over");
+  return <>
+    {over.length > 0 && <div className="bd-vbanner" id="bd-ffbanner">
+      <b>⚠ {over.length} stock{over.length === 1 ? " takes" : "s take"} more than {f.cap_pct}% of {over.length === 1 ? "its" : "their"} free float</b> <Info text={FF_INFO}/> ({inrShort(f.over_amt)}).
+      Buying that big a part of the shares the public can trade is hard to undo later. Turn on “Size by free float” in More options to keep each within {f.cap_pct}%.
+      <div className="bd-vlist">{over.slice(0, 12).map(p => <span key={p.s}><b>{p.s}</b> {pct(p.ff.held)} · max {inrShort(p.ff.most_amt)}</span>)}{over.length > 12 && <span>+{over.length - 12} more</span>}</div></div>}
+    {f.by_float && f.capped > 0 && <p className="bd-vnote" id="bd-ffcapped">{f.capped} stock{f.capped === 1 ? " was" : "s were"} kept to {f.cap_pct}% of {f.capped === 1 ? "its" : "their"} free float; the rest of the money went to the other stocks in the same group.</p>}
+    {(f.replaced || []).length > 0 && <p className="bd-vnote" id="bd-ffrepl">Left out because too few of their shares are traded by the public: {f.replaced.slice(0, 10).map(r => `${r.s} (up to ${inrShort(r.most_amt)})`).join(", ")}{f.replaced.length > 10 ? ` and ${f.replaced.length - 10} more` : ""}.</p>}
+  </>;
+}
+
 // owner, 2026-11-01: "the usual dark side of trading … hit everyone's stop loss, then buy … mention some as a note".
 // Education only: what large players are known to do, and how a small investor avoids being on the wrong side.
 const TRICKS = [
@@ -221,6 +263,7 @@ function VolumeSection({ res, picks }) {
       <div className="px-ch"><div><h3>Volume analyser</h3>
         <p className="bd-vlight"><b>✓ No volume concerns.</b> Every stock trades far more each day than this portfolio buys: each one can be bought in one go,
           and your orders will not move the prices.</p></div></div>
+      <FloatBanner res={res} picks={picks}/>
       <MarketTricks/>
     </section>);
   return (
@@ -243,6 +286,7 @@ function VolumeSection({ res, picks }) {
         Buying them at your pace takes up to {Math.max(...over.map(p => p.liq.days)).toLocaleString("en-IN")} days and they are slow to sell. Turn on “Size by trading volume” in More options to keep each within what it supports.
         <div className="bd-vlist">{over.slice(0, 12).map(p => <span key={p.s}><b>{p.s}</b> {(p.amt / p.liq.most_amt).toFixed(1)}× · max {inrShort(p.liq.most_amt)}</span>)}{over.length > 12 && <span>+{over.length - 12} more</span>}</div></div>}
       {(v.replaced || []).length > 0 && <p className="bd-vnote">Left out because they trade too little to take a useful share: {v.replaced.slice(0, 10).map(r => `${r.s} (up to ${inrShort(r.most_amt)})`).join(", ")}{v.replaced.length > 10 ? ` and ${v.replaced.length - 10} more` : ""}.</p>}
+      <FloatBanner res={res} picks={picks}/>
       <MarketTricks/>
     </section>);
 }
@@ -354,7 +398,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
       .then(setPool).catch(e => { if (e.status === 401) onOut(e.message); }), 250);
     return () => clearTimeout(t);
   }, [optKey, plan]);
-  const changed = ["horizon", "quality", "confirmed", "stock_max", "run_up", "fno_only", "by_volume", "pace"].filter(k => opt[k] !== B_OPT_DEFAULT[k]).length
+  const changed = ["horizon", "quality", "confirmed", "stock_max", "run_up", "fno_only", "by_volume", "pace", "by_float"].filter(k => opt[k] !== B_OPT_DEFAULT[k]).length
     + (opt.exclude.length ? 1 : 0) + (inp.sector !== B_DEFAULT.sector) + (inp.weighting !== "equal");
   const [secSel, setSecSel] = useState([]);                       // sector filter on the plan's stock table
   useEffect(() => { setSecSel([]); setOpenRows(new Set()); }, [res]);
@@ -400,10 +444,12 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
       const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
       const L = p => p.liq || {};
       const rows = [["Stock", "Ticker", "Market cap", "Sector", "Industry", "Price (₹)", "Quantity", "Amount (₹)", "Weight %", "Long-term strength", "Reliability",
-          "Trading", "Shares a day (dependable)", "₹ traded a day", "Most it supports (shares)", "Most it supports (₹)", "Buy per day (shares)", "Days to buy", "Days to sell in a hurry", "% of one day", "Price push %", "Volume check", "Warnings"],
-        ...picks.map(p => [p.n, p.s, `${p.cap} cap`, p.sec, p.ind, p.p, p.qty, p.amt, p.w, p.st, RELIABILITY[p.h] ? RELIABILITY[p.h][0] : "",
+          "Trading", "Shares a day (dependable)", "₹ traded a day", "Most it supports (shares)", "Most it supports (₹)", "Buy per day (shares)", "Days to buy", "Days to sell in a hurry", "% of one day", "Price push %", "Volume check", "Warnings",
+          "Free float (shares)", "Free float % of all shares", "% of free float held", "Most at the free-float standard (shares)", "Free float check"],
+        ...picks.map(p => { const F = p.ff || {}; return [p.n, p.s, `${p.cap} cap`, p.sec, p.ind, p.p, p.qty, p.amt, p.w, p.st, RELIABILITY[p.h] ? RELIABILITY[p.h][0] : "",
           L(p).grade_word || "Not known", L(p).dep ?? "", L(p).value ?? "", L(p).most ?? "", L(p).most_amt ?? "", L(p).per_day ?? "", L(p).days ?? "", L(p).exit_days ?? "",
-          L(p).share ?? "", L(p).push ?? "", V_STATUS[L(p).status] || "", (L(p).warn || []).join(" | ")]),
+          L(p).share ?? "", L(p).push ?? "", V_STATUS[L(p).status] || "", (L(p).warn || []).join(" | "),
+          F.free ?? "", F.free_pct ?? "", F.held ?? "", F.most ?? "", FF_STATUS[F.status] || ""]; }),
         [], ["Cash kept", "", "", "", "", "", "", Math.round(res.cash), res.cash_pct], ["Total", "", "", "", "", "", "", res.amount, 100],
         ...(res.plan ? [[], ["Buying plan", `${res.plan.total_days} day${res.plan.total_days === 1 ? "" : "s"}`], ["Day", "Ticker", "Shares", "Amount (₹)", "Finishes this stock"],
           ...res.plan.days.flatMap(d => d.buys.map(b => [d.day, b.s, b.qty, b.amt, b.done ? "yes" : ""])),
@@ -506,12 +552,14 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
                   <td className="num mono"><Money v={p.amt}/></td>
                   <td className="num mono">{p.w.toFixed(2)}%</td>
                   <td className={`num mono ${tc(p.st)}`}><b>{signed(p.st)}</b></td>
-                  <td><VolCell p={p} open={openRows.has(p.s)} onClick={() => toggleRow(p.s)}/></td>
+                  <td><VolCell p={p} open={openRows.has(p.s)} onClick={() => toggleRow(p.s)}/>
+                    {p.ff && p.ff.status === "over" && <button type="button" className="bd-ffx" onClick={() => toggleRow(p.s)} title="Open the row for the free-float check">⚠ {pct(p.ff.held)} of free float</button>}</td>
                 </tr>
                 {openRows.has(p.s) && <tr className="bd-vrow"><td colSpan={10}>
                   <div className="bd-detail" id={`bd-detail-${p.s}`}>
                     <div className="bd-dsec"><div className="bd-dh2">Why it was picked</div><div className="bd-why lg">{p.why.map(w => <span key={w}>{w}</span>)}</div></div>
                     <div className="bd-dsec"><div className="bd-dh2">Volume analyser</div><VolCard p={p}/></div>
+                    {p.ff && p.ff.show && <div className="bd-dsec"><div className="bd-dh2">Free float <Info text={FF_INFO}/></div><FloatCard p={p}/></div>}
                   </div></td></tr>}</React.Fragment>))}
             </React.Fragment>)}
               {!secSel.length && <tr className="bd-cash"><td></td><td></td><td colSpan={4}><i style={{ background: B_COL.Cash }}/>Cash kept for safety</td><td className="num mono"><Money v={res.cash}/></td><td className="num mono">{res.cash_pct.toFixed(2)}%</td><td colSpan={2}></td></tr>}
@@ -639,6 +687,10 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             <div className="bd-f">
               <span className="bd-l">Size by trading volume <Info text="A stock that trades little cannot take a big amount: buying it pushes the price up and selling it later is slow. Yes: no stock gets more than its trading supports, the rest goes to the other stocks in its group (or cash), and stocks that can take only a little are replaced by the next best. No: your plan stays as it is, and every stock that is too big for its trading is marked with a warning."/></span>
               <div className="bd-chips bd-cards2">{B_VOLUME.map(([k, l, d]) => <button key={l} type="button" id={`bd-v-${k ? "y" : "n"}`} className={opt.by_volume === k ? "on" : ""} onClick={() => setOpt({ by_volume: k })}><b>{l}</b><small>{d}</small></button>)}</div>
+            </div>
+            <div className="bd-f" id="bd-float">
+              <span className="bd-l">Size by free float <Info text={`${FF_INFO} Big investors keep each holding to a small part of it, so they can sell later without trouble. Yes: no stock gets more than 1% of its free float; the rest goes to the other stocks in its group, and a stock that can take only a little is replaced by the next best. No: your plan stays as it is, and a stock that takes a large part of its free float is shown in its details.`}/></span>
+              <div className="bd-chips bd-cards2">{B_FLOAT.map(([k, l, d]) => <button key={l} type="button" id={`bd-ff-${k ? "y" : "n"}`} className={opt.by_float === k ? "on" : ""} onClick={() => setOpt({ by_float: k })}><b>{l}</b><small>{d}</small></button>)}</div>
             </div>
             <div className="bd-f" id="bd-pace">
               <span className="bd-l">Buying pace <Info text="How much of a stock's normal day of trading you buy each day. Buying a bigger share pushes the price up against you. Stocks that trade little, or very unevenly, are always bought more slowly. The plan's 'most it supports' is five days of buying at this pace."/></span>

@@ -6,6 +6,7 @@ import os
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from . import adoption
+from . import mailer
 from . import permissions as perms
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://hyperplane:hyperplane@db:5432/hyperplane")
@@ -396,6 +397,7 @@ def init_db():
         c.execute(perms.SCHEMA)                                # Access manager v2: one permission model + direct grants
         c.execute(adoption.SCHEMA)                             # Adoption report: customer × day × application, 2 years
         adoption.backfill(c)
+        c.execute(mailer.SCHEMA)                               # email outbox + "Forgot password" links
         perms.sync_catalogue(c)
         perms.migrate_v2(c)
         _seed_roles(c)
@@ -465,6 +467,9 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("GRANT UPDATE (failed_logins, locked_until, last_login, login_count) ON customers TO {}").format(role))
     c.execute(sql.SQL("GRANT USAGE ON SEQUENCE customers_id_seq TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION portal_auto_approve() TO {}").format(role))   # yes / no only
+    # "Forgot password": three functions only — no rights on password_resets, email_outbox or the password column
+    for fn in mailer.PORTAL_FUNCTIONS:
+        c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(sql.SQL(fn), role))
     # past days: readable only while the admin switch is on — the database itself enforces it (row-level security)
     c.execute(sql.SQL("GRANT SELECT ON customer_history TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION portal_history_enabled() TO {}").format(role))

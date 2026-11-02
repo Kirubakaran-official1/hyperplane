@@ -207,17 +207,39 @@ function Hero() {
   );
 }
 
-function AuthScreen({ onIn, notice }) {
-  const [mode, setMode] = useState("login");
+// a reset link from the "Forgot password" email: /app/#reset=<token> (the part after # never reaches a server or a log);
+// read once and wiped from the address bar so it is not left in the history
+function takeResetToken() {
+  const m = /^#reset=([A-Za-z0-9_-]{30,64})$/.exec(window.location.hash || "");
+  if (m) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return m ? m[1] : null;
+}
+
+function AuthScreen({ onIn, notice, resetToken = null, onResetDone }) {
+  const [mode, setMode] = useState(resetToken ? "reset" : "login");       // login · register · forgot · reset
   const [f, setF] = useState({ name:"", email:"", phone:"", ccName:"India", ccSet:false, country:"India", state:"", city:"", password:"", confirm:"", accept:false });
   const [msg, setMsg] = useState(notice || ""); const [ok, setOk] = useState(""); const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(false);
+  const [link, setLink] = useState(null);                                  // the reset link: null = checking · { valid, email }
   useEffect(() => { if (mode === "register") api("/app/api/signup-info").then(r => setAuto(!!r.auto_approve)).catch(() => {}); }, [mode]);
+  useEffect(() => {
+    if (!resetToken) return;
+    setMode("reset"); setLink(null); setMsg(""); setOk("");                  // also when the sign-in form was already open
+    api("/app/api/password/check", { method:"POST", json:{ token:resetToken } }).then(setLink).catch(e => setLink({ valid:false, message:e.message }));
+  }, [resetToken]);
   const set = k => e => setF(p => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  const go = m => { setMode(m); setMsg(""); setOk(""); setF(p => ({ ...p, password:"", confirm:"" })); };
   const submit = async e => {
     e.preventDefault(); setMsg(""); setBusy(true);
     try {
       if (mode === "login") { await api("/app/api/login", { method:"POST", json:{ email:f.email, password:f.password } }); onIn(); }
+      else if (mode === "forgot") { const r = await api("/app/api/password/forgot", { method:"POST", json:{ email:f.email } }); setOk(r.message); }
+      else if (mode === "reset") {
+        if (f.password !== f.confirm) throw new Error("The two passwords do not match");
+        const r = await api("/app/api/password/reset", { method:"POST", json:{ token:resetToken, password:f.password } });
+        if (onResetDone) onResetDone(true);
+        go("login"); setOk(r.message);
+      }
       else {
         if (f.password !== f.confirm) throw new Error("The two passwords do not match");
         if (!f.accept) throw new Error("Please tick the box to agree to the terms");
@@ -229,6 +251,41 @@ function AuthScreen({ onIn, notice }) {
     } catch (x) { setMsg(x.message); } finally { setBusy(false); }
   };
   const Field = (label, input) => <label className="field"><span>{label}</span>{input}</label>;
+  if (mode === "forgot" || mode === "reset") return (
+    <div className="auth-page">
+      <Hero/>
+      <div className="auth-side">
+        <form className="auth" onSubmit={submit} id={mode === "forgot" ? "auth-forgot" : "auth-reset"}>
+          {mode === "forgot" ? <>
+            <h1>Reset your password</h1>
+            <p className="muted">Enter the email you signed up with. We'll send you a link to choose a new password.</p>
+            {ok ? <div className="ok" id="forgot-sent">{ok}</div>
+              : Field("Email", <input type="email" value={f.email} onChange={set("email")} required maxLength={255} autoComplete="email" placeholder="you@example.com" autoFocus/>)}
+            {msg && <div className="err" role="alert">{msg}</div>}
+            {!ok && <button className="primary" disabled={busy}>{busy ? "Please wait…" : "Send reset link"}</button>}
+            {ok && <button type="button" className="primary" onClick={() => go("login")}>Back to sign in</button>}
+            {ok && <p className="muted small">No email after a few minutes? Check the spam folder, or <a href="#" onClick={e => { e.preventDefault(); setOk(""); }}>try again</a>.</p>}
+          </> : link == null ? <><h1>Choose a new password</h1><p className="muted">Checking your link…</p></>
+            : !link.valid ? <>
+              <h1>This link can't be used</h1>
+              <div className="err" role="alert" id="reset-dead">{link.message}</div>
+              <button type="button" className="primary" onClick={() => go("forgot")}>Send me a new link</button>
+            </> : <>
+              <h1>Choose a new password</h1>
+              <p className="muted">For <b>{link.email}</b>. You'll be signed out on every device, then you can sign in with the new password.</p>
+              <div className="grid2">
+                {Field("New password", <input type="password" value={f.password} onChange={set("password")} required minLength={8} maxLength={128} autoComplete="new-password" placeholder="8+ characters" autoFocus/>)}
+                {Field("Confirm password", <input type="password" value={f.confirm} onChange={set("confirm")} required maxLength={128} autoComplete="new-password"/>)}
+              </div>
+              {msg && <div className="err" role="alert">{msg}</div>}
+              <button className="primary" disabled={busy}>{busy ? "Please wait…" : "Save new password"}</button>
+            </>}
+          {!(mode === "forgot" && ok) && <div className="switch"><a href="#" id="back-signin" onClick={e => { e.preventDefault(); if (onResetDone) onResetDone(false); go("login"); }}>Back to sign in</a></div>}
+        </form>
+        <p className="fine center">{DISCLAIMER}</p>
+      </div>
+    </div>
+  );
   return (
     <div className="auth-page">
       <Hero/>
@@ -264,7 +321,8 @@ function AuthScreen({ onIn, notice }) {
                 {Field("Password", <input type="password" value={f.password} onChange={set("password")} required minLength={8} maxLength={128} autoComplete="new-password" placeholder="8+ characters"/>)}
                 {Field("Confirm password", <input type="password" value={f.confirm} onChange={set("confirm")} required maxLength={128} autoComplete="new-password"/>)}
               </div>
-            : Field("Password", <input type="password" value={f.password} onChange={set("password")} required maxLength={128} autoComplete="current-password"/>)}
+            : <>{Field("Password", <input type="password" value={f.password} onChange={set("password")} required maxLength={128} autoComplete="current-password"/>)}
+                <div className="forgot"><a href="#" id="forgot-link" onClick={e => { e.preventDefault(); go("forgot"); }}>Forgot password?</a></div></>}
           {mode === "register" && (
             <label className={`agree ${f.accept ? "on" : ""}`}>
               <input type="checkbox" checked={f.accept} onChange={set("accept")}/>
@@ -499,8 +557,17 @@ function Home({ me, onOut, reloadMe }) {
 
 export function App() {
   const [me, setMe] = useState(undefined); const [notice, setNotice] = useState("");
+  const [resetToken, setResetToken] = useState(takeResetToken);              // opened from a "Forgot password" email
   const load = () => api("/app/api/me").then(setMe).catch(e => { setMe(null); if (e.status === 403) setNotice(e.message); });
   useEffect(() => { load(); }, []);
+  // a reset link pasted into a tab that already shows the app changes only the #part: no reload, so listen for it
+  useEffect(() => {
+    const f = () => { const t = takeResetToken(); if (t) setResetToken(t); };
+    window.addEventListener("hashchange", f);
+    return () => window.removeEventListener("hashchange", f);
+  }, []);
+  // changed → signed out everywhere, so the sign-in form; left without changing → back to wherever this browser was
+  if (resetToken) return <AuthScreen onIn={load} resetToken={resetToken} onResetDone={changed => { setResetToken(null); if (changed) setMe(null); else load(); }}/>;
   if (me === undefined) return <div className="loading"><Brand/></div>;
   if (!me) return <AuthScreen onIn={load} notice={notice}/>;
   // later refreshes (plan changed by Admin) keep the page on a network hiccup; only a real sign-out ends it

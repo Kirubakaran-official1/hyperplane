@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import time
 from collections import defaultdict, deque
 from contextlib import contextmanager
@@ -245,6 +246,68 @@ def login(body: LoginIn, request: Request, response: Response):
                   "login_count = login_count + 1 WHERE id = %s", (r["id"],))
     _start_session(request, response, r, "login")
     return {"name": r["name"]}
+
+
+# ─── Forgot password (owner, 2026-11-02; mailer.py has the whole design). This service only calls three database
+# functions; the worker sends the email. Every answer is the same whether or not the email has an account.
+class ForgotIn(BaseModel):
+    email: str
+
+
+class ResetCheckIn(BaseModel):
+    token: str
+
+
+class ResetIn(BaseModel):
+    token: str
+    password: str
+
+
+FORGOT_SENT = ("If an account exists for this email, we've sent a link to choose a new password. It works once and expires "
+               "in 30 minutes. Check your spam folder too.")
+RESET_DEAD = "This link has expired or was already used. Ask for a new one."
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{30,64}$")
+
+
+@app.post("/app/api/password/forgot")
+def password_forgot(body: ForgotIn, request: Request):
+    _rate("forgot", _ip(request), 5, 900)
+    email = body.email.strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(422, "Please enter a valid email address")
+    _rate("forgot-email", email, 3, 3600)
+    with pool.connection() as c:
+        res = c.execute("SELECT portal_password_forgot(%s, %s, %s) AS r", (email, secrets.token_urlsafe(32), _ip(request))).fetchone()["r"]
+    _log_attempt(request, "reset_requested", None, email, result=res)
+    return {"ok": True, "message": FORGOT_SENT}
+
+
+@app.post("/app/api/password/check")
+def password_check(body: ResetCheckIn, request: Request):
+    """is a reset link still usable (shown before the customer types a new password)"""
+    _rate("reset-check", _ip(request), 20, 900)
+    if not TOKEN_RE.match(body.token):
+        return {"valid": False, "message": RESET_DEAD}
+    with pool.connection() as c:
+        who = c.execute("SELECT portal_password_check(%s) AS e", (body.token,)).fetchone()["e"]
+    return {"valid": True, "email": who} if who else {"valid": False, "message": RESET_DEAD}
+
+
+@app.post("/app/api/password/reset")
+def password_reset(body: ResetIn, request: Request):
+    _rate("reset", _ip(request), 10, 900)
+    if not 8 <= len(body.password) <= 128:
+        raise HTTPException(422, "Password must be at least 8 characters")
+    if not TOKEN_RE.match(body.token):
+        raise HTTPException(400, RESET_DEAD)
+    with pool.connection() as c:
+        r = c.execute("SELECT * FROM portal_password_reset(%s, %s)", (body.token, hash_password(body.password))).fetchone()
+        if r:
+            act.log(c, actor_kind="customer", actor_id=r["customer_id"], actor_name=r["name"], device=act.device_label(_ua(request)),
+                    ip=_ip(request), app="customer", event="password_reset", detail={"by": "email link", "devices": r["devices"]})
+    if not r:
+        raise HTTPException(400, RESET_DEAD)
+    return {"ok": True, "message": "Your password has been changed. Sign in with your new password."}
 
 
 # what a customer may use = permissions.effective (roles + direct grants, on, not retired, requirement met):

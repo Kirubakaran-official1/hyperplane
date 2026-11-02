@@ -786,6 +786,61 @@ customer may not use: "this is the wrong way … this is not only for the AI por
 - Tests: `plan_api_test.py` (catalogue, migration, 8 Postman-style refusals, trader / admin limits, plan removal),
   `plan_ui_test.py`; other suites updated for "every customer has the builder".
 
+### Forgot password + customer email (owner, 2026-11-02) — `backend/app/mailer.py`
+- Owner: "people forget the password … provide the forget password option … I don't have a company email or a mail
+  server". Sending goes through **Brevo** (transactional email, free tier) over SMTP — config.ini `[mail]`:
+  smtp_host, smtp_port (587 STARTTLS · 465 SSL · `security = none` only for a test inbox), smtp_user, smtp_password
+  (Brevo "SMTP key"), from_email (a Brevo-verified sender), from_name, reply_to (optional Reply-To, e.g. support@ while
+  sending from no-reply@; owner wants a professional sender once a domain is bought), **public_url** (links start with it — never
+  the request's Host header). `config.mail()` is None until host, from_email and public_url are set.
+- **Who does what**: the customer service never sends mail and never reads config.ini. It calls 3 SECURITY DEFINER
+  functions (its only rights here — no access to `password_resets`, `email_outbox` or `customers.pw_hash`):
+  `portal_password_forgot(email, token, ip)` → 'sent' / 'limited' (3 links per customer per hour) / 'none' (no
+  approved / pending account); `portal_password_check(token)` → masked email or NULL;
+  `portal_password_reset(token, hash)` → new password, `session_ver` + 1, every session ended ('password_reset'),
+  other open links used, a "password changed" email queued. The worker's `MailThread` (every 3 s, apart from the
+  collection loop) sends `email_outbox`; a reset email still waiting after 30 min → 'expired'; failures retried 5×
+  with a growing wait; `data` (name, token) is wiped once sent / failed / expired; rows kept 90 days.
+- Link = `<public_url>/app/#reset=<token>` (secrets.token_urlsafe(32); the DB keeps only its SHA-256; after `#` it never
+  reaches a server, a log or a link scanner); one use, 30 minutes. The app reads it once (`takeResetToken`, also on
+  `hashchange`) and wipes it from the address bar.
+- Endpoints (public — listed in `route_guards.PUBLIC`): `POST /app/api/password/forgot` (same answer for every email;
+  5 per IP / 15 min, 3 per email / hour), `/check`, `/reset` (8–128 characters). Admin: `GET /api/admin/mail` (set up?
+  sent / waiting / not sent in 24 h, last error) and `POST /api/admin/mail/test` (sends at once, plain reason on failure).
+- UI: sign-in "Forgot password?" → `#auth-forgot`; the link → `#auth-reset` ("Choose a new password for p•••@…"), a used or
+  expired link → `#reset-dead` + "Send me a new link"; success → sign-in with the message, email pre-filled. Admin →
+  System & settings → "Customer email" card (`#mail-card`, `#mail-test`). Audit log: `reset_requested` (result) and
+  `password_reset` (by "email link"), filter "Password resets".
+- Tests: `pw_api_test.py` (34) and `pw_ui_test.py` run against a test inbox (`mailtest/smtp_sink.py`, started with
+  `docker compose run -d --no-deps --name hp-smtpsink -v <scratch>/mailtest:/sink worker python /sink/smtp_sink.py`); they
+  stop the real worker, run a sender with `CONFIG_PATH=/sink/mailtest.ini`, and start the worker again.
+
+### Free float — AI Portfolio Builder (owner, 2026-11-02)
+- Owner: "77,516 shares a day — does the ticker have that many shares to trade? … I added 3 more columns … free float =
+  grand_total_number − total_foreign_promoter_and_group_number − indian_promoter_and_group_number … the option to use
+  the free float … don't go to the max, only some amount is possible — check how much an institution can buy … else
+  show it in the stock's details once the share count is alarming … give the i button".
+- **Master screener** now has 32 columns: the 29 + `grand_total_number`, `total_foreign_promoter_and_group_number`,
+  `indian_promoter_and_group_number` → records / Master_Stock_Data `Total_Shares`, `Promoter_Foreign_Shares`,
+  `Promoter_Indian_Shares` (`chartink_fast.SHARE_FIELDS`, by header name, `MASTER_LAYOUTS[32]` by position; at the END
+  of the sheet; blank → None, also when the copied row lost its trailing blanks). Flattened copies now require the
+  row numbers to run 1, 2, 3 … (a wrong chunk size used to turn volumes into "stocks").
+- `liquidity.free_float(m)` → `[free-float shares, all shares]`, None when the total or both promoter counts are blank or
+  the numbers don't add up. publish → per stock `ff`.
+- **Standard (Claude's proposal, owner may tune — `liquidity.FLOAT_CAP` / `FLOAT_WATCH`)**: one portfolio holds at most
+  1 % of a stock's free float; from 0.25 % the holding is shown in the stock's details. `SEBI_LINES` on ALL the
+  company's shares, the highest reached is shown: > 1 % named in the shareholding pattern (LODR) · 5 % disclosure
+  within 2 working days (SAST Reg 29) · 10 % mutual-fund ceiling / FPI → FDI · 25 % open offer (SAST Reg 3).
+- builder: option `by_float` (More options "Size by free float", standard OFF; customer-level access can't change it →
+  403). ON: `capof` also ≤ 1 % of the free float (`floatcap`), a stock whose float cap is < 30 % of its slice is
+  replaced (`small_float`). Per pick `ff` {status light / watch / over / capped / unknown, show, free, total, free_pct,
+  held, held_total, most, most_amt, cap_pct, line}; response `float` (by_float, over, over_amt, capped, watch,
+  unknown, replaced, max_held); notes.
+- UI: the option with ⓘ (`#bd-float`, `#bd-ff-y/n`); in a stock's expanded row a "Free float ⓘ" card (`FloatCard`,
+  `#ff-SYM`) ONLY when `ff.show` (so small portfolios see nothing); "⚠ x% of free float" under the Liquidity cell
+  (`.bd-ffx`); banner `#bd-ffbanner` / notes `#bd-ffcapped`, `#bd-ffrepl` in the Volume analyser; 5 download columns;
+  a Guide bullet. Tests: `ff_parse_check.py`, `ff_api_test.py`, `ff_ui_test.py`.
+
 ### Volume analyser — AI Portfolio Builder (owner, 2026-11-01)
 - Owner: "I added the volume for the quarterly and yearly too, and the last few weeks, months, quarters and years …
   not just how many days to buy … a lakh of volume doesn't mean we can acquire all of it — there should be a standard

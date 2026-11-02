@@ -25,6 +25,7 @@ const EVENT = {
   signed_out_all:  ["Signed out everywhere", "var(--mixed)"],
   blocked:         ["Blocked", "var(--short)"],
   password_reset:  ["Password reset", "var(--mixed)"],
+  reset_requested: ["Password link asked", "var(--acc)"],
   roles_changed:   ["Plan changed", "var(--ret)"],
   role_created:    ["Role created", "var(--ret)"],
   role_updated:    ["Role updated", "var(--ret)"],
@@ -40,6 +41,7 @@ const EVENT_GROUPS = [
   ["all", "All events", null],
   ["signin", "Sign-ins", "login,signup"],
   ["failed", "Failed & locked", "login_failed,locked"],
+  ["password", "Password resets", "reset_requested,password_reset"],
   ["out", "Sign-outs", "logout,session_revoked,signed_out_all"],
   ["open", "Applications opened", "open"],
   ["detail", "Stock detail views", "detail"],
@@ -64,6 +66,7 @@ function eventDetail(e, appName) {
     case "login_failed": return REASON[d.reason] || "";
     case "locked": return `Locked for ${d.minutes || 15} min after 5 wrong passwords`;
     case "signup": return d.status === "pending" ? "Waiting for approval" : "Approved automatically";
+    case "reset_requested": return { sent: "Link emailed", none: "No active account with this email — nothing sent", limited: "Too many asks this hour — nothing sent" }[d.result] || "";
     case "login": return e.app === "admin" ? (d.admin ? "Admin" : "User") : "";
     case "session_revoked": return `by ${d.by}`;
     case "signed_out_all": case "blocked": case "password_reset": return `by ${d.by}${d.devices ? ` · ${plural(d.devices, "device")} signed out` : ""}`;

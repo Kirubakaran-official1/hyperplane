@@ -21,6 +21,7 @@ from datetime import timedelta
 
 from . import activity as act
 from . import config
+from . import mailer
 from .db import get_history_enabled, get_meta, get_settings, init_db, pool, set_meta
 from .adoption import ADOPTION_DAYS
 from .detail import DETAIL_DAYS
@@ -265,6 +266,7 @@ def cleanup():
         c.execute(f"DELETE FROM snapshot_candles WHERE snapshot_id IN ({old})", (DETAIL_DAYS,))
         # adoption report: two years of customer × day × application rows
         c.execute("DELETE FROM adoption_daily WHERE day < (now() AT TIME ZONE 'Asia/Kolkata')::date - %s", (ADOPTION_DAYS,))
+        mailer.cleanup(c)                                # sent emails and used reset links after 90 days
         # direct grants (Access manager): they stop working the day after their last day; the rows go 30 days later
         for g in c.execute("DELETE FROM customer_permissions WHERE expires_on < (now() AT TIME ZONE 'Asia/Kolkata')::date - 30 "
                            "RETURNING customer_id, permission, expires_on").fetchall():
@@ -294,6 +296,7 @@ def main():
         traceback.print_exc()
     bg = Background()
     bg.start()
+    mailer.MailThread(pool).start()                      # customer emails (Forgot password), apart from collections
     print(f"Hyperplane worker ready — {now().strftime('%d %b %Y %H:%M:%S %Z')}"
           + (f" — OFFLINE test mode from {OFFLINE_DIR}" if OFFLINE_DIR else ""), flush=True)
     last_cleanup = None

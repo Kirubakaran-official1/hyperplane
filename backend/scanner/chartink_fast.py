@@ -1008,7 +1008,10 @@ def parse_symbols_from_clipboard(clipboard_data, key, output_list, stock_signal_
 # Builder's volume analysis (backend/app/liquidity.py). "_0" is the candle so far, "_1" … "_4" are completed ones.
 VOLUME_PERIODS = ("Weekly", "Monthly", "Quarterly", "Yearly")
 VOLUME_FIELDS = tuple(f"{p}_Volume" + (f"_{k}" if k else "") for p in VOLUME_PERIODS for k in range(5))
+# Shareholding (owner, 2026-11-02): total shares and the promoters' shares → free float (backend/app/liquidity.py)
+SHARE_FIELDS = ("Total_Shares", "Promoter_Foreign_Shares", "Promoter_Indian_Shares")
 MASTER_LAYOUTS = {   # by column count, when the clipboard has no header row
+    32: ("Sr", "Stock_Name", "Symbol", "Price", "Change_Pct", "Volume", *VOLUME_FIELDS, "Sector", "Industry", "Marketcap", *SHARE_FIELDS),
     29: ("Sr", "Stock_Name", "Symbol", "Price", "Change_Pct", "Volume", *VOLUME_FIELDS, "Sector", "Industry", "Marketcap"),
     11: ("Sr", "Stock_Name", "Symbol", "Price", "Change_Pct", "Volume", "Weekly_Volume", "Monthly_Volume", "Sector", "Industry", "Marketcap"),
     9: ("Sr", "Stock_Name", "Symbol", "Price", "Change_Pct", "Volume", "Sector", "Industry", "Marketcap"),
@@ -1017,7 +1020,9 @@ _MASTER_HEADER = {"sr": "Sr", "sr.": "Sr", "stock name": "Stock_Name", "name": "
                   "close": "Price", "price": "Price", "ltp": "Price", "%_change": "Change_Pct", "%change": "Change_Pct",
                   "% chg": "Change_Pct", "change": "Change_Pct", "daily_volume": "Volume", "volume": "Volume",
                   "sector": "Sector", "industry": "Industry", "marketcapname": "Marketcap", "marketcap": "Marketcap",
-                  "market cap": "Marketcap"}
+                  "market cap": "Marketcap", "grand_total_number": "Total_Shares",
+                  "total_foreign_promoter_and_group_number": "Promoter_Foreign_Shares",
+                  "indian_promoter_and_group_number": "Promoter_Indian_Shares"}
 _VOL_HEADER = re.compile(r"^(weekly|monthly|quaterly|quarterly|yearly)_volume(?:_(\d))?$")
 
 
@@ -1039,13 +1044,14 @@ def master_header_fields(cells):
 def _row_to_record(cells, fields=None):
     """
     Map one master-table row to a dict. With the clipboard's header row (fields) every column is read by its NAME;
-    without it, by position: the 29-column layout (owner, 2026-11-01: daily volume + the current and last 4 weekly,
-    monthly, quarterly and yearly volumes), the 11-column one (daily / weekly / monthly) and the original 9-column one.
-    Volumes left blank (a young stock has no yearly candles) are None.
+    without it, by position: the 32-column layout (owner, 2026-11-02: + total shares and the foreign / Indian promoter
+    shares), the 29-column one (owner, 2026-11-01: daily volume + the current and last 4 weekly, monthly, quarterly and
+    yearly volumes), the 11-column one (daily / weekly / monthly) and the original 9-column one.
+    Volumes and share counts left blank (a young stock has no yearly candles) are None.
     """
     cells = list(cells)
     if fields is None:
-        n = 29 if len(cells) >= 29 else 11 if len(cells) >= 11 else 9
+        n = 32 if len(cells) >= 32 else 29 if len(cells) >= 29 else 11 if len(cells) >= 11 else 9
         if len(cells) < 8:
             return None
         if len(cells) < 9:
@@ -1087,6 +1093,9 @@ def _row_to_record(cells, fields=None):
             rec[f] = to_int(raw[f], None) if str(raw[f]).strip() else None
     rec.update({'Sector': clean_label(raw.get("Sector")), 'Industry': clean_label(raw.get("Industry")),
                 'Marketcap': clean_label(raw.get("Marketcap"))})
+    for f in SHARE_FIELDS:                        # new columns go at the END of Master_Stock_Data (Excel stays compatible);
+        if f in fields:                           # the last columns: blank ones may be cut off the copied row → None
+            rec[f] = to_int(raw[f], None) if str(raw.get(f) or "").strip() else None
     return rec
 
 
@@ -1136,7 +1145,7 @@ def parse_master_table_clipboard(clipboard_data):
         if records:
             return records
 
-    # --- Strategy 2: flattened, one cell per line -> chunks of 29 / 11 / 9 / 8 (blank cells are lost here) ---
+    # --- Strategy 2: flattened, one cell per line -> chunks of 32 / 29 / 11 / 9 / 8 (blank cells are lost here) ---
     filtered = [ln for ln in lines if not is_header_like(ln)]
 
     start = 0
@@ -1145,14 +1154,21 @@ def parse_master_table_clipboard(clipboard_data):
     filtered = filtered[start:]
 
     best_records = []
-    for chunk_size in (29, 11, 9, 8):
+    for chunk_size in (32, 29, 11, 9, 8):
         records = []
         broken = False
+        sr = None
         for i in range(0, len(filtered) - chunk_size + 1, chunk_size):
             chunk = filtered[i:i + chunk_size]
             if not chunk[0].replace(',', '').isdigit():
                 broken = True
                 break
+            # the row number (Sr) runs 1, 2, 3 … — a wrong chunk size lands on other numbers (volumes, share counts)
+            n = int(chunk[0].replace(',', ''))
+            if sr is not None and n != sr + 1:
+                broken = True
+                break
+            sr = n
             rec = _row_to_record(chunk)
             if rec:
                 records.append(rec)

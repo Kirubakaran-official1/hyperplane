@@ -35,6 +35,7 @@ from . import adoption
 from . import activity as act
 from . import config
 from . import helpdesk as hd
+from . import mailer
 from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
                  init_db, pool, put_settings, set_auto_approve, set_history_enabled, set_meta, get_history_changed)
 from .schedule import TZ, next_runs, now, parse_hhmm
@@ -983,6 +984,33 @@ async def import_excel(files: list[UploadFile] = File(...), user=Depends(admin_u
             os.remove(dest)
             results.append({"file": name, "ok": False, "error": str(e)})
     return {"results": results}
+
+
+class MailTestIn(BaseModel):
+    to: str
+
+
+@app.get("/api/admin/mail")
+def mail_status(user=Depends(admin_user)):
+    """Email (Forgot password): set up in config.ini [mail]? sent / waiting / failed in the last day, the last error"""
+    with pool.connection() as c:
+        return mailer.status(c)
+
+
+@app.post("/api/admin/mail/test")
+def mail_test(body: MailTestIn, user=Depends(admin_user)):
+    """send one test email straight away and say plainly what went wrong, if anything"""
+    to = body.to.strip()
+    if not re.match(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[a-z]{2,}$", to, re.I):
+        raise HTTPException(422, "Enter a valid email address")
+    cfg = config.mail()
+    try:
+        mailer.send(cfg, to, *mailer.render("test", {}, cfg))
+    except mailer.MailNotSetUp as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:                                   # noqa: BLE001 — the admin needs the reason
+        raise HTTPException(502, f"The email service refused it: {type(e).__name__}: {str(e)[:300]}")
+    return {"ok": True, "message": f"Sent to {to}. Check the inbox (and spam) in a minute."}
 
 
 @app.get("/api/admin/system")
