@@ -29,6 +29,7 @@ from html import escape
 from . import config
 
 RESET_MINUTES = 30
+VERIFY_HOURS = 48                      # the "confirm your email" link (round 17: sign-up screening, signup_guard.py)
 RESETS_PER_HOUR = 3                    # per customer (the database counts them; the service also limits per IP / email)
 MAX_TRIES = 5
 POLL_SECONDS = 3
@@ -106,11 +107,100 @@ BEGIN
     INSERT INTO email_outbox (kind, to_email, customer_id, data) VALUES ('password_changed', c.email, c.id, jsonb_build_object('name', c.name));
     RETURN QUERY SELECT c.id, c.name, n;
 END $$;
+-- ── Sign-up screening (owner 2026-11-07; signup_guard.py has the design): confirm the email, then approve only what looks real ──
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS review_flags TEXT[] NOT NULL DEFAULT '{{}}';
+UPDATE customers SET email_verified_at = COALESCE(approved_at, created_at) WHERE status = 'approved' AND email_verified_at IS NULL;
+CREATE TABLE IF NOT EXISTS signup_verifications (
+    token_hash  TEXT PRIMARY KEY,                    -- SHA-256 of the emailed token
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    used_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS signup_verifications_cust ON signup_verifications (customer_id, created_at);
+-- messages to the owner (Telegram): a sign-up that needs a decision, a new customer approved
+CREATE TABLE IF NOT EXISTS owner_alerts (
+    id         BIGSERIAL PRIMARY KEY,
+    text       TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'queued',       -- queued · sent · failed
+    tries      INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sent_at    TIMESTAMPTZ
+);
+-- a self sign-up is never approved at insert any more: it is approved when its email is confirmed (portal_verify_email)
+CREATE OR REPLACE FUNCTION customers_auto_approve() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    RETURN NEW;
+END $$;
+-- right after the insert: remember what looked fake, queue the "confirm your email" mail (only for a brand-new pending account)
+CREATE OR REPLACE FUNCTION portal_signup_start(p_id bigint, p_token text, p_flags text[]) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE r record;
+BEGIN
+    SELECT id, name, email INTO r FROM customers
+        WHERE id = p_id AND status = 'pending' AND email_verified_at IS NULL AND created_at > now() - interval '2 minutes';
+    IF NOT FOUND THEN RETURN false; END IF;
+    UPDATE customers SET review_flags = COALESCE(p_flags, '{{}}') WHERE id = r.id;
+    INSERT INTO signup_verifications (token_hash, customer_id, expires_at)
+        VALUES (encode(sha256(convert_to(p_token, 'UTF8')), 'hex'), r.id, now() + interval '{VERIFY_HOURS} hours');
+    INSERT INTO email_outbox (kind, to_email, customer_id, data)
+        VALUES ('verify_email', r.email, r.id, jsonb_build_object('name', r.name, 'token', p_token));
+    RETURN true;
+END $$;
+-- "send me the link again": the same answer whether or not the address exists; a few a day per account
+CREATE OR REPLACE FUNCTION portal_signup_resend(p_email text, p_token text) RETURNS text
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE r record;
+BEGIN
+    SELECT id, name, email INTO r FROM customers WHERE email = lower(trim(p_email)) AND status = 'pending' AND email_verified_at IS NULL;
+    IF NOT FOUND THEN RETURN 'none'; END IF;
+    IF (SELECT count(*) FROM signup_verifications WHERE customer_id = r.id AND created_at > now() - interval '1 day') >= 4 THEN RETURN 'limited'; END IF;
+    UPDATE signup_verifications SET used_at = now() WHERE customer_id = r.id AND used_at IS NULL;
+    INSERT INTO signup_verifications (token_hash, customer_id, expires_at)
+        VALUES (encode(sha256(convert_to(p_token, 'UTF8')), 'hex'), r.id, now() + interval '{VERIFY_HOURS} hours');
+    INSERT INTO email_outbox (kind, to_email, customer_id, data)
+        VALUES ('verify_email', r.email, r.id, jsonb_build_object('name', r.name, 'token', p_token));
+    RETURN 'sent';
+END $$;
+-- the link: 'approved' (opened and nothing looked fake, auto-approval on) · 'review' (waits for the owner) · 'invalid'
+CREATE OR REPLACE FUNCTION portal_verify_email(p_token text) RETURNS text
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE v record; c record; ok boolean; who text;
+BEGIN
+    SELECT * INTO v FROM signup_verifications WHERE token_hash = encode(sha256(convert_to(p_token, 'UTF8')), 'hex')
+        AND used_at IS NULL AND expires_at > now() FOR UPDATE;
+    IF NOT FOUND THEN RETURN 'invalid'; END IF;
+    SELECT * INTO c FROM customers WHERE id = v.customer_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN 'invalid'; END IF;
+    UPDATE signup_verifications SET used_at = now() WHERE customer_id = c.id AND used_at IS NULL;
+    IF c.status = 'blocked' THEN RETURN 'invalid'; END IF;
+    UPDATE customers SET email_verified_at = now() WHERE id = c.id AND email_verified_at IS NULL;
+    IF c.status = 'approved' THEN RETURN 'approved'; END IF;
+    who := c.name || ' · ' || c.email || ' · ' || coalesce(c.phone, '') || ' · ' || coalesce(c.city || ', ', '') || coalesce(c.state, '');
+    ok := portal_auto_approve() AND cardinality(c.review_flags) = 0;
+    IF ok THEN
+        UPDATE customers SET status = 'approved', approved_at = now() WHERE id = c.id;
+        INSERT INTO email_outbox (kind, to_email, customer_id, data) VALUES ('approved', c.email, c.id, jsonb_build_object('name', c.name));
+        INSERT INTO owner_alerts (text) VALUES ('✅ New customer approved: ' || who);
+        RETURN 'approved';
+    END IF;
+    INSERT INTO email_outbox (kind, to_email, customer_id, data) VALUES ('verified_wait', c.email, c.id, jsonb_build_object('name', c.name));
+    INSERT INTO owner_alerts (text) VALUES ('🔎 Sign-up needs your decision: ' || who
+        || CASE WHEN cardinality(c.review_flags) > 0 THEN E'\nWhy: ' || array_to_string(c.review_flags, '; ') ELSE E'\nWhy: Admin approves each sign-up' END
+        || E'\nOpen Admin → Customers to approve or block.');
+    RETURN 'review';
+END $$;
+REVOKE ALL ON FUNCTION portal_signup_start(bigint, text, text[]) FROM PUBLIC;
+REVOKE ALL ON FUNCTION portal_signup_resend(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION portal_verify_email(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION portal_password_forgot(text, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION portal_password_check(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION portal_password_reset(text, text) FROM PUBLIC;
 """
-PORTAL_FUNCTIONS = ("portal_password_forgot(text, text, text)", "portal_password_check(text)", "portal_password_reset(text, text)")
+PORTAL_FUNCTIONS = ("portal_password_forgot(text, text, text)", "portal_password_check(text)", "portal_password_reset(text, text)",
+                    "portal_signup_start(bigint, text, text[])", "portal_signup_resend(text, text)", "portal_verify_email(text)")
 
 
 class MailNotSetUp(RuntimeError):
@@ -143,6 +233,29 @@ def render(kind, data, cfg):
             f"The link works once and expires in {RESET_MINUTES} minutes."], ("Choose a new password", link),
             "If you did not ask for this, ignore this email: your password stays the same.")
         return "Reset your Hyperplane password", text, html
+    if kind == "verify_email":
+        link = f"{cfg['public_url']}/app/#verify={data['token']}"
+        text = (f"Hi {name.split()[0]},\n\nWelcome to Hyperplane! Please confirm that this email address is yours:\n\n{link}\n\n"
+                f"The link is valid for {VERIFY_HOURS} hours. Once it is confirmed, we activate your account and email you again.\n"
+                "If you did not sign up, ignore this email: nothing is opened without it.\n\n— Hyperplane")
+        html = _layout("Confirm your email", [
+            f"Hi {first},", "Welcome to Hyperplane! Please confirm that this email address is yours — it takes one click.",
+            f"The link is valid for {VERIFY_HOURS} hours. Once it is confirmed, we activate your account and email you again."], ("Confirm my email", link),
+            "If you did not sign up, ignore this email: nothing is opened without it.")
+        return "Confirm your Hyperplane account", text, html
+    if kind == "approved":
+        link = f"{cfg['public_url']}/app/"
+        text = (f"Hi {name.split()[0]},\n\nYour Hyperplane account is approved and ready.\nSign in here:\n\n{link}\n\n"
+                "For education and information only — not investment advice.\n\n— Hyperplane")
+        html = _layout("Your account is ready", [f"Hi {first},", "Your Hyperplane account is approved and ready to use."], ("Sign in to Hyperplane", link),
+                       "For education and information only — not investment advice.")
+        return "Your Hyperplane account is approved", text, html
+    if kind == "verified_wait":
+        text = (f"Hi {name.split()[0]},\n\nThank you — your email is confirmed. We check every new account before it opens, "
+                "and we will email you as soon as yours is approved.\n\n— Hyperplane")
+        html = _layout("Email confirmed", [f"Hi {first},", "Thank you — your email is confirmed.",
+                                           "We check every new account before it opens, and we will email you as soon as yours is approved."])
+        return "Your Hyperplane email is confirmed", text, html
     if kind == "password_changed":
         text = (f"Hi {name.split()[0]},\n\nThe password of your Hyperplane account was just changed, and you were signed out on "
                 "every device.\nIf this was you, there is nothing to do. If it was not you, reply to this email or raise a "
@@ -192,6 +305,8 @@ def deliver(pool, limit=20):
         # a reset email that could not go out in time is useless (and carries a live token): drop it
         c.execute("UPDATE email_outbox SET status = 'expired', data = NULL, error = coalesce(error, 'not sent in time') "
                   f"WHERE status = 'queued' AND kind = 'password_reset' AND created_at < now() - interval '{RESET_MINUTES} minutes'")
+        c.execute("UPDATE email_outbox SET status = 'expired', data = NULL, error = coalesce(error, 'not sent in time') "
+                  f"WHERE status = 'queued' AND kind = 'verify_email' AND created_at < now() - interval '{VERIFY_HOURS} hours'")
         rows = c.execute("SELECT id, kind, to_email, data, tries FROM email_outbox WHERE status = 'queued' AND next_try <= now() "
                          "ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED", (limit,)).fetchall()
         for r in rows:
@@ -214,9 +329,35 @@ def deliver(pool, limit=20):
     return sent
 
 
+def deliver_alerts(pool, limit=10):
+    """send the owner's waiting messages through the Telegram bot in config.ini (nothing is sent when it is not set up)"""
+    tg = config.telegram()
+    if not tg:
+        return 0
+    import json as _json
+    import urllib.request
+    sent = 0
+    with pool.connection() as c:
+        c.execute("UPDATE owner_alerts SET status = 'failed' WHERE status = 'queued' AND created_at < now() - interval '2 days'")
+        for r in c.execute("SELECT id, text, tries FROM owner_alerts WHERE status = 'queued' ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED", (limit,)).fetchall():
+            try:
+                req = urllib.request.Request(f"https://api.telegram.org/bot{tg['bot_token']}/sendMessage", method="POST",
+                                             data=_json.dumps({"chat_id": tg["chat_id"], "text": r["text"][:3500]}).encode(),
+                                             headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=15).read()
+                c.execute("UPDATE owner_alerts SET status = 'sent', sent_at = now(), tries = tries + 1 WHERE id = %s", (r["id"],))
+                c.commit()
+                sent += 1
+            except Exception as e:                      # noqa: BLE001 — retried; the bot token is never written to a log
+                c.execute("UPDATE owner_alerts SET tries = tries + 1, status = CASE WHEN tries + 1 >= 5 THEN 'failed' ELSE status END WHERE id = %s", (r["id"],))
+                print(f"⚠ Owner alert #{r['id']} not sent: {type(e).__name__}", flush=True)
+    return sent
+
+
 def cleanup(c):
     c.execute(f"DELETE FROM email_outbox WHERE status <> 'queued' AND created_at < now() - interval '{KEEP_DAYS} days'")
     c.execute(f"DELETE FROM password_resets WHERE created_at < now() - interval '{KEEP_DAYS} days'")
+    c.execute(f"DELETE FROM owner_alerts WHERE status <> 'queued' AND created_at < now() - interval '{KEEP_DAYS} days'")
 
 
 def status(c):
@@ -243,6 +384,7 @@ class MailThread(threading.Thread):
         while True:
             try:
                 deliver(self.pool)
+                deliver_alerts(self.pool)
             except Exception:                           # noqa: BLE001 — keep the thread alive
                 traceback.print_exc()
             time.sleep(POLL_SECONDS)

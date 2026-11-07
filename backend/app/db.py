@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS portal_config (
 );
 CREATE OR REPLACE FUNCTION portal_auto_approve() RETURNS boolean
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
-    AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'auto_approve'), false) $$;
+    AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'auto_approve'), true) $$;      -- automatic by default (round 17c)
 CREATE OR REPLACE FUNCTION customers_auto_approve() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN

@@ -14,6 +14,8 @@ PUBLIC = {"/api/login", "/api/logout", "/api/health",
           "/app/api/login", "/app/api/logout", "/app/api/register", "/app/api/signup-info", "/app/api/health",
           # Forgot password: used while signed out; the emailed one-time link is the proof (mailer.py)
           "/app/api/password/forgot", "/app/api/password/check", "/app/api/password/reset",
+          # sign-up screening (round 17): the emailed confirmation link and "send it again"
+          "/app/api/signup/verify", "/app/api/signup/resend",
           # a public saved portfolio by its 12-character ID: read only, no session, rate-limited per address (owner 2026-11-07)
           "/app/api/public/portfolio/{code}", "/app/api/public/portfolio/{code}/track"}
 # the check runs inside the function (the permission depends on a query value): name the check here

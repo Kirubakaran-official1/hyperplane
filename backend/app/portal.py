@@ -23,16 +23,20 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
-from pydantic import BaseModel
+from pydantic import Field
+
+from .safe import SafeModel
 
 from . import activity as act
 from . import adoption
 from . import builder
 from . import monitor
+from . import signup_guard
 from . import sip
 from . import tracking
 from . import helpdesk as hd
@@ -146,6 +150,12 @@ def _need_day(zones=False, etf=False):
         raise HTTPException(422, f"No ETF data is stored for {row['trade_date']:%d %b %Y}. Pick a day that has it.")
 
 
+@app.exception_handler(RequestValidationError)
+async def _bad_request(request: Request, exc: RequestValidationError):
+    """a body that fails its type / length checks: one plain sentence (never the raw list of errors)"""
+    return JSONResponse({"detail": "Please check what you entered and try again."}, status_code=422)
+
+
 @app.middleware("http")
 async def _headers(request: Request, call_next):
     # body-size cap (Caddy also caps it): helpdesk messages may carry images, everything else is tiny
@@ -190,20 +200,27 @@ PHONE_RE = re.compile(r"^\+\d{1,4} \d{5,13}$")             # "+<country code> <n
 IN_MOBILE_RE = re.compile(r"^\+91 [6-9]\d{9}$")             # India: 10 digits starting 6-9
 
 
-class RegisterIn(BaseModel):
-    name: str
-    email: str
-    phone: str
-    country: str
-    state: str
-    city: str = ""
-    password: str
+class RegisterIn(SafeModel):
+    name: str = Field("", max_length=200)
+    email: str = Field("", max_length=400)
+    phone: str = Field("", max_length=60)
+    country: str = Field("", max_length=120)
+    state: str = Field("", max_length=120)
+    city: str = Field("", max_length=120)
+    password: str = Field("", max_length=400)
     accept: bool = False
 
 
-class LoginIn(BaseModel):
-    email: str
-    password: str
+class LoginIn(SafeModel):
+    email: str = Field("", max_length=400)
+    password: str = Field("", max_length=400)
+
+
+def _safe_email(raw):
+    """an email typed on a sign-in / reset form → trimmed lower case, or None when it holds control / hidden characters or is absurdly long
+    (a NUL byte would make the database driver fail with a 500; nothing like that reaches a query)"""
+    v = (raw or "").strip().lower() if isinstance(raw, str) else ""
+    return v if v and len(v) <= 254 and not signup_guard._bad_chars(v) and "@" in v else None
 
 
 def _ua(request: Request):
@@ -242,38 +259,90 @@ def _log_attempt(request: Request, event, r=None, email=None, **detail):
 @app.post("/app/api/register")
 def register(body: RegisterIn, request: Request, response: Response):
     _rate("register", _ip(request), 5, 3600)
-    email = body.email.strip().lower()
-    name, country, state = body.name.strip(), body.country.strip(), body.state.strip()
-    if not 2 <= len(name) <= 80:
-        raise HTTPException(422, "Please enter your full name")
-    if not EMAIL_RE.match(email):
-        raise HTTPException(422, "Please enter a valid email address")
-    phone = body.phone.strip()
+    # round 17c: every value is checked here, whatever the page did (signup_guard.validate_signup): Gmail only, no numbers in the name,
+    # letters-only places, a real password, no hidden / control characters
+    try:
+        v = signup_guard.validate_signup(body.model_dump(), COUNTRIES, IN_STATES)
+    except signup_guard.Invalid as e:
+        raise HTTPException(422, str(e), headers={"X-Field": e.field})
+    email, name, phone, country, state, city = v["email"], v["name"], v["phone"], v["country"], v["state"], v["city"]
     if not PHONE_RE.match(phone) or (phone.startswith("+91 ") and not IN_MOBILE_RE.match(phone)):
-        raise HTTPException(422, "Please enter a valid WhatsApp number — choose the country code and type the number (10 digits for India)")
-    if not country or not state:
-        raise HTTPException(422, "Please choose your country and state")
-    if not 8 <= len(body.password) <= 128:
-        raise HTTPException(422, "Password must be at least 8 characters")
+        raise HTTPException(422, "Please enter a valid WhatsApp number — choose the country code and type the number (10 digits for India)",
+                            headers={"X-Field": "phone"})
     if not body.accept:
-        raise HTTPException(422, "Please accept the terms to continue")
+        raise HTTPException(422, "Please accept the terms to continue", headers={"X-Field": "accept"})
+    why = signup_guard.refuse(email, phone)                   # round 17: throw-away mail / impossible numbers are refused at once
+    if why:
+        raise HTTPException(422, why, headers={"X-Field": "phone" if "WhatsApp" in why else "email"})
+    flags = signup_guard.screen(name, email, phone)           # …look-alike-fake ones wait for the owner after the email is confirmed
     with pool.connection() as c:
-        # the database approves it right away when Admin has switched on automatic approval (trigger, see db.py)
+        # always PENDING at insert (db trigger no longer approves): the account opens when its email is confirmed (mailer.py)
         r = c.execute("INSERT INTO customers (email, name, phone, country, state, city, pw_hash, signup_ip) "
                       "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING "
                       "RETURNING id, name, status, session_ver",
-                      (email, name, phone, country[:60], state[:60], body.city.strip()[:60],
-                       hash_password(body.password), _ip(request))).fetchone()
-        if r and r["status"] == "approved":
-            c.execute("UPDATE customers SET last_login = now(), login_count = login_count + 1 WHERE id = %s", (r["id"],))
-        elif r:                                          # waiting for approval: still worth a line in the log
+                      (email, name, phone, country, state, city, hash_password(v["password"]), _ip(request))).fetchone()             if not _gmail_taken(c, email) else None
+        if r:
+            c.execute("SELECT portal_signup_start(%s, %s, %s)", (r["id"], secrets.token_urlsafe(32), flags))
             act.log(c, actor_kind="customer", actor_id=r["id"], actor_name=r["name"], device=act.device_label(_ua(request)),
-                    ip=_ip(request), app="customer", event="signup", detail={"status": r["status"]})
-    if r and r["status"] == "approved":
-        _start_session(request, response, r, "signup")
-        return {"ok": True, "signed_in": True, "name": r["name"], "message": "Welcome to Hyperplane! Your account is ready."}
+                    ip=_ip(request), app="customer", event="signup", detail={"status": r["status"], "flags": flags} if flags else {"status": r["status"]})
     # same answer whether or not the email already existed
-    return {"ok": True, "message": "Thank you! Your account will be active once QuantFriday approves it."}
+    return {"ok": True, "verify": True, "message": SIGNUP_SENT}
+
+
+def _gmail_taken(c, email):
+    """Gmail ignores dots: an address that differs only by dots is the same inbox — one account for it (the answer to the person stays the same)"""
+    canon = signup_guard.canonical_gmail(email)
+    return bool(c.execute("SELECT 1 FROM customers WHERE lower(replace(split_part(email, '@', 1), '.', '')) || '@' || split_part(email, '@', 2) = %s LIMIT 1",
+                          (canon,)).fetchone())
+
+
+COUNTRIES = ["India", "United Arab Emirates", "United States", "United Kingdom", "Singapore", "Saudi Arabia", "Qatar", "Kuwait", "Oman", "Bahrain",
+             "Canada", "Australia", "Malaysia", "Germany", "Other"]
+IN_STATES = ["Andaman and Nicobar Islands", "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chandigarh", "Chhattisgarh",
+             "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jammu and Kashmir", "Jharkhand",
+             "Karnataka", "Kerala", "Ladakh", "Lakshadweep", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha",
+             "Puducherry", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal"]
+SIGNUP_SENT = ("Almost there! We've sent a link to your email — open it to confirm the address. Your account opens right after "
+               "(we email you again). Check the spam folder too.")
+VERIFY_DEAD = "This confirmation link has expired or was already used. Sign in to get a new one."
+
+
+class VerifyIn(SafeModel):
+    token: str = Field("", max_length=200)
+
+
+class ResendIn(SafeModel):
+    email: str = Field("", max_length=400)
+
+
+@app.post("/app/api/signup/verify")
+def signup_verify(body: VerifyIn, request: Request):
+    """the link in the confirmation email (opened from /app/#verify=<token>; a POST, so a mail scanner's prefetch cannot use it up)"""
+    _rate("verify", _ip(request), 20, 3600)
+    if not TOKEN_RE.match(body.token or ""):
+        raise HTTPException(422, VERIFY_DEAD)
+    with pool.connection() as c:
+        res = c.execute("SELECT portal_verify_email(%s) AS r", (body.token,)).fetchone()["r"]
+    if res == "invalid":
+        raise HTTPException(422, VERIFY_DEAD)
+    if res == "approved":
+        return {"ok": True, "status": "approved", "message": "Your email is confirmed and your account is ready. Sign in to start."}
+    return {"ok": True, "status": "review", "message": "Your email is confirmed. We check every new account before it opens — "
+                                                       "we'll email you as soon as yours is approved."}
+
+
+@app.post("/app/api/signup/resend")
+def signup_resend(body: ResendIn, request: Request):
+    """send the confirmation link again (same answer whether or not the address has a waiting account)"""
+    _rate("resend", _ip(request), 5, 3600)
+    email = _safe_email(body.email)
+    if not email:
+        return {"ok": True, "message": "If this address is waiting to be confirmed, we've sent the link again. Check the spam folder too."}
+    _rate("resend-mail", email, 3, 3600)
+    if EMAIL_RE.match(email):
+        with pool.connection() as c:
+            c.execute("SELECT portal_signup_resend(%s, %s)", (email, secrets.token_urlsafe(32)))
+    return {"ok": True, "message": "If this address is waiting to be confirmed, we've sent the link again. Check the spam folder too."}
 
 
 @app.get("/app/api/signup-info")
@@ -296,9 +365,13 @@ def _blocked_reason(r):
 @app.post("/app/api/login")
 def login(body: LoginIn, request: Request, response: Response):
     _rate("login", _ip(request), 10, 900)
-    email = body.email.strip().lower()
+    email = _safe_email(body.email)
+    if email is None or not body.password or signup_guard._bad_chars(body.password):
+        time.sleep(0.6)                                       # a refused value costs as much time as a wrong password
+        time.sleep(0.6)
+        raise HTTPException(401, "Email or password is wrong")
     with pool.connection() as c:
-        r = c.execute("SELECT id, name, pw_hash, status, expires_on, session_ver, failed_logins, locked_until "
+        r = c.execute("SELECT id, name, pw_hash, status, expires_on, session_ver, failed_logins, locked_until, email_verified_at "
                       "FROM customers WHERE email = %s", (email,)).fetchone()
     now = datetime.now(timezone.utc)
     if r and r["locked_until"] and r["locked_until"] > now:
@@ -320,6 +393,9 @@ def login(body: LoginIn, request: Request, response: Response):
     reason = _blocked_reason(r)
     if reason:
         _log_attempt(request, "login_failed", r, reason=r["status"] if r["status"] != "approved" else "expired")
+        if r["status"] == "pending" and not r["email_verified_at"]:        # round 17: not confirmed yet → say so, with the resend button
+            raise HTTPException(403, "Please confirm your email first — open the link we sent you. Didn't get it? Send it again.",
+                                headers={"X-Verify": "1"})
         raise HTTPException(403, reason)
     with pool.connection() as c:
         c.execute("UPDATE customers SET failed_logins = 0, locked_until = NULL, last_login = now(), "
@@ -330,17 +406,17 @@ def login(body: LoginIn, request: Request, response: Response):
 
 # ─── Forgot password (owner, 2026-11-02; mailer.py has the whole design). This service only calls three database
 # functions; the worker sends the email. Every answer is the same whether or not the email has an account.
-class ForgotIn(BaseModel):
-    email: str
+class ForgotIn(SafeModel):
+    email: str = Field("", max_length=400)
 
 
-class ResetCheckIn(BaseModel):
-    token: str
+class ResetCheckIn(SafeModel):
+    token: str = Field("", max_length=200)
 
 
-class ResetIn(BaseModel):
-    token: str
-    password: str
+class ResetIn(SafeModel):
+    token: str = Field("", max_length=200)
+    password: str = Field("", max_length=400)
 
 
 FORGOT_SENT = ("If an account exists for this email, we've sent a link to choose a new password. It works once and expires "
@@ -352,8 +428,8 @@ TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{30,64}$")
 @app.post("/app/api/password/forgot")
 def password_forgot(body: ForgotIn, request: Request):
     _rate("forgot", _ip(request), 5, 900)
-    email = body.email.strip().lower()
-    if not EMAIL_RE.match(email):
+    email = _safe_email(body.email)
+    if not email or not EMAIL_RE.match(email):
         raise HTTPException(422, "Please enter a valid email address")
     _rate("forgot-email", email, 3, 3600)
     with pool.connection() as c:
@@ -376,9 +452,9 @@ def password_check(body: ResetCheckIn, request: Request):
 @app.post("/app/api/password/reset")
 def password_reset(body: ResetIn, request: Request):
     _rate("reset", _ip(request), 10, 900)
-    if not 8 <= len(body.password) <= 128:
-        raise HTTPException(422, "Password must be at least 8 characters")
-    if not TOKEN_RE.match(body.token):
+    if (e := signup_guard.password_error(body.password)):
+        raise HTTPException(422, e, headers={"X-Field": "password"})
+    if not TOKEN_RE.match(body.token or ""):
         raise HTTPException(400, RESET_DEAD)
     with pool.connection() as c:
         r = c.execute("SELECT * FROM portal_password_reset(%s, %s)", (body.token, hash_password(body.password))).fetchone()
@@ -505,7 +581,7 @@ def me(c=Depends(customer)):
             "apps": [dict(a) for a in c["apps"]], "roles": roles, "grants": grants, "perms": sorted(c["perms"]), "pins": pins, "max_pins": MAX_PINS}
 
 
-class PinsIn(BaseModel):
+class PinsIn(SafeModel):
     pins: list[str]
 
 
@@ -524,7 +600,7 @@ def set_pins(body: PinsIn, request: Request, c=Depends(customer)):
     return {"pins": pins}
 
 
-class ActivityIn(BaseModel):
+class ActivityIn(SafeModel):
     module: str
     kind: str = "open"                                   # open = the customer opened it · ping = still on it (every 60 s)
     action: str | None = None                            # kind "action": a key action (adoption.ACTIONS), e.g. "stock_card"
@@ -655,7 +731,7 @@ PF_MAX = 500                                         # stocks per portfolio ("an
 PF_SYM = re.compile(r"^[A-Z0-9&._-]{1,30}$")
 
 
-class PortfolioIn(BaseModel):
+class PortfolioIn(SafeModel):
     symbols: list[str]
 
 
@@ -696,7 +772,7 @@ def portfolio_put(body: PortfolioIn, request: Request, c=Depends(need("portfolio
     return {"symbols": syms}
 
 
-class BuilderIn(BaseModel):
+class BuilderIn(SafeModel):
     amount: float
     count: int
     alloc: dict
@@ -706,7 +782,7 @@ class BuilderIn(BaseModel):
     opts: dict = {}                                       # "More options": horizon, quality, confirmed, stock_max, …
 
 
-class PreviewIn(BaseModel):
+class PreviewIn(SafeModel):
     reliability: list[str] = ["S"]
     opts: dict = {}
 
@@ -810,14 +886,14 @@ def _latest_etf_view(today=False):
     return _latest_etf["data"]
 
 
-class SipIn(BaseModel):                                          # AI ETF SIP Builder (Reliable): ETFs only
+class SipIn(SafeModel):                                          # AI ETF SIP Builder (Reliable): ETFs only
     amount: float
     freq: str = "month"
     opts: dict = {}                                              # gold %, index cap mix, number of ETFs (6 … 20)
     years: int = 10
 
 
-class MsipIn(BaseModel):                                         # AI Momentum SIP (Risk): stocks only
+class MsipIn(SafeModel):                                         # AI Momentum SIP (Risk): stocks only
     amount: float
     freq: str = "month"
     rel: list[str] = ["S"]
@@ -833,7 +909,7 @@ def msip_tier(c):
     return "admin" if "msip:admin" in c["perms"] else "customer"
 
 
-class SavedIn(BaseModel):
+class SavedIn(SafeModel):
     kind: str = "sip"                                            # sip | msip | builder | analyser
     name: str
     inputs: dict
@@ -841,7 +917,7 @@ class SavedIn(BaseModel):
     alerts: bool = False
 
 
-class SavedPatch(BaseModel):
+class SavedPatch(SafeModel):
     alerts: bool | None = None
     name: str | None = None
     visibility: str | None = None                                # private | public (public needs the application's :share permission)
@@ -1221,7 +1297,7 @@ def _new_version(conn, c, r, hold, pairs=()):
                  (json.dumps(hold), json.dumps(vers), r["id"], c["id"]))
 
 
-class HoldingsIn(BaseModel):
+class HoldingsIn(SafeModel):
     holdings: list
 
 
@@ -1323,7 +1399,7 @@ def saved_watch(sid: int, c=Depends(customer)):
 
 
 # ── notification centre ──
-class ReadIn(BaseModel):
+class ReadIn(SafeModel):
     ids: list[int] = []
     all: bool = False
 
@@ -1350,7 +1426,7 @@ def notifications_read(body: ReadIn, c=Depends(customer)):
 
 
 # ── AI Portfolio Analyser: alerts on the customer's list ──
-class AlertsIn(BaseModel):
+class AlertsIn(SafeModel):
     alerts: bool
 
 
@@ -1416,13 +1492,13 @@ def _hd(actor):
         yield c
 
 
-class TicketIn(BaseModel):
+class TicketIn(SafeModel):
     subject: str
     severity: str
     body: list
 
 
-class MessageIn(BaseModel):
+class MessageIn(SafeModel):
     body: list
 
 

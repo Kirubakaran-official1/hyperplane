@@ -850,7 +850,7 @@ function CustomersTab({ snaps, notify }) {
       </FocusCard>
 
       <FocusCard icon="🚪" title="New sign-ups" style={{ marginBottom: 12 }}
-        sub="Choose what happens when someone creates an account at /app. Blocking, access dates and password resets work the same either way.">
+        sub="Every new account must first confirm its email (a one-time link). Then: nothing looks fake and automatic is on → it opens and the customer is emailed; otherwise it waits for you and you get a Telegram message with the reasons. Throw-away mail services and impossible phone numbers are refused at sign-up.">
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <div role="radiogroup" aria-label="Sign-up approval" style={{ display: "inline-flex", border: "1px solid var(--b2)", borderRadius: 999, padding: 3, background: "var(--s2)", gap: 3 }}>
             {[[false, "🔒 Admin approves each sign-up"], [true, "⚡ Approve automatically"]].map(([on, label]) => (
@@ -862,8 +862,8 @@ function CustomersTab({ snaps, notify }) {
           </div>
           <span style={{ fontSize: 11.5, color: signup.auto_approve ? "var(--long)" : "var(--t2)" }}>
             {signup.auto_approve
-              ? "On: new customers can use Hyperplane immediately — they are signed in right after creating their account."
-              : `Off: new customers wait as "pending" until you press Approve below${counts.pending ? ` (${counts.pending} waiting now)` : ""}.`}
+              ? "On: a customer who confirms the email and looks genuine is approved and emailed automatically; anything suspicious waits for you."
+              : `Off: every new customer waits as "pending" after confirming the email until you press Approve below${counts.pending ? ` (${counts.pending} waiting now)` : ""}.`}
           </span>
         </div>
       </FocusCard>
@@ -902,7 +902,9 @@ function CustomersTab({ snaps, notify }) {
                     <td style={TD}><b>{c.name}</b>{c.signup_ip && <div style={{ fontSize: 9.5, color: "var(--t3)" }}>signed up from {c.signup_ip}</div>}</td>
                     <td style={TD}>{c.email}{c.phone && <div style={{ fontSize: 10.5, color: "var(--t3)" }} title="WhatsApp number (community invite)">WhatsApp {c.phone}</div>}</td>
                     <td style={TD}>{[c.city, c.state].filter(Boolean).join(", ")}<div style={{ fontSize: 10.5, color: "var(--t3)" }}>{c.country}</div></td>
-                    <td style={{ ...TD, color: CUST_STATUS_C[c.status], fontWeight: 700 }}>{c.status === "approved" ? (expired ? "expired" : "active") : c.status}{locked && <div style={{ fontSize: 9.5, color: "var(--short)" }}>locked (wrong passwords)</div>}</td>
+                    <td style={{ ...TD, color: CUST_STATUS_C[c.status], fontWeight: 700 }}>{c.status === "approved" ? (expired ? "expired" : "active") : c.status}{locked && <div style={{ fontSize: 9.5, color: "var(--short)" }}>locked (wrong passwords)</div>}
+                      {c.status === "pending" && <div style={{ fontSize: 9.5, fontWeight: 600, color: c.email_verified_at ? "var(--long)" : "var(--mixed)" }} title={c.email_verified_at ? "The customer opened the confirmation link" : "Waiting for the customer to open the link in the email"}>{c.email_verified_at ? "✓ email confirmed" : "✉ email not confirmed"}</div>}
+                      {c.status === "pending" && (c.review_flags || []).length > 0 && <div style={{ fontSize: 9.5, fontWeight: 600, color: "var(--short)", maxWidth: 170, whiteSpace: "normal" }} title={c.review_flags.join(" · ")}>⚠ {c.review_flags.join(" · ")}</div>}</td>
                     <td style={TD} title="Change in ⚙ Admin → 🔐 Access manager">{(c.role_names || []).map(n => <span key={n} style={{ display: "inline-block", fontSize: 10.5, fontWeight: 600, padding: "1px 7px", marginRight: 3, borderRadius: 999, border: "1px solid var(--b2)", background: "var(--s2)" }}>{n}</span>)}
                       {c.devices > 0 && <div style={{ fontSize: 9.5, color: "var(--t3)", marginTop: 2 }}>signed in on {c.devices} device{c.devices > 1 ? "s" : ""}</div>}</td>
                     <td style={TD}>

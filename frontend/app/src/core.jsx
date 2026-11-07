@@ -105,7 +105,9 @@ export async function api(path, opts = {}) {
   const res = await fetch(path, init);
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    const e = new Error((data && data.detail) || "Something went wrong — please try again"); e.status = res.status;
+    const e = new Error(typeof (data && data.detail) === "string" && data.detail ? data.detail : "Something went wrong — please try again"); e.status = res.status;
+    e.field = res.headers.get("x-field") || "";                           // sign-up: which box the message belongs to
+    e.verify = res.headers.get("x-verify") === "1";                     // sign-in refused: the email is not confirmed yet
     e.noAccess = res.headers.get("x-access") === "denied";          // an application outside the customer's roles
     throw e;
   }

@@ -1917,3 +1917,48 @@ address (cookies are per address). Keep the DuckDNS updater running a few months
   - a no-price-day swap: shown at once on both pages, same purchase after the next day;
   - a month turn: one instalment;
   - both pages. Among other things, it inserts a simulated next price day to check that tracking (customer and shared) grows day after day, then deletes it.
+### Round 17b — sign-up screening: real customers only (owner 2026-11-07: "a test profile with fake details … without my review in production")
+- **Flow** (`signup_guard.py`, `mailer.py`, `portal.py`):
+  1. `/app/api/register` first **refuses** throw-away mail services (`DISPOSABLE`) and impossible phones (one digit repeated, 1234567890 / 9876543210).
+  2. It creates the account **pending**. The old trigger no longer approves at insert; `customers_auto_approve` is now a no-op.
+  3. `portal_signup_start` records `review_flags` (`screen()`: placeholder domain, test-like email or name, repeated-digit phone, digits or no vowels in the name) and queues a "confirm your email" mail.
+  4. The mail's link is `/app/#verify=<token>`. It sits after the `#`, so a mail scanner's prefetch can't use it up; the page POSTs `/app/api/signup/verify`. It is one use, valid 48 hours, and only its SHA-256 is stored.
+  5. `portal_verify_email` then decides:
+     - **No flags and Admin "Approve automatically" is on:** the account is approved, the customer is emailed "approved", and the owner gets a ✅ Telegram line.
+     - **Otherwise:** the account stays pending, the customer is emailed "confirmed, we'll approve you", and the owner gets a 🔎 Telegram message with the reasons ("Admin approves each sign-up" when auto-approve is off).
+  6. The owner's own **Approve** in Admin → Customers now emails the customer ("approved") and marks the email verified (`main.update_customer`).
+- **Sign-in before confirming:** 403 with header `X-Verify: 1`. The sign-in form shows "Send the confirmation link again" (`/app/api/signup/resend`: 3 an hour per address, 4 a day per account, the same answer for unknown addresses). A resend ends the earlier link.
+- **Owner messages:** table `owner_alerts`, sent by the worker's mail thread (`mailer.deliver_alerts`) through the Telegram bot in config.ini. Nothing is sent when Telegram isn't set up, and the bot token is never logged.
+- **Rights:** the customer service has no right to read or write `signup_verifications`, `owner_alerts` or `email_verified_at`. It only calls three SECURITY DEFINER functions (`portal_signup_start / resend`, `portal_verify_email`).
+- **Existing customers:** approved accounts were backfilled as verified, so nothing changes for them. `customers.email_verified_at` and `review_flags` are shown in Admin → Customers (✓ email confirmed / ✉ not confirmed, ⚠ reasons).
+- **Not possible without a paid provider:** a phone one-time code (SMS / WhatsApp). The number is checked for shape only.
+- **Tests:** `signup_screen_test` (41 checks). It stops the real mail worker, uses a local test inbox, and restarts the worker and restores the auto-approve setting at the end. `auto_test.py`, `phone_test.py` and `dial_test.py` are old exploratory scripts for the instant sign-up and are no longer meaningful.
+
+### Round 17c — validation (owner 2026-11-07: "auto-approve stays the default; Gmail only, no corporate ids; no numbers in the name; all proper validation; no SQL injection; check the sign-in and sign-up pages")
+- **Rules** (`signup_guard.py`; the page mirrors them in `frontend/app/src/validate.js` and only helps — the server checks everything again):
+  - **Email:** `@gmail.com` only, with a 6–30-character name of letters, digits and single dots, starting and ending with a letter or digit. No `+` part, no `googlemail.com`, no other or company domains. Gmail ignores dots, so `a.b@` and `ab@` are one inbox (`canonical_gmail`, one account).
+  - **Name:** letters of any language, plus space . ' ’ - only. No digits (including Arabic-Indic), no markup, no hidden or zero-width characters, 2–60 characters.
+  - **City / state:** letters only, no repeated symbols. India's state must be one of the 36 listed, and the country one of the list.
+  - **Password:** 8–128 characters with a letter and a number; not a common password; not the email name or first name.
+  - **Phone:** unchanged (+91 starts with 6–9, no repeated or sequential numbers).
+  - **Everywhere:** control, zero-width and unassigned characters are refused (`clean()`); every refusal is a plain 422 sentence with an `X-Field` header naming the box.
+- **Auto-approve is the default:** `portal_auto_approve()` answers `true` when no switch is stored. An approved account still needs the confirmed email (and no fake flags) — see 17b.
+- **SQL injection:** every query already used bound parameters; these are extra walls.
+  - Values are validated before any query.
+  - `safe.SafeModel` is the base of every customer-service request model. Any control character (NUL, ESC…) is refused with a 422. Before this, a NUL in a saved name returned a 500 and one in the portfolio list a 502.
+  - Pydantic's own errors become one plain sentence (`RequestValidationError` handler).
+  - Login / forgot / resend use `_safe_email`.
+- **The sign-in and sign-up pages** (`AuthScreen`): bugs found by probing and fixed:
+  - **Name box:** it took digits and markup. Now numbers and symbols can't be typed (a one-line hint shows).
+  - **Email:** it wasn't trimmed, and two pasted emails stuck together. Now spaces are dropped and the email is lower-cased.
+  - **Error messages:** browser bubbles ("Please select an item in the list") are replaced by inline messages under each field, shown once the field is left or Submit is pressed. The cursor goes to the first problem.
+  - **Typed passwords:** a password typed in one form stayed when switching sign-in ↔ sign-up. Now they're cleared.
+  - **Click lost on Submit:** leaving a field showed its message, the layout shifted, and the click on "Create account" landed on nothing. `keepFocus` (mousedown on a button or link inside the form) fixes it.
+  - **New:** show / hide eye on every password box, a password strength meter, a "Gmail only" hint, and placeholders without example.com.
+  - **Reset-password page:** it now uses the same password rule.
+- **Tests:**
+  - `signup_validation_test` (about 120 checks: every refusal with its field, injection payloads in every open endpoint, the pages).
+  - `signup_screen_test` (Gmail addresses now).
+  - `pw_ui_test` was updated.
+  - `probe_auth_endpoints.py` (NUL and injection strings against the signed-in endpoints).
+  - `pw_api_test`, `auto_test`, `phone_test` and `dial_test` are stale: they assume mail isn't set up, or the old instant sign-up. `pw_api_test` now sends real emails if run.

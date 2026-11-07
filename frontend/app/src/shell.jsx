@@ -5,6 +5,7 @@ import { Helpdesk, HelpdeskIcon, useHelpdeskUnread } from "../../shared/helpdesk
 import { NotifyCenter, useNotifications } from "./notify.jsx";
 import { QuickGuideButton } from "./quick.jsx";
 import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
+import { emailError, lettersOnly, nameError, noSpaces, passwordError, passwordScore, placeError } from "./validate.js";
 import { APP_SLUG, goPath, routeOf } from "./core.jsx";
 import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, AsOfCtx, BrandBand, GridIcon, GuideIcon, HD_TEMPLATES, Icon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, setApiDay, fmtDT, fmtDay, fmtTime, foldText, getMode, loadChunk, useTheme } from "./core.jsx";
 // loadChunk reloads a page opened before an update once; when this version has run a while, allow that again later
@@ -219,52 +220,139 @@ function takeResetToken() {
   return m ? m[1] : null;
 }
 
-function AuthScreen({ onIn, notice, resetToken = null, onResetDone }) {
-  const [mode, setMode] = useState(resetToken ? "reset" : new URLSearchParams(window.location.search).has("signup") ? "register" : "login");       // login · register · forgot · reset
+// the confirmation link from the sign-up email: /app/#verify=<token> (after the #, so a mail scanner's prefetch never reaches it); wiped once read
+function takeVerifyToken() {
+  const m = /^#verify=([A-Za-z0-9_-]{30,64})$/.exec(window.location.hash || "");
+  if (m) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return m ? m[1] : null;
+}
+
+// a password box with a show / hide eye (round 17c)
+function PwBox({ value, onChange, id, autoComplete, placeholder, autoFocus, bad, invalid }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span className={`pw ${bad ? "bad" : ""}`}>
+      <input id={id} type={show ? "text" : "password"} value={value} onChange={onChange} maxLength={128} autoComplete={autoComplete} placeholder={placeholder} autoFocus={autoFocus}
+        aria-invalid={invalid ? "true" : undefined} spellCheck={false} autoCapitalize="off"/>
+      <button type="button" className="pw-eye" onClick={() => setShow(v => !v)} aria-label={show ? "Hide password" : "Show password"} title={show ? "Hide password" : "Show password"} tabIndex={-1}>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          {show ? <><path d="M17.9 17.9A10.9 10.9 0 0 1 12 20C5 20 1 12 1 12a18.7 18.7 0 0 1 5.1-5.9M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="m1 1 22 22"/></>
+            : <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></>}
+        </svg></button>
+    </span>);
+}
+const PW_LABEL = ["", "Weak", "Okay", "Good", "Strong"];
+// pressing a button or link must not take focus away from a field: the field's "left it" message would appear, push the page down, and the click would land on nothing
+const keepFocus = e => { if (e.target.closest && e.target.closest("button, a")) e.preventDefault(); };
+
+function AuthScreen({ onIn, notice, resetToken = null, onResetDone, verifyToken = null, onVerifyDone }) {
+  const [mode, setMode] = useState(verifyToken ? "verify" : resetToken ? "reset" : new URLSearchParams(window.location.search).has("signup") ? "register" : "login");       // login · register · forgot · reset · verify
   const [f, setF] = useState({ name:"", email:"", phone:"", ccName:"India", ccSet:false, country:"India", state:"", city:"", password:"", confirm:"", accept:false });
   const [msg, setMsg] = useState(notice || ""); const [ok, setOk] = useState(""); const [busy, setBusy] = useState(false);
-  const [auto, setAuto] = useState(false);
+  const [touched, setTouched] = useState({}); const [tried, setTried] = useState(false);        // an error shows once the field was left, or Submit was pressed
+  const [srv, setSrv] = useState({});                                       // the server's message for one field (X-Field)
+  const [nudge, setNudge] = useState({});                                   // "letters only" hint while a number / symbol is being dropped
   const [link, setLink] = useState(null);                                  // the reset link: null = checking · { valid, email }
-  useEffect(() => { if (mode === "register") api("/app/api/signup-info").then(r => setAuto(!!r.auto_approve)).catch(() => {}); }, [mode]);
+  const [ver, setVer] = useState(null);                                    // the confirmation link: null = checking · { ok, status, message }
+  const [needVerify, setNeedVerify] = useState(false);                     // sign-in refused because the email is not confirmed
+  useEffect(() => {
+    if (!verifyToken) return;
+    setMode("verify"); setVer(null);
+    api("/app/api/signup/verify", { method:"POST", json:{ token:verifyToken } }).then(r => setVer({ ok:true, ...r })).catch(e => setVer({ ok:false, message:e.message }));
+  }, [verifyToken]);
   useEffect(() => {
     if (!resetToken) return;
     setMode("reset"); setLink(null); setMsg(""); setOk("");                  // also when the sign-in form was already open
     api("/app/api/password/check", { method:"POST", json:{ token:resetToken } }).then(setLink).catch(e => setLink({ valid:false, message:e.message }));
   }, [resetToken]);
-  const set = k => e => setF(p => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
-  const go = m => { setMode(m); setMsg(""); setOk(""); setF(p => ({ ...p, password:"", confirm:"" })); };
+  const resend = async () => {
+    setMsg(""); setBusy(true);
+    try { const r = await api("/app/api/signup/resend", { method:"POST", json:{ email:f.email.trim() } }); setNeedVerify(false); setOk(r.message); }
+    catch (x) { setMsg(x.message); } finally { setBusy(false); }
+  };
+  // the rules for the form on screen (the server checks the same again)
+  const reg = mode === "register";
+  const errs = {};
+  if (mode === "login" || mode === "forgot") {
+    const e = f.email.trim();
+    errs.email = !e ? "Please enter your email address." : !/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(e) ? "Please enter a valid email address." : "";
+    if (mode === "login") errs.password = f.password ? "" : "Please enter your password.";
+  } else if (mode === "reset") {
+    errs.password = passwordError(f.password); errs.confirm = f.confirm !== f.password ? "The two passwords do not match." : "";
+  } else if (reg) {
+    errs.name = nameError(f.name);
+    errs.phone = phoneError(DIAL_BY[f.ccName], f.phone);
+    errs.country = COUNTRIES.includes(f.country) ? "" : "Please choose your country.";
+    errs.state = f.country === "India" ? (IN_STATES.includes(f.state) ? "" : "Please choose your state.") : placeError(f.state, "state");
+    errs.city = placeError(f.city, "city", false);
+    errs.email = emailError(f.email, true);
+    errs.password = passwordError(f.password, f.email, f.name);
+    errs.confirm = f.confirm !== f.password ? "The two passwords do not match." : "";
+    errs.accept = f.accept ? "" : "Please tick the box to agree to the terms.";
+  }
+  const shown = k => (touched[k] || tried) ? (errs[k] || "") : "";
+  const err = k => shown(k) || srv[k] || nudge[k] || "";
+  const set = k => e => { const v = e.target.type === "checkbox" ? e.target.checked : e.target.value; setSrv(o => ({ ...o, [k]:"" })); setF(p => ({ ...p, [k]: v })); };
+  const blur = k => () => setTouched(o => ({ ...o, [k]:true }));
+  const typed = (k, clean, hint) => e => {                                 // a letters-only box: numbers / symbols are dropped as typed, with a one-line hint
+    const raw = e.target.value, v = clean(raw);
+    setSrv(o => ({ ...o, [k]:"" }));
+    if (v !== raw && v.length < raw.length) { setNudge(o => ({ ...o, [k]:hint })); setTimeout(() => setNudge(o => ({ ...o, [k]:"" })), 2600); }
+    setF(p => ({ ...p, [k]: v }));
+  };
+  const go = (m, keepOk = false) => { setMode(m); setMsg(""); if (!keepOk) setOk(""); setNeedVerify(false); setTouched({}); setTried(false); setSrv({}); setNudge({}); setF(p => ({ ...p, password:"", confirm:"" })); };
   const submit = async e => {
-    e.preventDefault(); setMsg(""); setBusy(true);
+    e.preventDefault(); setMsg(""); setNeedVerify(false); setTried(true);
+    const bad = Object.keys(errs).find(k => errs[k]);
+    if (bad) { const el = document.getElementById(`f-${bad}`); if (el) el.focus(); return; }
+    setBusy(true);
     try {
-      if (mode === "login") { await api("/app/api/login", { method:"POST", json:{ email:f.email, password:f.password } }); onIn(); }
-      else if (mode === "forgot") { const r = await api("/app/api/password/forgot", { method:"POST", json:{ email:f.email } }); setOk(r.message); }
+      const email = f.email.trim().toLowerCase();
+      if (mode === "login") { await api("/app/api/login", { method:"POST", json:{ email, password:f.password } }); onIn(); }
+      else if (mode === "forgot") { const r = await api("/app/api/password/forgot", { method:"POST", json:{ email } }); setOk(r.message); }
       else if (mode === "reset") {
-        if (f.password !== f.confirm) throw new Error("The two passwords do not match");
         const r = await api("/app/api/password/reset", { method:"POST", json:{ token:resetToken, password:f.password } });
         if (onResetDone) onResetDone(true);
         go("login"); setOk(r.message);
       }
       else {
-        if (f.password !== f.confirm) throw new Error("The two passwords do not match");
-        if (!f.accept) throw new Error("Please tick the box to agree to the terms");
-        const pe = phoneError(DIAL_BY[f.ccName], f.phone); if (pe) throw new Error(pe);
-        const r = await api("/app/api/register", { method:"POST", json:{ name:f.name, email:f.email, phone:`+${DIAL_BY[f.ccName]} ${f.phone}`, country:f.country, state:f.state, city:f.city, password:f.password, accept:f.accept } });
+        const r = await api("/app/api/register", { method:"POST", json:{ name:f.name.trim().replace(/\s+/g, " "), email, phone:`+${DIAL_BY[f.ccName]} ${f.phone}`, country:f.country, state:f.state.trim(), city:f.city.trim(), password:f.password, accept:f.accept } });
         if (r.signed_in) { onIn(); return; }
-        setOk(r.message); setMode("login");
+        go("login", true); setOk(r.message);
       }
-    } catch (x) { setMsg(x.message); } finally { setBusy(false); }
+    } catch (x) {
+      if (x.field && ["name", "email", "phone", "country", "state", "city", "password", "accept"].includes(x.field)) { setSrv(o => ({ ...o, [x.field]:x.message })); const el = document.getElementById(`f-${x.field}`); if (el) el.focus(); }
+      else setMsg(x.message);
+      setNeedVerify(!!x.verify);
+    } finally { setBusy(false); }
   };
-  const Field = (label, input) => <label className="field"><span>{label}</span>{input}</label>;
+  // one labelled field with its own message line
+  const Field = (label, input, k, hint) => <label className={`field ${err(k) ? "bad" : ""}`} htmlFor={`f-${k}`}><span>{label}</span>{input}
+    {err(k) ? <span className="fe" role="alert" id={`fe-${k}`}>{err(k)}</span> : hint ? <span className="fh">{hint}</span> : null}</label>;
+  if (mode === "verify") return (
+    <div className="auth-page">
+      <Hero/>
+      <div className="auth-side">
+        <div className="auth" id="auth-verify">
+          {ver == null ? <><h1>Confirming your email…</h1><p className="muted">One moment.</p></>
+            : ver.ok ? <><h1>{ver.status === "approved" ? "You're in!" : "Email confirmed"}</h1><div className="ok" id="verify-ok">{ver.message}</div></>
+            : <><h1>This link can't be used</h1><div className="err" role="alert" id="verify-dead">{ver.message}</div></>}
+          <button type="button" className="primary" id="verify-continue" disabled={ver == null} onClick={() => { if (onVerifyDone) onVerifyDone(); go("login"); }}>Go to sign in</button>
+        </div>
+        <p className="fine center">{DISCLAIMER}</p>
+      </div>
+    </div>
+  );
   if (mode === "forgot" || mode === "reset") return (
     <div className="auth-page">
       <Hero/>
       <div className="auth-side">
-        <form className="auth" onSubmit={submit} id={mode === "forgot" ? "auth-forgot" : "auth-reset"}>
+        <form className="auth" onSubmit={submit} noValidate id={mode === "forgot" ? "auth-forgot" : "auth-reset"} onMouseDown={keepFocus}>
           {mode === "forgot" ? <>
             <h1>Reset your password</h1>
             <p className="muted">Enter the email you signed up with. We'll send you a link to choose a new password.</p>
             {ok ? <div className="ok" id="forgot-sent">{ok}</div>
-              : Field("Email", <input type="email" value={f.email} onChange={set("email")} required maxLength={255} autoComplete="email" placeholder="you@example.com" autoFocus/>)}
+              : Field("Email", <input id="f-email" type="email" value={f.email} onChange={e => set("email")({ target:{ value:noSpaces(e.target.value).toLowerCase() } })} onBlur={blur("email")} maxLength={254} autoComplete="email" placeholder="Your email address" autoFocus inputMode="email" aria-invalid={err("email") ? "true" : undefined}/>, "email")}
             {msg && <div className="err" role="alert">{msg}</div>}
             {!ok && <button className="primary" disabled={busy}>{busy ? "Please wait…" : "Send reset link"}</button>}
             {ok && <button type="button" className="primary" onClick={() => go("login")}>Back to sign in</button>}
@@ -278,8 +366,8 @@ function AuthScreen({ onIn, notice, resetToken = null, onResetDone }) {
               <h1>Choose a new password</h1>
               <p className="muted">For <b>{link.email}</b>. You'll be signed out on every device, then you can sign in with the new password.</p>
               <div className="grid2">
-                {Field("New password", <input type="password" value={f.password} onChange={set("password")} required minLength={8} maxLength={128} autoComplete="new-password" placeholder="8+ characters" autoFocus/>)}
-                {Field("Confirm password", <input type="password" value={f.confirm} onChange={set("confirm")} required maxLength={128} autoComplete="new-password"/>)}
+                {Field("New password", <PwBox id="f-password" value={f.password} onChange={set("password")} autoComplete="new-password" placeholder="8+ characters" autoFocus bad={!!err("password")} invalid={!!err("password")}/>, "password", "8+ characters with a letter and a number")}
+                {Field("Confirm password", <PwBox id="f-confirm" value={f.confirm} onChange={set("confirm")} autoComplete="new-password" bad={!!err("confirm")} invalid={!!err("confirm")}/>, "confirm")}
               </div>
               {msg && <div className="err" role="alert">{msg}</div>}
               <button className="primary" disabled={busy}>{busy ? "Please wait…" : "Save new password"}</button>
@@ -290,54 +378,60 @@ function AuthScreen({ onIn, notice, resetToken = null, onResetDone }) {
       </div>
     </div>
   );
+  const score = passwordScore(f.password);
   return (
     <div className="auth-page">
       <Hero/>
       <div className="auth-side">
-        <form className="auth" onSubmit={submit}>
+        <form className="auth" onSubmit={submit} noValidate id={reg ? "auth-register" : "auth-login"} onMouseDown={keepFocus}>
           <h1>{mode === "login" ? "Welcome back" : "Create your free account"}</h1>
-          <p className="muted">{mode === "login" ? "Sign in to see where the strength is today — and what to avoid." : auto ? "It takes a minute — you can start using Hyperplane right after." : "It takes a minute. Your account becomes active once QuantFriday approves it."}</p>
-          {ok && <div className="ok">{ok}</div>}
-          {mode === "register" && <>
-            {Field("Full name", <input value={f.name} onChange={set("name")} required maxLength={80} autoComplete="name"/>)}
-            <label className="field">
+          <p className="muted">{mode === "login" ? "Sign in to see where the strength is today — and what to avoid." : "It takes a minute. We'll email you a link to confirm your address — your account opens right after."}</p>
+          {ok && <div className="ok" id="auth-ok">{ok}</div>}
+          {reg && <>
+            {Field("Full name", <input id="f-name" value={f.name} onChange={typed("name", lettersOnly, "Letters only — numbers and symbols aren't allowed in the name.")} onBlur={blur("name")} maxLength={60} autoComplete="name" autoFocus
+              aria-invalid={err("name") ? "true" : undefined} autoCapitalize="words" spellCheck={false}/>, "name")}
+            <label className={`field ${err("phone") ? "bad" : ""}`} htmlFor="f-phone">
               <span className="wa-l"><svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path fill="#25d366" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.6 14.1c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.2 1-2.5c.3-.3.6-.3.8-.3h.6c.2 0 .4 0 .7.5l1 2.3c.1.2.1.4 0 .6l-.4.6-.5.5c-.2.2-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.7-.1l1-1.2c.2-.3.4-.2.7-.1l2.2 1c.3.2.5.2.6.4.1.1.1.8-.2 1.5z"/></svg>WhatsApp number</span>
               <div className="wa-in">
                 <DialSelect value={f.ccName} onChange={n => setF(p => ({ ...p, ccName:n, ccSet:true, phone:p.phone.slice(0, DIAL_BY[n] === "91" ? 10 : 13) }))}/>
-                <input value={f.phone} onChange={e => { const v = e.target.value.replace(/\D/g, ""); setF(p => ({ ...p, phone:v.slice(0, DIAL_BY[p.ccName] === "91" ? 10 : 13) })); }}
-                  required inputMode="numeric" autoComplete="tel-national" maxLength={DIAL_BY[f.ccName] === "91" ? 10 : 13} aria-label="WhatsApp number"/>
+                <input id="f-phone" value={f.phone} onChange={e => { const v = e.target.value.replace(/\D/g, ""); setSrv(o => ({ ...o, phone:"" })); setF(p => ({ ...p, phone:v.slice(0, DIAL_BY[p.ccName] === "91" ? 10 : 13) })); }} onBlur={blur("phone")}
+                  inputMode="numeric" autoComplete="tel-national" maxLength={DIAL_BY[f.ccName] === "91" ? 10 : 13} aria-label="WhatsApp number" aria-invalid={err("phone") ? "true" : undefined}/>
               </div>
-              {f.phone && phoneError(DIAL_BY[f.ccName], f.phone) && <span className="wa-err">{DIAL_BY[f.ccName] === "91" ? `${f.phone.length}/10 digits` : "Digits only, without the country code (5–13)"}{DIAL_BY[f.ccName] === "91" && f.phone.length === 10 ? " · must start with 6, 7, 8 or 9" : ""}</span>}
+              {err("phone") ? <span className="fe" role="alert" id="fe-phone">{err("phone")}{f.phone && DIAL_BY[f.ccName] === "91" && f.phone.length < 10 ? ` (${f.phone.length}/10 digits)` : ""}</span> : null}
               <span className="wa-note">Use your <b>WhatsApp</b> number — we'll invite you to the <b>Hyperplane community</b>: a healthy, disciplined
                 circle that learns to trade with the trend and protect capital. Your number is never shared or sold.</span>
             </label>
             <div className="grid2">
-              {Field("Country", <select value={f.country} onChange={e => { const c = e.target.value; setF(p => ({ ...p, country:c, state:"", ...(!p.ccSet && DIAL_BY[c] ? { ccName:c } : {}) })); }}>{COUNTRIES.map(c => <option key={c}>{c}</option>)}</select>)}
+              {Field("Country", <select id="f-country" value={f.country} onChange={e => { const c = e.target.value; setSrv(o => ({ ...o, country:"" })); setF(p => ({ ...p, country:c, state:"", ...(!p.ccSet && DIAL_BY[c] ? { ccName:c } : {}) })); }} onBlur={blur("country")}>{COUNTRIES.map(c => <option key={c}>{c}</option>)}</select>, "country")}
               {Field("State", f.country === "India"
-                ? <select value={f.state} onChange={set("state")} required><option value="">Choose your state</option>{IN_STATES.map(s => <option key={s}>{s}</option>)}</select>
-                : <input value={f.state} onChange={set("state")} required maxLength={60}/>)}
+                ? <select id="f-state" value={f.state} onChange={set("state")} onBlur={blur("state")} aria-invalid={err("state") ? "true" : undefined}><option value="">Choose your state</option>{IN_STATES.map(s => <option key={s}>{s}</option>)}</select>
+                : <input id="f-state" value={f.state} onChange={typed("state", lettersOnly, "Letters only for the state.")} onBlur={blur("state")} maxLength={60} aria-invalid={err("state") ? "true" : undefined}/>, "state")}
             </div>
-            {Field("City", <input value={f.city} onChange={set("city")} maxLength={60} autoComplete="address-level2"/>)}
+            {Field("City (optional)", <input id="f-city" value={f.city} onChange={typed("city", lettersOnly, "Letters only for the city.")} onBlur={blur("city")} maxLength={60} autoComplete="address-level2" aria-invalid={err("city") ? "true" : undefined}/>, "city")}
           </>}
-          {Field("Email", <input type="email" value={f.email} onChange={set("email")} required maxLength={255} autoComplete="email" placeholder="you@example.com"/>)}
-          {mode === "register"
+          {Field("Email", <input id="f-email" type="email" value={f.email} onChange={e => set("email")({ target:{ value:noSpaces(e.target.value).toLowerCase() } })} onBlur={blur("email")} maxLength={254}
+              autoComplete={reg ? "email" : "username"} placeholder={reg ? "yourname@gmail.com" : "Your email address"} inputMode="email" autoFocus={!reg} aria-invalid={err("email") ? "true" : undefined} autoCapitalize="off" spellCheck={false}/>, "email",
+            reg ? "Gmail only — we'll send the confirmation link there. Company and other email addresses aren't accepted." : null)}
+          {reg
             ? <div className="grid2">
-                {Field("Password", <input type="password" value={f.password} onChange={set("password")} required minLength={8} maxLength={128} autoComplete="new-password" placeholder="8+ characters"/>)}
-                {Field("Confirm password", <input type="password" value={f.confirm} onChange={set("confirm")} required maxLength={128} autoComplete="new-password"/>)}
+                {Field("Password", <PwBox id="f-password" value={f.password} onChange={set("password")} autoComplete="new-password" placeholder="8+ characters" bad={!!err("password")} invalid={!!err("password")}/>, "password", "8+ characters with a letter and a number")}
+                {Field("Confirm password", <PwBox id="f-confirm" value={f.confirm} onChange={set("confirm")} autoComplete="new-password" bad={!!err("confirm")} invalid={!!err("confirm")}/>, "confirm")}
               </div>
-            : <>{Field("Password", <input type="password" value={f.password} onChange={set("password")} required maxLength={128} autoComplete="current-password"/>)}
+            : <>{Field("Password", <PwBox id="f-password" value={f.password} onChange={set("password")} autoComplete="current-password" bad={!!err("password")} invalid={!!err("password")}/>, "password")}
                 <div className="forgot"><a href="#" id="forgot-link" onClick={e => { e.preventDefault(); go("forgot"); }}>Forgot password?</a></div></>}
-          {mode === "register" && (
-            <label className={`agree ${f.accept ? "on" : ""}`}>
-              <input type="checkbox" checked={f.accept} onChange={set("accept")}/>
-              <span><b>I agree to the terms.</b> {DISCLAIMER}</span>
+          {reg && f.password && <div className={`pwm s${score}`} id="pw-meter" aria-live="polite"><span><i/><i/><i/><i/></span><b>{PW_LABEL[score]}</b></div>}
+          {reg && (
+            <label className={`agree ${f.accept ? "on" : ""} ${err("accept") ? "bad" : ""}`}>
+              <input id="f-accept" type="checkbox" checked={f.accept} onChange={set("accept")}/>
+              <span><b>I agree to the terms.</b> {DISCLAIMER}{err("accept") && <span className="fe" role="alert" id="fe-accept">{err("accept")}</span>}</span>
             </label>
           )}
-          {msg && <div className="err" role="alert">{msg}</div>}
+          {msg && <div className="err" role="alert" id="auth-err">{msg}</div>}
+          {mode === "login" && needVerify && <button type="button" className="resend" id="auth-resend" disabled={busy} onClick={resend}>Send the confirmation link again</button>}
           <button className="primary" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}</button>
           <div className="switch">
-            {mode === "login" ? <>New to Hyperplane? <a href="#" onClick={e => { e.preventDefault(); setMode("register"); setMsg(""); setOk(""); }}>Create a free account</a></>
-                              : <>Already have an account? <a href="#" onClick={e => { e.preventDefault(); setMode("login"); setMsg(""); }}>Sign in</a></>}
+            {mode === "login" ? <>New to Hyperplane? <a href="#" onClick={e => { e.preventDefault(); go("register"); }}>Create a free account</a></>
+                              : <>Already have an account? <a href="#" onClick={e => { e.preventDefault(); go("login"); }}>Sign in</a></>}
           </div>
         </form>
         <p className="fine center">{DISCLAIMER}</p>
@@ -637,6 +731,7 @@ function Home({ me, onOut, reloadMe }) {
 export function App() {
   const [me, setMe] = useState(undefined); const [notice, setNotice] = useState("");
   const [resetToken, setResetToken] = useState(takeResetToken);              // opened from a "Forgot password" email
+  const [verifyToken, setVerifyToken] = useState(takeVerifyToken);           // opened from the sign-up confirmation email
   const load = () => api("/app/api/me").then(setMe).catch(e => { setMe(null); if (e.status === 403) setNotice(e.message); });
   useEffect(() => { load(); }, []);
   // "signed in on this browser" for the open shared page (round 15: "if already logged in, don't show sign up / log in"): only a hint —
@@ -644,11 +739,12 @@ export function App() {
   useEffect(() => { if (me === undefined) return; try { me ? localStorage.setItem("hp_signed", "1") : localStorage.removeItem("hp_signed"); } catch { /* storage blocked */ } }, [me]);
   // a reset link pasted into a tab that already shows the app changes only the #part: no reload, so listen for it
   useEffect(() => {
-    const f = () => { const t = takeResetToken(); if (t) setResetToken(t); };
+    const f = () => { const t = takeResetToken(); if (t) setResetToken(t); const v = takeVerifyToken(); if (v) setVerifyToken(v); };
     window.addEventListener("hashchange", f);
     return () => window.removeEventListener("hashchange", f);
   }, []);
   // changed → signed out everywhere, so the sign-in form; left without changing → back to wherever this browser was
+  if (verifyToken) return <AuthScreen onIn={load} verifyToken={verifyToken} onVerifyDone={() => setVerifyToken(null)}/>;
   if (resetToken) return <AuthScreen onIn={load} resetToken={resetToken} onResetDone={changed => { setResetToken(null); if (changed) setMe(null); else load(); }}/>;
   if (me === undefined) return <div className="loading"><Brand/></div>;
   if (!me) return <AuthScreen onIn={load} notice={notice}/>;

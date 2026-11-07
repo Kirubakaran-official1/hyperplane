@@ -17,6 +17,7 @@ Hyperplane API.
   /api/admin/activity/*     Activity log — sign-ins, devices, applications used and minutes per application
 """
 import hmac
+import json
 import os
 import re
 import shutil
@@ -402,13 +403,13 @@ def _algos(raw):
 
 # ─────────────────────────────── customers (/app accounts) ───────────────────────────────
 CUSTOMER_COLS = ("id, email, name, phone, country, state, city, status, expires_on, notes, created_at, approved_at, "
-                 "last_login, login_count, failed_logins, locked_until, signup_ip")
+                 "last_login, login_count, failed_logins, locked_until, signup_ip, email_verified_at, review_flags")
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[a-z]{2,}$", re.I)
 
 
 def _cust(r):
     r = dict(r)
-    for k in ("created_at", "approved_at", "last_login", "locked_until"):
+    for k in ("created_at", "approved_at", "last_login", "locked_until", "email_verified_at"):
         r[k] = r[k].astimezone(TZ).isoformat() if r.get(k) else None
     r["expires_on"] = r["expires_on"].isoformat() if r.get("expires_on") else None
     return r
@@ -589,6 +590,7 @@ def update_customer(cid: int, body: CustomerPatch, user=Depends(admin_user)):
         sets.append("status = %s"); args.append(body.status)
         if body.status == "approved":
             sets.append("approved_at = COALESCE(approved_at, now())")
+            sets.append("email_verified_at = COALESCE(email_verified_at, now())")      # the owner vouches for it
         else:
             sets.append("session_ver = session_ver + 1")          # logged out right away
     if body.expires_on is not None or body.clear_expiry:
@@ -600,7 +602,11 @@ def update_customer(cid: int, body: CustomerPatch, user=Depends(admin_user)):
     if not sets:
         raise HTTPException(422, "Nothing to change")
     with pool.connection() as c:
+        before = c.execute("SELECT status FROM customers WHERE id = %s", (cid,)).fetchone() if body.status == "approved" else None
         r = c.execute(f"UPDATE customers SET {', '.join(sets)} WHERE id = %s RETURNING {CUSTOMER_COLS}", (*args, cid)).fetchone()
+        if r and before and before["status"] != "approved":      # round 17: the customer is told when the owner approves the account
+            c.execute("INSERT INTO email_outbox (kind, to_email, customer_id, data) VALUES ('approved', %s, %s, %s)",
+                      (r["email"], cid, json.dumps({"name": r["name"]})))
         if r and body.status in ("blocked", "pending"):
             _end_sessions(c, cid, "blocked", user["name"], "blocked" if body.status == "blocked" else None, r["name"])
     if not r:
