@@ -250,4 +250,11 @@ export const CSS = `
 .pf-wstp{background:var(--s3);box-shadow:inset 0 0 0 1px var(--b2)}.pf-wstp.up{background:var(--longd);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--long) 35%,transparent)}
 .pf-wstp.dn{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--short) 35%,transparent)}
 .pf-wpx{margin-left:4px;padding-left:10px;border-left:1px solid var(--b2);font:800 13px var(--sans);font-feature-settings:"tnum";color:var(--t1)}
+/* round 18: the options drop-down in four sections, with the explanation first */
+.pf-wddi{padding:10px 14px;font-size:12.5px;line-height:19px;color:var(--t2);background:var(--bg);border-bottom:1px solid var(--b1)}
+.pf-wnone{display:flex;align-items:flex-start;gap:8px;padding:9px 14px;background:var(--mixedd);color:var(--t1);font:600 12.5px/18px var(--sans);border-bottom:1px solid var(--b1)}.pf-wnone .ic{flex:none;margin-top:2px;color:var(--mixed)}
+.pf-wdds{display:flex;align-items:baseline;gap:10px;padding:8px 14px;background:var(--s2);border-top:1px solid var(--b1);border-bottom:1px solid var(--b1)}
+.pf-wdds b{font:700 12px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--t1)}.pf-wdds small{font-size:11.5px;color:var(--t3)}
+.pf-wdds.up b{color:#7c3aed}.pf-wdds.industry b{color:var(--long)}
+.pf-wdde{padding:10px 14px;font-size:12.5px;color:var(--t3);font-style:italic;border-bottom:1px solid var(--b1)}.pf-wdde:last-child{border-bottom:0}
 `;

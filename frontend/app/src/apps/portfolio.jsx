@@ -1,6 +1,6 @@
 // AI Portfolio Analyser — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AiSpark, BrandBand, Icon, addCss, api, loadChunk, trackAction, useToast } from "../core.jsx";
+import { AiSpark, BrandBand, Icon, addCss, api, loadChunk, swapSections, trackAction, useToast } from "../core.jsx";
 import { G_ZONES, Info, RELIABILITY, RG_INFO, StockLink, StockSearch, TrendGauge, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
 import { LT_TF, PF_CAT, PF_CATS, PF_MIN_YEARS, PF_ORDER, StrengthTiles, analyseHolding, portfolioSummary, zDir } from "./portfolio-engine.jsx";
 import { placeLabels } from "../labels.js";
@@ -219,7 +219,8 @@ function AiWatch({ symbols, setSymbols, bySym }) {
         <div className="pf-whd" aria-hidden="true"><span>Regime turned down</span><span/><span>Better stock</span><span className="r">Options</span></div>
         {ck.items.map(it => {
           const b = bySym[it.s] || {}, alts = it.alts || (it.alt ? [it.alt] : []), i = Math.min(pick[it.s] || 0, Math.max(0, alts.length - 1)), a = alts[i];
-          const same = a && (a.up ? [`Upgrade · ${a.cap} cap`, "up"] : SAME[a.why]);        // round 15: bigger company, same industry / sector
+          const same = a && (a.up ? [`Upgrade · ${a.cap} cap`, "up"] : SAME[a.why]);
+          const sw = swapSections(alts, { s: it.s, ind: it.ind || b.ind, sec: it.sec || b.sec, cap: it.cap || b.cap });        // round 15: bigger company, same industry / sector
           return (
             <div key={it.s} className={`pf-wr ${anim && anim.out === it.s ? "hp-leaving" : ""}`} data-watch={it.s}>
               <div className="pf-wfrom">
@@ -236,16 +237,21 @@ function AiWatch({ symbols, setSymbols, bySym }) {
                   <Icon name="swap" size={14}/> {exp.has(it.s) ? "Hide options" : `Swap options · ${alts.length}`} <Icon name="chevron" size={13}/></button>}
               </div>
               {exp.has(it.s) && <div className="pf-wdd" data-dd={it.s}>
+                <div className="pf-wddi" id={`pf-why-${it.s}`}>{sw.intro}</div>
+                {sw.notice && <div className="pf-wnone" data-notice={it.s}><Icon name="info" size={14}/> {sw.notice}</div>}
                 <div className="pf-wddh"><span>Option</span><span>Amount</span><span>Company size</span><span>Strength</span><span/></div>
-                {alts.map((x, j) => { const sm = x.up ? [`Upgrade · ${x.cap} cap`, "up"] : SAME[x.why]; return (
-                  <div key={x.s} className={`pf-wddr ${j === i ? "top" : ""}`} data-opt={x.s}>
-                    <span className="o"><span className="ot"><b className="sym">{x.s}</b>{j === 0 && <span className="pf-wbest">Best match</span>}{sm && <span className={`pf-wsame ${sm[1]}`}>{sm[0]}</span>}</span>
-                      <small>{x.n || ""}{x.sec ? ` · ${x.sec}` : ""}{x.ind ? ` › ${x.ind}` : ""}</small></span>
-                    <span className="n">{rs(x.p)}<small>1 share</small></span><span className="n">{cr(x.mcap)}<small>{x.cap ? `${x.cap} cap` : ""}</small></span>
-                    <span className="n st">{x.st != null && <span className={`pf-wstp ${x.st < 0 ? "dn" : x.st >= 24 ? "up" : ""}`}>{x.st > 0 ? "+" : ""}{signed(x.st)}</span>}
-                      {x.rel && <span className={`hp-rel ${x.rel}`}><i/>{REL_W[x.rel]} reliability</span>}</span>
-                    <button type="button" className="px-btn pf-swap" onClick={() => swap(it.s, x.s)} data-pick={x.s} title={`Replace ${it.s} with ${x.s}`}>⇄ Swap</button>
-                  </div>); })}
+                {sw.sections.map(g => <React.Fragment key={g.k}>
+                  <div className={`pf-wdds ${g.k}`} data-section={g.k}><b>{g.title} · {g.items.length}</b><small>{g.sub}</small></div>
+                  {g.items.length ? g.items.map(x => { const sm = x.up ? [`Upgrade · ${x.cap} cap`, "up"] : SAME[x.why]; return (
+                    <div key={x.s} className={`pf-wddr ${x.s === (a && a.s) ? "top" : ""}`} data-opt={x.s}>
+                      <span className="o"><span className="ot"><b className="sym">{x.s}</b>{x.s === (alts[0] && alts[0].s) && <span className="pf-wbest">Best match</span>}{sm && <span className={`pf-wsame ${sm[1]}`}>{sm[0]}</span>}</span>
+                        <small>{x.n || ""}{x.sec ? ` · ${x.sec}` : ""}{x.ind ? ` › ${x.ind}` : ""}</small></span>
+                      <span className="n">{rs(x.p)}<small>1 share</small></span><span className="n">{cr(x.mcap)}<small>{x.cap ? `${x.cap} cap` : ""}</small></span>
+                      <span className="n st">{x.st != null && <span className={`pf-wstp ${x.st < 0 ? "dn" : x.st >= 24 ? "up" : ""}`}>{x.st > 0 ? "+" : ""}{signed(x.st)}</span>}
+                        {x.rel && <span className={`hp-rel ${x.rel}`}><i/>{REL_W[x.rel]} reliability</span>}</span>
+                      <button type="button" className="px-btn pf-swap" onClick={() => swap(it.s, x.s)} data-pick={x.s} title={`Replace ${it.s} with ${x.s}`}>⇄ Swap</button>
+                    </div>); }) : <div className="pf-wdde" data-empty={g.k}>{g.empty}</div>}
+                </React.Fragment>)}
               </div>}
             </div>); })}
       </div>}

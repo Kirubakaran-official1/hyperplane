@@ -1962,3 +1962,18 @@ address (cookies are per address). Keep the DuckDNS updater running a few months
   - `pw_ui_test` was updated.
   - `probe_auth_endpoints.py` (NUL and injection strings against the signed-in endpoints).
   - `pw_api_test`, `auto_test`, `phone_test` and `dial_test` are stale: they assume mail isn't set up, or the old instant sign-up. `pw_api_test` now sends real emails if run.
+
+### Round 18 — swap options in four sections (owner 2026-11-07: "a section for the same industry, the same sector, a better alternative, then the upgrade — and say so clearly when the industry has none")
+- **Server** (`monitor.alternatives`): each option carries `section` (`industry`, `sector`, `cap`, `up`). Up to 3 in each section, 3 upgrades. The order is industry → sector → cap → up. An upgrade is a bigger company in the same industry (else the same sector), and is not repeated in the sections above it.
+  - **industry:** the same sector and industry.
+  - **sector:** the same sector, another industry.
+  - **cap:** another sector, the same size. This is the "Better alternative".
+  - **up:** a bigger company.
+  - `/app/api/alternatives` `cur` now also names `ind` and `sec`.
+- **Page** (`core.swapSections(items, cur)`, one place for every swap list):
+  - **Explanation first:** "We look in this order: …".
+  - **Amber note:** when the industry has no peer, "There is no other stock in <industry> that passes the long-term checks today, so the first choices come from the same sector".
+  - **Four sections:** each has a title, a subtitle, and an empty line saying why it has no options ("Already a large company — there is nothing bigger to upgrade to").
+  - **Where it shows:** the Swap pop-up on a saved portfolio and the AI watch pop-up (`saved.SwapOptions`), and the Analyser watch drop-down (`apps/portfolio.jsx`).
+  - **Best match:** the first option; it is the one the Analyser row names.
+- **Test:** `sections_test` (about 75 checks) covers the rules of each section for stocks with and without industry peers, and all three screens.

@@ -6,7 +6,7 @@
 // (monitor.py → the 🔔 notification centre). Shared by apps/portfolio.jsx, builder.jsx and sip.jsx; the server does
 // every calculation. Only the customer who saved a portfolio can see it (row-level security).
 import React, { useEffect, useRef, useState } from "react";
-import { APP_SLUG, AiSpark, GroupRow, Icon, Info, addCss, api, copyText, fmtDT, goPath, portfolioUrl, routeOf, signed, useToast } from "./core.jsx";
+import { APP_SLUG, AiSpark, GroupRow, Icon, Info, addCss, api, copyText, fmtDT, goPath, portfolioUrl, routeOf, signed, swapSections, useToast } from "./core.jsx";
 import { Simulators } from "./sim.jsx";
 
 addCss("saved", `
@@ -219,6 +219,10 @@ addCss("saved", `
 .tk-sz{display:inline-flex;gap:6px;flex-wrap:wrap;margin-top:3px}
 .tk-sz span{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;background:var(--s2);font:600 11px var(--sans);color:var(--t2);white-space:nowrap}
 .tk-amt{margin-left:auto;font:600 12px var(--sans);color:var(--acc)}.tk-buys{color:var(--acc)!important;font-weight:600}
+.tk-why{margin:0;font-size:12.5px;line-height:19px;color:var(--t2)}
+.tk-none{display:flex;align-items:flex-start;gap:8px;padding:9px 12px;border-radius:10px;background:var(--mixedd);color:var(--t1);font:600 12.5px/18px var(--sans)}.tk-none .ic{flex:none;margin-top:2px;color:var(--mixed)}
+.tk-sec{display:flex;flex-direction:column;gap:8px}.tk-oh small{margin-left:8px;font:500 11.5px var(--sans);letter-spacing:0;text-transform:none;color:var(--t3)}
+.tk-empty{padding:9px 12px;border-radius:10px;border:1px dashed var(--b2);font-size:12.5px;color:var(--t3)}
 .tk-sz span.pr{background:var(--adim);color:var(--acc)}
 /* round 16: the overall AI watch at the top of My portfolios */
 .svp-aiall{display:flex;align-items:center;gap:14px;width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--b1);cursor:pointer;font:inherit;text-align:left;color:var(--t1);
@@ -272,18 +276,22 @@ const crore = v => v == null ? "—" : v >= 1e5 ? `₹${(v / 1e5).toFixed(2)} L 
 export const SizeTags = ({ x }) => <span className="tk-sz"><span className="pr" title="Last price">{inr2(x.p)}</span>
   <span title="Market value of the company">{crore(x.mcap)}</span>{x.cap && <span>{x.cap} cap</span>}</span>;
 export function SwapOptions({ items, busy, onPick, from, cur, amount, per }) {
-  const like = items.filter(a => !a.up), up = items.filter(a => a.up);
+  const { intro, notice, sections } = swapSections(items, cur || {});
   // round 17: the money of the old stock, and what it buys of each choice (the server sizes the real swap the same way)
-  const buys = a => amount && a.p ? (per ? `${inr(amount)} ${per}` : `≈ ${Math.max(1, Math.floor(amount / a.p)).toLocaleString("en-IN")} share${Math.floor(amount / a.p) === 1 ? "" : "s"} · ${inr(Math.max(1, Math.floor(amount / a.p)) * a.p)}`) : null;
+  const buys = a => { if (!amount || !a.p) return null; if (per) return `${inr(amount)} ${per}`; const n = Math.max(1, Math.floor(amount / a.p)); return `≈ ${n.toLocaleString("en-IN")} share${n === 1 ? "" : "s"} · ${inr(n * a.p)}`; };
   const row = a => <div key={a.s} className={`tk-alt ${a.up ? "up" : ""}`} data-alt={a.s} data-up={a.up ? 1 : 0}>
     <div><b>{a.s}{a.up && <span className="tk-capup">↑ {from ? `${from} → ` : ""}{a.cap} cap</span>}</b><small>{a.n} · {a.sec} · {a.why}</small><SizeTags x={a}/>{buys(a) && <small className="tk-buys">{buys(a)}</small>}</div>
     <span className="st" title="Long-term strength">{plus(a.st)}</span>
     <button type="button" className="px-btn primary tk-do" onClick={() => onPick(a)} disabled={!!busy}>{busy === a.s ? "Swapping…" : "Swap"}</button></div>;
   return (
-    <div className="tk-og">
+    <div className="tk-og" data-swap-sections>
+      <p className="tk-why" id="tk-why">{intro}</p>
+      {notice && <div className="tk-none" id="tk-notice"><Icon name="info" size={14}/> {notice}</div>}
       {cur && <div className="tk-cur" id="tk-cur"><span>Now</span><b>{cur.s}</b><SizeTags x={cur}/>{amount ? <span className="tk-amt">{inr(amount)}{per ? ` ${per}` : ""} moves to the one you pick</span> : null}</div>}
-      {like.length > 0 && <><div className="tk-oh"><Icon name="swap" size={13}/> Same size · {like.length}</div>{like.map(row)}</>}
-      {up.length > 0 && <><div className="tk-oh up"><Icon name="trend" size={13}/> Upgrade to a bigger company · {up.length}</div>{up.map(row)}</>}
+      {sections.map(g => <div key={g.k} className={`tk-sec ${g.k}`} data-section={g.k}>
+        <div className={`tk-oh ${g.k === "up" ? "up" : ""}`}><Icon name={g.k === "up" ? "trend" : "swap"} size={13}/> {g.title} · {g.items.length}<small>{g.sub}</small></div>
+        {g.items.length ? g.items.map(row) : <div className="tk-empty" data-empty={g.k}>{g.empty}</div>}
+      </div>)}
     </div>);
 }
 
@@ -661,7 +669,7 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
       {toast}
       {swap && <Modal onClose={() => setSwap(null)} label={`Swap ${swap.h.s}`}>
         <div className="tk-mh"><div><div className="px-eyebrow"><AiSpark/> Better alternative</div><h3>Swap {swap.h.s} <span className="hp-arrow">→</span></h3>
-          <small>{swap.h.flag ? `${swap.h.s}: ${swap.h.flag}. ` : ""}Stocks with a long-term uptrend: the same size first, then bigger companies in the same industry or sector. The money of {swap.h.s} moves to the one you pick, from today; {swap.h.s} stays in the Swaps list so you can see how it does.</small></div>
+          <small>{swap.h.flag ? `${swap.h.s}: ${swap.h.flag}. ` : ""}The money of {swap.h.s} moves to the one you pick, from today; {swap.h.s} stays in the Swaps list so you can see how it does.</small></div>
           <button type="button" className="tk-x" onClick={() => setSwap(null)} aria-label="Close"><Icon name="x" size={16}/></button></div>
         {swap.err && <div className="pf-miss">{swap.err}</div>}
         {!swap.items ? !swap.err && <div className="svp-note">Finding the best alternatives…</div>

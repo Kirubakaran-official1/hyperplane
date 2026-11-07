@@ -74,10 +74,14 @@ CAP_UP = {"Small": ("Mid", "Large"), "Mid": ("Large",), "Large": ()}
 
 
 def alternatives(data, sym, skip=(), n=3, up=0):
-    """the best n alternatives for one stock: long-term uptrend (High / Medium), the same industry first, then the same sector,
-    then the same market cap, strongest first (owner 2026-11-06: "swap as an option, then show the best alternative of that stock").
-    up > 0 adds up to `up` UPGRADES (owner 2026-11-07, round 15: "moving from small cap to mid cap — an upgrade in the same sector and
-    industry; give multiple swap options"): a bigger company (Small → Mid / Large, Mid → Large) in the same industry, else the same sector."""
+    """swap options for one stock, in four sections (owner 2026-11-07, round 18: "a section for the same industry, one for the same sector,
+    a better alternative, then the upgrade — and say so when the industry has none"). Each section holds up to n stocks (up for the upgrade),
+    strongest first, all with a long-term uptrend (High / Medium reliability):
+      industry — the same sector AND industry                     (item["section"] == "industry", why "same industry")
+      sector   — the same sector, another industry                (item["section"] == "sector",   why "same sector")
+      cap      — another sector, the same company size            (item["section"] == "cap",      why "same market cap")  → "Better alternative"
+      up       — a BIGGER company in the same industry, else the same sector (Small → Mid / Large, Mid → Large)   (item["section"] == "up")
+    An empty section is simply absent: the page says there is none ("No other stock in this industry today")."""
     by = {s["s"]: s for s in data.get("stocks", [])}
     s = by.get(sym)
     if not s:
@@ -88,15 +92,18 @@ def alternatives(data, sym, skip=(), n=3, up=0):
     same = [x for x in cands if x["s"].get("sec") == s.get("sec") and x not in ind]
     cap = [x for x in cands if x["s"].get("cap") == s.get("cap") and x not in ind and x not in same]
     bigger = CAP_UP.get(s.get("cap"), ())
-    upg = [x for x in ind if x["s"].get("cap") in bigger] + [x for x in same if x["s"].get("cap") in bigger]
-    like = [x for x in ind + same + cap if x not in upg[:up]] if up else ind + same + cap
+    upg = ([x for x in ind if x["s"].get("cap") in bigger] + [x for x in same if x["s"].get("cap") in bigger])[:up] if up else []
+    taken = {id(x) for x in upg}
+    lists = (("industry", [x for x in ind if id(x) not in taken][:n], "same industry"), ("sector", [x for x in same if id(x) not in taken][:n], "same sector"),
+             ("cap", [x for x in cap if id(x) not in taken][:n], "same market cap"))
 
-    def one(x, kind):
+    def one(x, section, why):
         lt = lt_strength(x["s"])
-        why = ("bigger company · same industry" if x in ind else "bigger company · same sector") if kind == "up" else             "same industry" if x in ind else "same sector" if x in same else "same market cap"
         return {"s": x["s"]["s"], "n": x["s"].get("n"), "st": x["st"] if lt is None else lt, "sec": x["s"].get("sec"), "ind": x["s"].get("ind"),
-                "rel": x["s"].get("h"), "why": why, "up": kind == "up", **size_of(x["s"])}
-    return [one(x, "like") for x in like[:n]] + [one(x, "up") for x in upg[:up]]
+                "rel": x["s"].get("h"), "why": why, "section": section, "up": section == "up", **size_of(x["s"])}
+    out = [one(x, sec, why) for sec, xs, why in lists for x in xs]
+    out += [one(x, "up", "bigger company · same industry" if x in ind else "bigger company · same sector") for x in upg]
+    return out
 
 
 def _period(freq, now):

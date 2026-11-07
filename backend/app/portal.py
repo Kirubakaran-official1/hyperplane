@@ -1371,7 +1371,7 @@ def alternatives(s: str, exclude: str = "", c=Depends(need("portfolio", "builder
     skip = {x for x in exclude.split(",") if PF_SYM.match(x)} | {s}
     view = _latest_view(today=True)
     cur = next((x for x in view.get("stocks", []) if x["s"] == s), None)
-    return {"s": s, "cur": cur and monitor.size_of(cur), "items": monitor.alternatives(view, s, skip, 3, up=3)}
+    return {"s": s, "cur": cur and {**monitor.size_of(cur), "sec": cur.get("sec"), "ind": cur.get("ind")}, "items": monitor.alternatives(view, s, skip, 3, up=3)}
 
 
 def _watch_syms(r):

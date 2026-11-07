@@ -315,6 +315,22 @@ export function Logo({ size = 32 }) {
     </svg>
   );
 }
+// Swap options in four sections (owner 2026-11-07, round 18: "a section for the same industry, the same sector, a better alternative, then the
+// upgrade — and say clearly when the industry has none"). The server marks each option with item.section (monitor.alternatives); this builds
+// the explanation first, then the sections in order — an empty one says why, instead of disappearing.
+export function swapSections(items, cur = {}) {
+  const ind = cur.ind || "its industry", sec = cur.sec || "its sector", has = k => items.some(a => a.section === k || (k === "up" && a.up));
+  const of = k => items.filter(a => k === "up" ? a.up : a.section === k && !a.up);
+  const intro = `Swap options for ${cur.s || "this stock"}${cur.ind || cur.sec ? ` — ${[cur.ind, cur.sec].filter(Boolean).join(" · ")}` : ""}. We look in this order: the same industry, the same sector, a better alternative, then an upgrade to a bigger company. Only stocks whose long-term trend is up (High or Medium reliability) are shown.`;
+  const notice = !has("industry") ? `There is no other stock in ${ind} that passes the long-term checks today, so the first choices come from the same sector.` : "";
+  const sections = [
+    { k: "industry", title: "Same industry", sub: `Other stocks in ${ind}`, items: of("industry"), empty: `No other stock in ${ind} passes the long-term checks today.` },
+    { k: "sector", title: "Same sector", sub: `Other industries in ${sec}`, items: of("sector"), empty: `No other stock in ${sec} (outside ${ind}) passes the checks today.` },
+    { k: "cap", title: "Better alternative", sub: `A stock from another sector of the same size${cur.cap ? ` (${cur.cap} cap)` : ""}`, items: of("cap"), empty: "No other stock of the same size looks better today." },
+    { k: "up", title: "Upgrade", sub: "A bigger company in the same industry or sector", items: of("up"), empty: cur.cap === "Large" ? "Already a large company — there is nothing bigger to upgrade to." : "No bigger company in its industry or sector passes the checks today." },
+  ];
+  return { intro, notice, sections };
+}
 export const GuideIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>);
