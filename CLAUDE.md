@@ -1977,3 +1977,50 @@ address (cookies are per address). Keep the DuckDNS updater running a few months
   - **Where it shows:** the Swap pop-up on a saved portfolio and the AI watch pop-up (`saved.SwapOptions`), and the Analyser watch drop-down (`apps/portfolio.jsx`).
   - **Best match:** the first option; it is the one the Analyser row names.
 - **Test:** `sections_test` (about 75 checks) covers the rules of each section for stocks with and without industry peers, and all three screens.
+
+### Round 18b — one swap panel for every swap place (owner 2026-11-07: "the UI of the swap is not so good … section separation hard to read")
+- **`frontend/app/src/swap-ui.jsx` `SwapPanel`** is the ONLY swap-options UI. It is used by the Swap pop-up and the AI watch (`saved.SwapOptions`) and by the Analyser watch drop-down (`apps/portfolio.jsx`).
+  - **Layout, top to bottom:**
+    - a "Replacing" card (the stock, a "Regime turned down" chip, price, size, the money that moves);
+    - "How we choose.";
+    - the amber note when the industry has nothing;
+    - numbered jump chips;
+    - four coloured section cards, each with a header (number, title, sub, count), column heads and rows;
+    - each row: ticker + tags, name, price per share, company size, strength pill + reliability, Swap.
+  - **Responsive:** it uses container queries (`@container`), not viewport media, so the narrow pop-up and the wide drop-down each lay out correctly.
+  - **Class names are deliberately unusual** (`.swx`, `.nl`, `.swt`). Global `.top`, `.lbl`, `.who` and `section` styles in `shell.css.js` leaked into the rows before. Keep new classes prefixed `swp-` or similar.
+  - **AI watch:** the old per-stock header line (`.aw-ih`) shows only after a swap or when there are no options; otherwise the Replacing card names the stock.
+- **Selectors the tests rely on:** `[data-section]`, `[data-empty]`, `[data-notice]`, `[data-opt]`, `[data-pick]`, `#tk-why`/`#tk-notice` (pop-up, `idp="tk"`), `#pfw-<sym>-why` (Analyser).
+
+### Round 18c — swap panel as a 2×2 grid of tables + details on click (owner 2026-11-08: "looks childish, not professional … 2×2 grid, keep it as the table as usual, colours of our theme … the details of the stock on click")
+- **Replaces the 18b card layout.** The numbered jump chips are gone, and so are the per-section colours (green / orange / purple).
+  - Each section is now a neutral card: an `--s2` header holding title, sub and an accent count pill, above a real `<table class="hp-t swp-t">`.
+  - Table columns: Stock · Price · Size · Strength · Swap.
+  - The four cards sit in `.swp-grid`, which is 2×2. It drops to one column under a 900 px container width, and the Size column hides under 460 px.
+  - Only the Best-match row's Swap button is `.px-btn.primary`; the others are plain.
+- **Details on click:**
+  - A click on a row (`tr.swp-row`) opens `tr.swp-dr` with `[data-detail-of=SYM]` under it; a second click closes it.
+  - It shows: why the stock is offered (by section); company and sector › industry; long-term strength with the difference from the replaced stock; price; size; reliability; and what the money buys.
+  - **"Full detail view"** appears only when `DetailCtx.can(app)` is true, so `<app>:detail` stays owner-level. `app` is `builder` for Builder-kind saved portfolios, otherwise `portfolio`.
+- **Server:** `/app/api/alternatives` `cur` now also carries `n` and `st` (`lt_strength`), so the replaced stock's strength is shown and compared.
+- **Pop-ups:** the Swap pop-up is now `wide`, and `.tk-modal.wide` is 1120 px.
+- **Removed the blocks above the grid** (owner, same day: "not needed, it's already there"): the Replacing strip, "How we choose" and the amber note.
+  - The pop-up header and the watch row already name the stock.
+  - The empty Same-industry card still says "No other stock in … today".
+  - The replaced stock's price, size and strength appear in each option's details for comparison.
+  - The panel now starts with the grid. `#tk-why`, `#tk-notice`, `#tk-cur` and `[data-notice]` no longer exist.
+
+### Speed and housekeeping (owner 2026-11-07: "production feels slower … remove garbage but keep all the data cache")
+- **Measured locally:** every API < 60 ms, DB ~200 MB. Slowness on prod is therefore network, browser, or CPU taken by collection / other jobs. It is not the app's own work.
+- **Changes:**
+  - `docker-compose.yml` `x-logs` → container logs rotate at 10 MB × 3 per service (they grew without limit before). Takes effect after `docker compose up -d`.
+  - `tracking.CACHE_MAX` 200.
+  - `portal._rate` purges old keys every 2000 calls.
+  - **The portal logs `SLOW <ms> <path>`** for any request over 400 ms. On prod: `docker compose logs portal | grep SLOW`.
+- **Safe cleanup (keeps all data, caches and volumes):**
+  - `docker builder prune -af`
+  - `docker image prune -f`
+  - `sudo journalctl --vacuum-time=7d`
+  - `sudo apt-get clean`
+  - Postgres `VACUUM (ANALYZE)`
+- **NEVER** `docker system prune --volumes`, `docker volume rm` or `docker compose down -v`. They delete the database and the data cache.

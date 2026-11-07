@@ -36,7 +36,7 @@ STD_FACTORS = (2, 3, 4, 5, 10, 20, 1.5, 4 / 3, 5 / 4, 0.5, 0.2, 0.1, 1 / 3, 0.25
 CHECK_LOW, CHECK_HIGH = 0.78, 1.3         # a raw day move outside this band is examined
 GAP_DAYS = 4                              # previous stored close at most this many days back = "the previous trading day"
 _cache = OrderedDict()
-CACHE_MAX = 600
+CACHE_MAX = 200                  # results kept in memory (each one is a few hundred KB; the customer service has 256 MB)
 
 
 # ── prices ──

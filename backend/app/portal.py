@@ -166,7 +166,11 @@ async def _headers(request: Request, call_next):
         too_big = True
     if too_big:
         return JSONResponse({"detail": "This request is too large"}, status_code=413)
+    t0 = time.perf_counter()
     resp = await call_next(request)
+    ms = (time.perf_counter() - t0) * 1000
+    if ms > 400 and request.url.path.startswith("/app/api"):          # round 18: which click was slow → docker compose logs portal | grep SLOW
+        print(f"SLOW {ms:.0f} ms {request.method} {request.url.path}", flush=True)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
@@ -181,7 +185,15 @@ def _ip(request: Request):
 _hits = defaultdict(deque)
 
 
+_rate_calls = [0]
+
+
 def _rate(bucket, key, limit, window):
+    _rate_calls[0] += 1
+    if _rate_calls[0] % 2000 == 0:                      # forget keys with nothing in the last hour (one per address / email ever seen would pile up)
+        cut = time.time() - 3600
+        for k in [k for k, v in _hits.items() if not v or v[-1] < cut]:
+            _hits.pop(k, None)
     q = _hits[(bucket, key)]
     now = time.time()
     while q and q[0] < now - window:
@@ -1371,7 +1383,7 @@ def alternatives(s: str, exclude: str = "", c=Depends(need("portfolio", "builder
     skip = {x for x in exclude.split(",") if PF_SYM.match(x)} | {s}
     view = _latest_view(today=True)
     cur = next((x for x in view.get("stocks", []) if x["s"] == s), None)
-    return {"s": s, "cur": cur and {**monitor.size_of(cur), "sec": cur.get("sec"), "ind": cur.get("ind")}, "items": monitor.alternatives(view, s, skip, 3, up=3)}
+    return {"s": s, "cur": cur and {**monitor.size_of(cur), "n": cur.get("n"), "sec": cur.get("sec"), "ind": cur.get("ind"), "st": monitor.lt_strength(cur)}, "items": monitor.alternatives(view, s, skip, 3, up=3)}
 
 
 def _watch_syms(r):

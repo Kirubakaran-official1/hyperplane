@@ -8,6 +8,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { APP_SLUG, AiSpark, GroupRow, Icon, Info, addCss, api, copyText, fmtDT, goPath, portfolioUrl, routeOf, signed, swapSections, useToast } from "./core.jsx";
 import { Simulators } from "./sim.jsx";
+import { SwapPanel } from "./swap-ui.jsx";
 
 addCss("saved", `
 .svp{display:flex;flex-direction:column;gap:12px;--ch-pf:#0891b2;--ch-bn:#8b5cf6;--ch-in:#c2410c;--ch-etf:#8b5cf6}
@@ -197,7 +198,7 @@ addCss("saved", `
 .svp-aiw.hot{border-color:color-mix(in srgb,var(--short) 40%,var(--b1));background:color-mix(in srgb,var(--short) 5%,var(--s1))}
 .svp-aiw.hot i{background:var(--short);color:#fff;animation:hpPulse .5s both}
 /* the AI watch pop-up: a short scan, then every suggested swap */
-.tk-modal.wide{width:min(780px,100%)}.aw-modal{display:flex;flex-direction:column;gap:12px}
+.tk-modal.wide{width:min(1120px,100%)}.aw-modal{display:flex;flex-direction:column;gap:12px}
 .aw-scan{display:flex;flex-direction:column;align-items:center;gap:16px;padding:26px 10px 30px;text-align:center}
 .aw-orb{position:relative;width:86px;height:86px;border-radius:50%;display:grid;place-items:center;color:#fff;background:conic-gradient(from 0deg,var(--acc),#8b5cf6,var(--acc));animation:awSpin 1.4s linear infinite}
 .aw-orb::before{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--bg)}
@@ -275,24 +276,8 @@ const crore = v => v == null ? "—" : v >= 1e5 ? `₹${(v / 1e5).toFixed(2)} L 
 // price and company size of one stock (round 16: "mention the price and the size of both, the swap and the current one")
 export const SizeTags = ({ x }) => <span className="tk-sz"><span className="pr" title="Last price">{inr2(x.p)}</span>
   <span title="Market value of the company">{crore(x.mcap)}</span>{x.cap && <span>{x.cap} cap</span>}</span>;
-export function SwapOptions({ items, busy, onPick, from, cur, amount, per }) {
-  const { intro, notice, sections } = swapSections(items, cur || {});
-  // round 17: the money of the old stock, and what it buys of each choice (the server sizes the real swap the same way)
-  const buys = a => { if (!amount || !a.p) return null; if (per) return `${inr(amount)} ${per}`; const n = Math.max(1, Math.floor(amount / a.p)); return `≈ ${n.toLocaleString("en-IN")} share${n === 1 ? "" : "s"} · ${inr(n * a.p)}`; };
-  const row = a => <div key={a.s} className={`tk-alt ${a.up ? "up" : ""}`} data-alt={a.s} data-up={a.up ? 1 : 0}>
-    <div><b>{a.s}{a.up && <span className="tk-capup">↑ {from ? `${from} → ` : ""}{a.cap} cap</span>}</b><small>{a.n} · {a.sec} · {a.why}</small><SizeTags x={a}/>{buys(a) && <small className="tk-buys">{buys(a)}</small>}</div>
-    <span className="st" title="Long-term strength">{plus(a.st)}</span>
-    <button type="button" className="px-btn primary tk-do" onClick={() => onPick(a)} disabled={!!busy}>{busy === a.s ? "Swapping…" : "Swap"}</button></div>;
-  return (
-    <div className="tk-og" data-swap-sections>
-      <p className="tk-why" id="tk-why">{intro}</p>
-      {notice && <div className="tk-none" id="tk-notice"><Icon name="info" size={14}/> {notice}</div>}
-      {cur && <div className="tk-cur" id="tk-cur"><span>Now</span><b>{cur.s}</b><SizeTags x={cur}/>{amount ? <span className="tk-amt">{inr(amount)}{per ? ` ${per}` : ""} moves to the one you pick</span> : null}</div>}
-      {sections.map(g => <div key={g.k} className={`tk-sec ${g.k}`} data-section={g.k}>
-        <div className={`tk-oh ${g.k === "up" ? "up" : ""}`}><Icon name={g.k === "up" ? "trend" : "swap"} size={13}/> {g.title} · {g.items.length}<small>{g.sub}</small></div>
-        {g.items.length ? g.items.map(row) : <div className="tk-empty" data-empty={g.k}>{g.empty}</div>}
-      </div>)}
-    </div>);
+export function SwapOptions({ items, busy, onPick, cur, amount, per, kind }) {
+  return <SwapPanel items={items} cur={cur || {}} onPick={onPick} busy={busy} amount={amount} per={per} idp="tk" app={kind === "builder" ? "builder" : "portfolio"}/>;
 }
 
 // one swap, opened (round 17): both sides with price then / now, quantity and the money in each
@@ -667,14 +652,14 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
         {!pub && <div id="svp-sim-wrap"><Simulators isSip={isSip} amount0={amount0} years0={it.inputs.years} idp="svp" title="Simulators · this portfolio"/></div>}
       </>}
       {toast}
-      {swap && <Modal onClose={() => setSwap(null)} label={`Swap ${swap.h.s}`}>
+      {swap && <Modal onClose={() => setSwap(null)} label={`Swap ${swap.h.s}`} wide>
         <div className="tk-mh"><div><div className="px-eyebrow"><AiSpark/> Better alternative</div><h3>Swap {swap.h.s} <span className="hp-arrow">→</span></h3>
-          <small>{swap.h.flag ? `${swap.h.s}: ${swap.h.flag}. ` : ""}The money of {swap.h.s} moves to the one you pick, from today; {swap.h.s} stays in the Swaps list so you can see how it does.</small></div>
+          <small>Pick the stock that takes its place. It joins from today; {swap.h.s} stays in the Swaps list so you can see how it does.</small></div>
           <button type="button" className="tk-x" onClick={() => setSwap(null)} aria-label="Close"><Icon name="x" size={16}/></button></div>
         {swap.err && <div className="pf-miss">{swap.err}</div>}
         {!swap.items ? !swap.err && <div className="svp-note">Finding the best alternatives…</div>
           : !swap.items.length ? <div className="svp-note">No better stock in its sector or market cap today.</div>
-          : <SwapOptions items={swap.items} cur={swap.cur} amount={isSip ? (it.holdings.find(x => x.s === swap.h.s) || {}).amt : swap.h.value} per={isSip ? `a ${WORD[it.inputs.freq] || "month"}` : ""} busy={swap.busy} from={(GROUP_NAME[swap.h.grp] || "").replace(" cap", "")} onPick={a => doSwap(swap.h.s, a)}/>}
+          : <SwapOptions items={swap.items} cur={swap.cur} amount={isSip ? (it.holdings.find(x => x.s === swap.h.s) || {}).amt : swap.h.value} per={isSip ? `a ${WORD[it.inputs.freq] || "month"}` : ""} busy={swap.busy} kind={it.kind} from={(GROUP_NAME[swap.h.grp] || "").replace(" cap", "")} onPick={a => doSwap(swap.h.s, a)}/>}
       </Modal>}
     </div>);
 }
@@ -786,10 +771,10 @@ function AiWatch({ list, onClose, onChanged, onOpen }) {
       <div className="aw-chips" style={{ justifyContent: "flex-start", maxWidth: "none" }}>{stocksOf(cur[p.id]).map(h => <span key={h.s} className={bad.has(h.s) && !done[`${p.id}:${h.s}`] ? "bad" : "ok"}>{h.s}</span>)}</div>
       {!r.items.length ? (!all && <div className="aw-clear" id="aw-clear"><Icon name="check" size={16}/> All clear — every stock's long-term regime is still up. Nothing to change.</div>)
         : r.items.map((x, i) => <div key={x.s} className="aw-it" style={{ animationDelay: `${i * 80}ms` }} data-flag={x.s}>
-          <div className="aw-ih"><span className="sym">{x.s}</span><span className="hp-flag">Regime down</span><small>{x.n} · {x.sec}</small></div>
+          {(done[`${p.id}:${x.s}`] || !x.alts.length) && <div className="aw-ih"><span className="sym">{x.s}</span><span className="hp-flag">Regime down</span><small>{x.n} · {x.sec}</small></div>}
           {done[`${p.id}:${x.s}`] ? <div className="svp-ok"><Icon name="check" size={14}/> Swapped to {done[`${p.id}:${x.s}`]} — tracking continues with it from today.</div>
             : !x.alts.length ? <div className="svp-note">No better stock in its industry, sector or market cap today.</div>
-            : <SwapOptions items={x.alts} busy={busy} from={x.cap} cur={x} onPick={a => pick(p.id, x.s, a)} {...amountOf(cur[p.id], x)}/>}
+            : <SwapOptions items={x.alts} busy={busy} kind={p.kind} from={x.cap} cur={x} onPick={a => pick(p.id, x.s, a)} {...amountOf(cur[p.id], x)}/>}
         </div>)}
       {!all && <div><button type="button" className="px-btn" onClick={() => onOpen(p)} id="aw-open">Open the portfolio</button></div>}
     </div>;

@@ -6,10 +6,17 @@
 #   db      PostgreSQL 16 (Alpine, tuned small)                 (internal)
 #   backup  nightly database dump into ./backups                (internal)
 
+x-logs: &logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-app: &app
   build: ./backend
   image: hyperplane-backend
   restart: unless-stopped
+  logging: *logs
   env_file: .env
   environment:
     DATABASE_URL: postgresql://hyperplane:${POSTGRES_PASSWORD}@db:5432/hyperplane
@@ -28,6 +35,7 @@ services:
     build: ./frontend
     image: hyperplane-web
     restart: unless-stopped
+    logging: *logs
     ports:
       - "80:80"
       - "443:443"
@@ -52,6 +60,7 @@ services:
     build: ./backend
     image: hyperplane-backend
     restart: unless-stopped
+    logging: *logs
     command: ["uvicorn", "app.portal:app", "--host", "0.0.0.0", "--port", "8100", "--proxy-headers", "--forwarded-allow-ips", "*"]
     environment:
       PORTAL_DATABASE_URL: postgresql://hp_portal:${PORTAL_DB_PASSWORD}@db:5432/hyperplane
@@ -73,6 +82,7 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *logs
     environment:
       POSTGRES_DB: hyperplane
       POSTGRES_USER: hyperplane
@@ -95,6 +105,7 @@ services:
   backup:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *logs
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       TZ: Asia/Kolkata
@@ -114,6 +125,7 @@ services:
     image: alpine:3.20
     profiles: ["duckdns"]
     restart: unless-stopped
+    logging: *logs
     environment:
       DUCKDNS_SUBDOMAIN: ${DUCKDNS_SUBDOMAIN}
       DUCKDNS_TOKEN: ${DUCKDNS_TOKEN}
