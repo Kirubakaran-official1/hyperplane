@@ -84,9 +84,14 @@ export const CSS = `
 .badge.side{background:var(--mixedd);color:var(--mixed)}
 .badge.down{background:var(--shortd);color:var(--short)}
 .table-card{padding:0;overflow:hidden}
-.t-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:16px;border-bottom:1px solid var(--b1)}
-.t-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
-.t-tools select{width:auto;height:32px;padding:0 8px;font-size:12px}
+.t-head{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px;border-bottom:1px solid var(--b1)}
+.t-head>:first-child{flex:0 0 auto}
+.t-tools{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-left:auto;flex:1 1 auto;min-width:0}
+.t-tools select{width:auto;height:32px;padding:0 8px;font-size:12px;text-overflow:ellipsis}
+#rg-filter{width:150px;flex:0 1 150px;min-width:110px}
+#t-sort{width:270px;flex:0 1 270px;min-width:150px}
+/* title and tools on one row; they wrap under the title only on narrow screens */
+@media (max-width:1100px){.t-head{flex-wrap:wrap}.t-tools{flex-wrap:wrap;flex-basis:100%}}
 .hl{background:var(--adim)}
 .pct.up{color:var(--long)}
 .pct.down{color:var(--short)}

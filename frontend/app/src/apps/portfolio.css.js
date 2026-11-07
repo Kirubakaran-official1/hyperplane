@@ -59,10 +59,6 @@ export const CSS = `
 .px-sumc{padding:20px 24px;display:flex;flex-direction:column;gap:2px;min-width:0}
 .px-headline{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:12px 0 10px}
 .px-headline h2{margin:0;font:600 20px/28px var(--sans);letter-spacing:-.01em;color:var(--t1)}
-.px-points{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
-.px-points{gap:9px}
-.px-points li{position:relative;padding-left:20px;font-size:14px;line-height:22px;color:var(--t1)}
-.px-points li::before{content:"";position:absolute;left:3px;top:8px;width:7px;height:7px;border-radius:50%;background:#8b97ad}
 .px-sv{display:flex;flex-direction:column;align-items:center;gap:2px;margin-bottom:18px}
 .px-sv b{font:600 32px/40px var(--sans);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .px-sv b small{font-size:20px;margin-left:1px}
@@ -155,4 +151,103 @@ export const CSS = `
 @media (max-width:640px){.px-sumc{padding:18px 16px}}
 @media (max-width:640px){.px-headline h2{font-size:20px}}
 @media (max-width:640px){.pf-bi{grid-template-columns:24px 92px minmax(0,1fr) 28px}}
+/* Hyperplane AI watch (owner, 2026-11-06: the best UI / UX, above the holdings) */
+.pf-watch{padding:0;display:flex;flex-direction:column;margin-bottom:12px;border-left:3px solid var(--long);overflow:hidden}
+.pf-watch.warn{border-left-color:var(--short)}
+.pf-wh{display:flex;align-items:center;gap:14px;width:100%;padding:14px 18px;border:0;background:none;cursor:pointer;text-align:left;color:inherit;font:inherit;transition:background .15s}
+.pf-wh:hover{background:var(--s2)}.pf-wh:focus-visible{outline:none;box-shadow:inset var(--ds-focus)}
+.pf-watch.warn .pf-wh{background:linear-gradient(90deg,color-mix(in srgb,var(--short) 7%,transparent),transparent 60%)}
+.pf-wic{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:12px;background:var(--longd);color:var(--long);flex:none}
+.pf-watch.warn .pf-wic{background:var(--shortd);color:var(--short)}
+.pf-whb{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pf-wbrand{display:inline-flex;align-items:center;gap:6px;font:700 18px/24px var(--sans);letter-spacing:-.01em;color:var(--t1)}
+.pf-wbrand em{font-style:normal;background:linear-gradient(90deg,var(--acc),#8b5cf6);-webkit-background-clip:text;background-clip:text;color:transparent}
+.pf-wbrand .ai-spark{font-size:16px}
+.pf-wt{font:500 13.5px/20px var(--sans);color:var(--t2)}.pf-watch.warn .pf-wt{color:var(--t1)}
+.pf-wn{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--t2);text-align:right}
+.pf-wcount{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 8px;border-radius:999px;background:var(--short);color:#fff;font:700 13px var(--sans);flex:none}
+.pf-wchev{display:inline-flex;color:var(--t3);transform:rotate(90deg);transition:transform .25s ease;flex:none}
+.pf-watch.shut .pf-wchev{transform:rotate(0)}
+.pf-wl{display:flex;flex-direction:column;border-top:1px solid var(--b1);animation:pfWOpen .28s ease-out}
+@keyframes pfWOpen{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.pf-whd,.pf-wr{display:grid;grid-template-columns:minmax(0,1fr) 28px minmax(0,1.2fr) 470px;gap:14px;align-items:center;padding:0 18px}
+.pf-whd{height:30px;font:600 10px/16px var(--sans);letter-spacing:.6px;text-transform:uppercase;color:var(--t3);background:var(--s2);border-bottom:1px solid var(--b1)}
+.pf-whd .r{text-align:right}
+.pf-wr{min-height:58px;padding-top:8px;padding-bottom:8px;border-bottom:1px solid var(--b1);transition:background .15s}
+.pf-wr:last-child{border-bottom:0}.pf-wr:hover{background:var(--s2)}
+.pf-wfrom,.pf-wto{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pf-wl1{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.pf-wl1 .sym{font:700 14px/20px var(--sans)}.pf-wl1 .hp-flag{margin-left:0}
+.pf-wfrom small,.pf-wto small{font-size:12px;line-height:16px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-wto{animation:pfWAlt .32s cubic-bezier(.2,.8,.2,1)}
+@keyframes pfWAlt{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+.pf-wto.none b{font:600 13px var(--sans);color:var(--t2)}
+.pf-wst{font:700 12.5px var(--sans);font-feature-settings:"tnum";color:var(--t2)}.pf-wst.up{color:var(--long)}.pf-wst.dn{color:var(--short)}
+.pf-wsame{display:inline-flex;align-items:center;gap:3px;padding:1px 8px;border-radius:999px;font:600 11px/18px var(--sans);background:var(--longd);color:var(--long)}
+.pf-wsame.sec{background:var(--adim);color:var(--acc)}.pf-wsame.cap{background:var(--s2);color:var(--t2)}
+.pf-wsame.up{background:color-mix(in srgb,#8b5cf6 14%,var(--s1));color:#7c3aed}
+.pf-warr{justify-self:center;font:700 18px var(--sans)}
+.pf-wact{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.pf-wopts{display:inline-flex;padding:2px;border-radius:8px;background:var(--s2);border:1px solid var(--b1)}
+.pf-wopts button{height:26px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--t2);font:600 11.5px var(--sans);cursor:pointer;transition:background .2s,color .2s,box-shadow .2s;max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pf-wopts button:hover{color:var(--t1)}.pf-wopts button.on{background:var(--s1);color:var(--acc);box-shadow:0 1px 3px rgba(15,27,45,.15)}
+.pf-wact .pf-swap{height:32px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+/* round 17 (owner: "this is not properly arranged"): ONE fixed grid for the header and every row — the arrow, the better stock and the
+   options sit in the same place on every row; the options are one even strip (all chips the same width) with Swap fixed at its end */
+.pf-wr{min-height:64px;align-items:center}
+.pf-warr{width:28px;height:28px;display:grid;place-items:center;border-radius:50%;background:var(--adim);color:var(--acc);font:700 14px var(--sans)}
+.pf-wact{display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:10px;align-items:center;justify-content:stretch}
+.pf-wopts{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);width:100%;min-width:0;justify-self:stretch}
+.pf-wopts button{max-width:none;min-width:0;text-align:center;padding:0 6px}
+.pf-wact .pf-swap{width:92px;justify-content:center;padding:0}
+.pf-wact>.pf-swap:only-child{grid-column:2}
+.pf-wopts:empty{display:none}
+@media (min-width:1700px){.pf-whd,.pf-wr{grid-template-columns:minmax(0,1fr) 28px minmax(0,1.1fr) 620px}.pf-wopts button{font-size:12px}}
+@media (max-width:1380px){.pf-whd{display:none}.pf-wr{grid-template-columns:minmax(0,1fr) 28px minmax(0,1.2fr);row-gap:8px}.pf-wact{grid-column:1/-1;max-width:560px;margin-left:auto;width:100%}}
+@media (prefers-reduced-motion:reduce){.pf-wto,.pf-wl{animation:none}.pf-wchev{transition:none}}
+@media (max-width:900px){.pf-wr{grid-template-columns:minmax(0,1fr) 22px minmax(0,1fr)}.pf-wact{max-width:none;margin-left:0}}
+@media (max-width:640px){.pf-wh{flex-wrap:wrap;padding:12px 14px}.pf-wn{margin-left:54px;text-align:left}.pf-wr{grid-template-columns:1fr;padding:10px 14px}.pf-warr{transform:rotate(90deg);justify-self:start}}
+/* better alternative on every card + saved message (owner, 2026-11-06) */
+.pf-alt{margin-top:10px;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.pf-altb{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;font-size:12.5px}
+.pf-altl{display:flex;flex-direction:column;gap:6px}
+.pf-alti{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;border-radius:8px;border:1px solid var(--b1);background:var(--s2)}
+.pf-alti b{color:var(--long)}.pf-alti small{color:var(--t3);flex:1 1 140px}.pf-alti .pf-swap{margin-left:auto}
+.pf-altx{align-self:flex-start;border:0;background:none;color:var(--acc);font:600 12px var(--sans);cursor:pointer;padding:0}
+.pf-saved-msg{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;margin-bottom:12px;font-size:13px;border-color:var(--acc);background:var(--adim)}
+.pf .hp-actbar .px-search{width:340px}
+/* round 17: amounts under both stocks, and every option in a drop-down under its row with its own Swap */
+.pf-wmoney{display:flex;flex-wrap:wrap;gap:6px;margin-top:3px}
+.pf-wmoney span{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;background:var(--s2);font:600 11px var(--sans);color:var(--t2);white-space:nowrap}
+.pf-wmoney .amt{background:var(--adim);color:var(--acc)}
+.pf-wr{position:relative}
+.pf-wact{grid-template-columns:minmax(0,1fr) 92px}
+.pf-wtog{height:32px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 12px;border-radius:8px;border:1px solid var(--b2);background:var(--s1);color:var(--t1);font:600 12px var(--sans);cursor:pointer;white-space:nowrap}
+.pf-wtog:hover{border-color:var(--acc);color:var(--acc)}.pf-wtog .ic{transition:transform .2s}.pf-wtog.on{border-color:var(--acc);color:var(--acc);background:var(--adim)}.pf-wtog.on .ic{transform:rotate(90deg)}
+.pf-wact>.pf-wtog:first-child:nth-last-child(1){grid-column:1/-1}
+.pf-wdd{grid-column:1/-1;margin:2px 0 4px;border:1px solid var(--b1);border-radius:12px;background:var(--bg);overflow:hidden;animation:pfWAlt .28s cubic-bezier(.2,.8,.2,1)}
+.pf-wddh,.pf-wddr{display:grid;grid-template-columns:minmax(0,1.6fr) 120px 150px 150px 92px;gap:12px;align-items:center;padding:0 14px}
+.pf-wddh{height:28px;font:600 10px var(--sans);letter-spacing:.6px;text-transform:uppercase;color:var(--t3);background:var(--s2);border-bottom:1px solid var(--b1)}
+.pf-wddr{min-height:52px;padding-top:7px;padding-bottom:7px;border-bottom:1px solid var(--b1)}.pf-wddr:last-child{border-bottom:0}
+.pf-wddr.top{background:color-mix(in srgb,var(--acc) 5%,var(--bg))}
+.pf-wddr .o{display:flex;flex-direction:column;gap:2px;min-width:0}.pf-wddr .o .ot{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.pf-wddr .o .sym{font:700 14px var(--sans)}
+.pf-wddr .o small,.pf-wddr .n small{display:block;font-size:11.5px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pf-wddr .n{font:700 13px var(--sans);color:var(--t1);font-feature-settings:"tnum"}
+.pf-wbest{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;background:var(--longd);color:var(--long);font:700 10px var(--sans);margin-right:6px}
+.pf-wddr .pf-swap{width:92px;justify-content:center;padding:0}
+@media (max-width:900px){.pf-wddh{display:none}.pf-wddr{grid-template-columns:1fr 1fr;row-gap:6px}.pf-wddr .o{grid-column:1/-1}.pf-wddr .pf-swap{grid-column:1/-1;width:100%}}
+/* round 17b: the row has only the options toggle (full width of its column); strength as a clear pill */
+.pf-wact{grid-template-columns:1fr}
+.pf-wtog{width:100%;height:36px;gap:8px;font-size:12.5px;background:var(--adim);border-color:var(--accb);color:var(--acc)}
+.pf-wtog:hover,.pf-wtog.on{background:var(--ds-action-bg);border-color:transparent;color:var(--on-acc)}
+.pf-wddr .n.st{display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.pf-wstp{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:999px;font:800 13px var(--sans);font-feature-settings:"tnum";background:var(--s2);color:var(--t1)}
+.pf-wstp.up{background:var(--longd);color:var(--long)}.pf-wstp.dn{background:var(--shortd);color:var(--short)}
+.pf-wddr .hp-rel{font:600 11.5px var(--sans);color:var(--t2)}
+.pf-wddh span:nth-child(4)::after{content:" · reliability";text-transform:none;letter-spacing:0;font-weight:500}
+.pf-wddr.cur{background:var(--s2)}.pf-wddr.cur .sym{color:var(--t2)}
+.pf-wnow{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;background:var(--shortd);color:var(--short);font:700 10px var(--sans)}
+.pf-wstp{background:var(--s3);box-shadow:inset 0 0 0 1px var(--b2)}.pf-wstp.up{background:var(--longd);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--long) 35%,transparent)}
+.pf-wstp.dn{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--short) 35%,transparent)}
+.pf-wpx{margin-left:4px;padding-left:10px;border-left:1px solid var(--b2);font:800 13px var(--sans);font-feature-settings:"tnum";color:var(--t1)}
 `;

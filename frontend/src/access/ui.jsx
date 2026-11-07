@@ -44,6 +44,34 @@ export function PermName({ p, sub = true }) {
 export const AppHead = ({ m, n, right }) => (
   <span className="ax-apph"><span className="ax-appi"><AppIcon k={m.key} size={15}/></span><b>{m.name}</b>{n != null && <span className="am-mut">{plural(n, "permission")}</span>}{right}</span>);
 
+// One application's group header, the same in every tab (owner 2026-11-07: "the accordion of the app is very small — make it
+// proper, with collapse all, common for all the apps"): the whole bar opens / closes it; the right side holds its own buttons.
+export const GroupHead = ({ m, open, onFlip, count, sub, right }) => (
+  <div className={`ax-gh ${open ? "open" : ""}`} data-app={m.key}>
+    <button type="button" className="ax-ghb" onClick={onFlip} aria-expanded={open} title={open ? "Close" : "Open"}>
+      <svg className="ax-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+      <span className="ax-ghi"><AppIcon k={m.key} size={18}/></span>
+      <span className="ax-ght"><b>{m.name}</b>{sub && <small>{sub}</small>}</span>
+      {count != null && <span className="ax-ghn">{count}</span>}
+    </button>
+    {right && <span className="ax-ghr" onClick={e => e.stopPropagation()}>{right}</span>}
+  </div>);
+
+// which groups are closed, remembered per tab; plus the "Collapse all / Expand all" button
+export function useFold(store, keys) {
+  const [closed, setClosed] = useState(() => { try { return new Set(JSON.parse(localStorage.getItem(store) || "[]")); } catch { return new Set(); } });
+  const save = s => { try { localStorage.setItem(store, JSON.stringify([...s])); } catch { /* storage blocked */ } return s; };
+  const flip = k => setClosed(s => { const x = new Set(s); x.has(k) ? x.delete(k) : x.add(k); return save(x); });
+  const allClosed = keys.length > 0 && keys.every(k => closed.has(k));
+  const all = () => setClosed(save(allClosed ? new Set() : new Set(keys)));
+  const button = id => (
+    <button type="button" className="ax-foldall" onClick={all} id={id}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {allClosed ? <path d="m7 15 5 5 5-5M7 9l5-5 5 5"/> : <path d="m7 20 5-5 5 5M7 4l5 5 5-5"/>}</svg>
+      {allClosed ? "Expand all" : "Collapse all"}</button>);
+  return { isOpen: k => !closed.has(k), flip, button };
+}
+
 export function PendingBar({ count, onReview, onDiscard, busy, what = "change" }) {
   if (!count) return null;
   return (

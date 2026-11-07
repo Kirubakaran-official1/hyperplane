@@ -10,6 +10,8 @@ const ICON_PATHS = {
   x: <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
   plus: <><path d="M5 12h14"/><path d="M12 5v14"/></>,
   minus: <path d="M5 12h14"/>,
+  chevron: <path d="m9 18 6-6-6-6"/>,
+  clock: <><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>,
   alert: <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></>,
   info: <><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></>,
   sparkles: <><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></>,
@@ -21,6 +23,7 @@ const ICON_PATHS = {
   bulb: <><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></>,
   bell: <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
   factory: <><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M17 18h1"/><path d="M12 18h1"/><path d="M7 18h1"/></>,
+  globe: <><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></>,
   layers: <><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></>,
   table: <><path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/></>,
   copy: <><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></>,
@@ -31,6 +34,10 @@ const ICON_PATHS = {
   chart: <><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></>,
   percent: <><path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></>,
   search: <><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></>,
+  share: <><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4"/><path d="m15.4 6.5-6.8 4"/></>,
+  swap: <><path d="M7 4 3 8l4 4"/><path d="M3 8h13"/><path d="m17 20 4-4-4-4"/><path d="M21 16H8"/></>,
+  edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></>,
+  trend: <><path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/></>,
   help: <><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></>,
 };
 export function Icon({ name, size = 16, className = "", title }) {
@@ -86,8 +93,14 @@ export const strengthCls = s => s >= 55 ? "up" : s >= 45 ? "side" : "down";
 export const PALETTE = ["#00e5ff","#00c896","#ffaa00","#ff4454","#a259ff","#38bdf8","#f472b6","#2dd4bf","#fb923c","#a3e635","#818cf8","#facc15","#34d399","#c084fc","#fb7185","#60a5fa"];
 export const colorOf = name => { let h = 0; for (const ch of String(name)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; };
 
+// Past data (round 16, permission research:history): the day picked in the shell goes with every request of the app, so each
+// application's server answer uses that day's data ("X-HP-Day: YYYY-MM-DD.open|end"); the server checks the permission.
+let DAY = null;
+export const setApiDay = sel => { DAY = sel ? `${sel.date}.${sel.part}` : null; };
+export const apiDay = () => DAY;
 export async function api(path, opts = {}) {
   const init = { credentials:"same-origin", ...opts, headers:{ ...(opts.headers || {}) } };
+  if (DAY && path.startsWith("/app/api/") && !path.startsWith("/app/api/history") && !path.startsWith("/app/api/public/")) init.headers["X-HP-Day"] = DAY;
   if (opts.json !== undefined) { init.body = JSON.stringify(opts.json); init.headers["content-type"] = "application/json"; }
   const res = await fetch(path, init);
   const data = await res.json().catch(() => null);
@@ -107,6 +120,21 @@ export function trackAction(module, action) {
   _sent[k] = now;
   api("/app/api/activity", { method: "POST", json: { module, kind: "action", action } }).catch(() => { /* never matters to the customer */ });
 }
+// Helpdesk ready-made requests (owner, 2026-11-03: "the template in the predefined queries, like extend the limit of the
+// portfolio … in one click it can send to the admin"): shown in New query; the builder sends the limit one directly
+export const HD_LIMIT_SUBJECT = "Increase my portfolio limit";
+export const HD_TEMPLATES = [
+  { key: "limit", label: "Increase my portfolio limit", subject: HD_LIMIT_SUBJECT, severity: "low",
+    body: "Hello QuantFriday team,\n\nPlease increase my AI Portfolio Builder limit.\nAmount I would like to invest: ₹\nNumber of stocks: \n\nThank you." },
+  { key: "renew", label: "Renew my access", subject: "Renew my access", severity: "low",
+    body: "Hello QuantFriday team,\n\nPlease renew my access to Hyperplane.\n\nThank you." },
+  { key: "app", label: "Add an application", subject: "Add an application to my account", severity: "low",
+    body: "Hello QuantFriday team,\n\nPlease add this application to my account: \n\nThank you." },
+  { key: "email", label: "Change my email", subject: "Change my sign-in email", severity: "low",
+    body: "Hello QuantFriday team,\n\nPlease change my sign-in email to: \n\nThank you." },
+  { key: "data", label: "Report wrong data", subject: "A stock's data looks wrong", severity: "medium",
+    body: "Hello QuantFriday team,\n\nThe data for this stock looks wrong.\nStock: \nWhere I saw it: \nWhat looks wrong: \n\nThank you." },
+];
 export const fmtDT = iso => iso ? new Date(iso).toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"numeric", minute:"2-digit", timeZone:"Asia/Kolkata" }) : "—";
 export async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; }
@@ -209,7 +237,7 @@ export const regimeMatch = (s, k) => k === "all" || (!!s.rg && (k === "up" ? s.r
 export const RG_INFO = "Regime analyser: tells you whether the current regime of the stock is up or down, and when it starts changing. A trend that goes against the regime is not trusted yet, so it is shown as Sideways.";
 export const RegimeTag = ({ r, sm }) => !r ? <span className="dim">—</span>
   : <span className={`rgtag ${r.tone} ${sm ? "sm" : ""}`} title={`${r.word}. ${r.text}`}><i aria-hidden="true">{r.icon}</i>{sm ? r.short : r.word}</span>;
-// stock card and Simplified view: the regime in one line and the timeframes it holds back
+// stock card and AI Mode: the regime in one line and the timeframes it holds back
 export function RegimeBox({ s, rd, strip = false }) {
   const r = regimeOf(s, rd);
   if (!r) return null;
@@ -262,15 +290,26 @@ export function applyMode(data, mode) {
 
 
 // ─── small pieces ────────────────────────────────────────────────────────────
+// the Hyperplane mark — exactly the admin console's (dashboard.jsx HyperplaneLogo; owner 2026-11-07: "the admin and customer logos must match"):
+// the plane in perspective, its normal vector w standing up from it, one class below and one above
 export function Logo({ size = 32 }) {
+  const id = "hpl" + size, small = size < 36;
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-      <defs><linearGradient id="lgb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#0d1b33"/><stop offset="1" stopColor="#070d1a"/></linearGradient>
-        <linearGradient id="lgp" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#22d3ee"/><stop offset="1" stopColor="#6366f1"/></linearGradient></defs>
-      <rect x="1.5" y="1.5" width="61" height="61" rx="16" fill="url(#lgb)" stroke="#1f3a5f" strokeWidth="1.5"/>
-      <path d="M7 37 L35 27 L57 34 L29 45 Z" fill="url(#lgp)" opacity=".9"/>
-      <line x1="32" y1="36" x2="32" y2="12" stroke="#e0f2fe" strokeWidth="3.6" strokeLinecap="round"/>
-      <path d="M26.5 17 L32 10 L37.5 17" fill="none" stroke="#e0f2fe" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round"/>
+    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="Hyperplane logo" style={{ flexShrink: 0, display: "block" }}>
+      <defs>
+        <linearGradient id={id + "bg"} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#0d1b33"/><stop offset="1" stopColor="#070d1a"/></linearGradient>
+        <linearGradient id={id + "pl"} x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#22d3ee" stopOpacity=".95"/><stop offset="1" stopColor="#6366f1" stopOpacity=".95"/></linearGradient>
+      </defs>
+      <rect x="1.5" y="1.5" width="61" height="61" rx="16" fill={`url(#${id}bg)`} stroke="#1f3a5f" strokeWidth="1.5"/>
+      <circle cx="14" cy="47" r={small ? 3.4 : 3} fill="#6366f1"/>
+      {!small && <circle cx="22" cy="53" r="2.6" fill="#6366f1" opacity=".8"/>}
+      <path d="M7 37 L35 27 L57 34 L29 45 Z" fill={`url(#${id}pl)`} opacity=".9"/>
+      <path d="M7 37 L35 27 L57 34 L29 45 Z" fill="none" stroke="#a5f3fc" strokeOpacity=".7" strokeWidth="1.2" strokeLinejoin="round"/>
+      <line x1="32" y1="36" x2="32" y2="12" stroke="#e0f2fe" strokeWidth="3.4" strokeLinecap="round"/>
+      <path d="M26.5 17 L32 10 L37.5 17" fill="none" stroke="#e0f2fe" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"/>
+      <circle cx="32" cy="36" r="2.6" fill="#070d1a" stroke="#e0f2fe" strokeWidth="1.8"/>
+      <circle cx="49" cy="17" r={small ? 3.4 : 3} fill="#22d3ee"/>
+      {!small && <circle cx="43" cy="11" r="2.6" fill="#22d3ee" opacity=".8"/>}
     </svg>
   );
 }
@@ -287,7 +326,36 @@ export const APP_ICON = {
   simple: <NavSvg><path d="M12 3l1.9 4.9L19 9.8l-5.1 1.9L12 16.6l-1.9-4.9L5 9.8l5.1-1.9z"/><path d="M19 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></NavSvg>,
   portfolio: <NavSvg><path d="M21.2 15.9A10 10 0 1 1 8.1 2.8"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></NavSvg>,
   builder: <NavSvg><rect x="3" y="13" width="5" height="8" rx="1"/><rect x="9.5" y="8" width="5" height="13" rx="1"/><rect x="16" y="3" width="5" height="18" rx="1"/><path d="M5.5 9.5 12 4l2.5 2"/></NavSvg>,
+  // AI ETF SIP Builder (owner 2026-11-07: "change the icon"): Lucide "piggy-bank" — steady saving, the safe way
+  sip: <NavSvg><ellipse cx="8" cy="6" rx="5.5" ry="2.3"/><path d="M2.5 6v3.6c0 1.3 2.5 2.3 5.5 2.3s5.5-1 5.5-2.3V6"/><path d="M2.5 9.6v3.6c0 1.3 2.5 2.3 5.5 2.3"/><path d="M2.5 13.2v3.6c0 1.3 2.5 2.3 5.5 2.3"/><path d="m12 19 3.2-3.4 2.4 2.2 4-4.6"/><path d="M18.6 13.2h3v3"/></NavSvg>,
+  // AI Momentum SIP (2026-11-06): Lucide "trending-up"
+  msip: <NavSvg><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></NavSvg>,
+  // ETF analyser (2026-11-06): Lucide "coins"
+  etf: <NavSvg><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></NavSvg>,
 };
+// Addresses (owner 2026-11-07: "don't keep all apps a monolith — every app its own /application-name; the portfolio ID part of the
+// address"): /app/<app-name> for each application, /app/<app-name>/portfolio/<ID> for one of the customer's own saved portfolios (signed
+// in), /app/portfolio/<ID> for the PUBLIC page of a shared one (no sign-in, no app shell — main.jsx / public.jsx), /app/docs, /app/helpdesk.
+// The server already sends /app/* to the page (Caddyfile try_files).
+export const APP_SLUG = { simple: "ai-mode", research: "deep-research", portfolio: "portfolio-analyser", builder: "portfolio-builder",
+  etf: "etf-analyser", sip: "etf-sip-builder", msip: "momentum-sip-builder" };
+const SLUG_APP = Object.fromEntries(Object.entries(APP_SLUG).map(([k, v]) => [v, k]));
+export const routeOf = (p = window.location.pathname) => {
+  const seg = p.replace(/^\/app\/?/, "").split("/").filter(Boolean);
+  if (seg[0] === "portfolio" && seg[1]) return { public: decodeURIComponent(seg[1]).toUpperCase() };
+  if (SLUG_APP[seg[0]] && seg[1] === "portfolio" && seg[2]) return { app: SLUG_APP[seg[0]], code: decodeURIComponent(seg[2]).toUpperCase() };
+  if (seg[0] === "docs") return { view: "guide" };
+  if (seg[0] === "helpdesk") return { view: "helpdesk" };
+  return { app: SLUG_APP[seg[0]] || null };
+};
+export const portfolioUrl = code => `${window.location.origin}/app/portfolio/${code}`;
+// go to an address inside the app (a new history step unless replace); everyone listening to "hp-route" follows it
+export function goPath(path, replace = false) {
+  if (window.location.pathname === path) return;
+  try { window.history[replace ? "replaceState" : "pushState"](null, "", path); } catch { /* ignore */ }
+  window.dispatchEvent(new CustomEvent("hp-route"));
+}
+
 export const AppIcon = ({ k }) => APP_ICON[k] || <NavSvg><rect x="4" y="4" width="16" height="16" rx="3"/></NavSvg>;
 export const CollapseIcon = () => <NavSvg size={17}><path d="M11 17l-5-5 5-5"/><path d="M18 17l-5-5 5-5"/></NavSvg>;
 export const MenuIcon = () => <NavSvg size={20}><path d="M4 7h16M4 12h16M4 17h16"/></NavSvg>;
@@ -345,8 +413,71 @@ export function CopyBtns({ syms, compact }) {
   );
 }
 
+// Branded page header (owner, 2026-11-06: "that branding look at the top is good — bring the same UI for all the pages").
+// One compact band on every application: AI eyebrow, one title line (+ accent words and an ⓘ for any explanation),
+// one short subline, and a right-hand slot for actions / data freshness.
+// the page header of every application (owner 2026-11-06: "all pages in one format … no empty space in the stripe"):
+// ONE line — the Hyperplane AI eyebrow, the title, the sub text, and tabs / actions on the right; the date is in the top bar
+export function BrandBand({ product, title, accent, sub, info, right, id, className = "" }) {
+  return (
+    <section className={`hp-band ${className}`} id={id}>
+      <div className="hp-band-l">
+        <span className="px-eyebrow hp-band-eb"><AiSpark/> Hyperplane AI · {product}</span>
+        <h1>{title}{accent && <> <span>{accent}</span></>}{info && <Info wide text={info}/>}</h1>{sub && <p>{sub}</p>}
+      </div>
+      {right && <div className="hp-band-r">{right}</div>}
+    </section>);
+}
+
+// one table format (owner 2026-11-06): the accordion group row of the AI Portfolio Builder table, for every app's tables
+export function GroupRow({ cols, open, onToggle, color, label, meta, id }) {
+  return (
+    <tr className="hp-grp"><td colSpan={cols}>
+      <button type="button" className="hp-gbtn" aria-expanded={open} onClick={onToggle} id={id}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+        {color && <i style={{ background: color }}/>}<span>{label}</span><span className="hp-gmeta">{meta}</span>
+        <span className="hp-ghint">{open ? "Hide" : "Show"}</span></button></td></tr>);
+}
+
+// a short confirmation at the bottom of the screen (swaps, saves) — goes away by itself
+// A part of the app loaded on demand (an app, a PDF report). After an update the old file names are gone, so a page
+// opened before it cannot load them (owner: "Download report is not working"): try again once, then load the new
+// version of the page once — never a silent failure.
+export function loadChunk(fn) {
+  return fn().catch(() => new Promise(r => setTimeout(r, 700)).then(fn)).catch(() => {
+    try {
+      if (!sessionStorage.getItem("hp_reloaded")) { sessionStorage.setItem("hp_reloaded", "1"); window.location.reload(); return new Promise(() => {}); }
+    } catch { /* ignore */ }
+    throw new Error("Hyperplane was just updated. Reload the page and try again.");
+  });
+}
+
+export function useToast() {
+  const [t, setT] = useState(null);
+  useEffect(() => { if (!t) return undefined; const k = setTimeout(() => setT(null), 2600); return () => clearTimeout(k); }, [t]);
+  return [t ? <div className="hp-toast" role="status"><Icon name="check" size={14}/>{t}</div> : null, setT];
+}
+
+// "DATA AS OF" in the top bar for every application: an app that loads its own data reports its date here
+export const AsOfCtx = React.createContext(null);
+export function useAsOf(app, asOf) {
+  const set = React.useContext(AsOfCtx);
+  useEffect(() => { if (set && asOf) set(app, asOf); }, [asOf]);
+}
+
+// the pop-up opens under the icon; one that would run past the edge of the screen (a narrow window) is moved back inside
+const keepInside = e => {
+  const pop = e.currentTarget.querySelector(".info-pop"); if (!pop) return;
+  pop.style.transform = "";
+  requestAnimationFrame(() => {
+    const r = pop.getBoundingClientRect(), m = 12; let dx = 0;
+    if (r.right > window.innerWidth - m) dx = window.innerWidth - m - r.right;
+    if (r.left + dx < m) dx = m - r.left;
+    if (dx) pop.style.transform = `translateX(${Math.round(dx)}px)`;
+  });
+};
 export function Info({ text, right, wide, label, above }) {
-  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} aria-label={label || (typeof text === "string" ? text : "More info")}><Icon name="info" size={14}/><span className={`info-pop ${right ? "r" : ""} ${wide ? "wide" : ""} ${above ? "above" : ""}`}>{text}</span></span>;
+  return <span className="info" tabIndex={0} onClick={e => e.stopPropagation()} onMouseEnter={keepInside} onFocus={keepInside} aria-label={label || (typeof text === "string" ? text : "More info")}><Icon name="info" size={14}/><span className={`info-pop ${right ? "r" : ""} ${wide ? "wide" : ""} ${above ? "above" : ""}`}>{text}</span></span>;
 }
 
 // Trading-mode ⓘ: how much each timeframe counts in each mode (the active one highlighted, top weights in bold)
@@ -429,7 +560,7 @@ export function TrendGauge({ v, size = 180, caption = true }) {
   );
 }
 
-// ─── Overall trend meter — the SAME component in the Simplified view and the Research stock card ───
+// ─── Overall trend meter — the SAME component in AI Mode and the Research stock card ───
 // Overall trend (owner, 2026-10-11): stock 50 % · sector 25 % · industry 25 %. The stock is −100…+100; sector and industry
 // strength go on the same scale (50% = neutral → (st − 50) × 2). A missing part's weight goes to the others.
 export function overallOf(os, secA, indA) {
@@ -472,7 +603,7 @@ export function StockSearch({ stocks, onPick, autoFocus, onClear = null, placeho
     <div className={`sv-search ${onClear ? "has-x" : ""}`} ref={ref}>
       <span className="sv-mag" aria-hidden="true"><Icon name="search" size={16}/></span>
       {onClear && <button type="button" className="sv-x" onClick={onClear} title="Clear this stock and search again" aria-label="Clear this stock"><Icon name="x" size={16}/></button>}
-      <span className="sv-qai" title="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as the Research view. It does not use any outside AI service, and it never makes up a number."><AiSpark/>Hyperplane AI</span>
+      <span className="sv-qai" title="Hyperplane AI is built on Hyperplane's own quant algorithms: fixed rules applied to our trend data — the same numbers as Deep Research. It does not use any outside AI service, and it never makes up a number."><AiSpark/>Hyperplane AI</span>
       <input value={q} autoFocus={autoFocus} placeholder={placeholder || "Ask Hyperplane AI — type a company name or ticker (e.g. Tata, INFY)"} aria-label="Search a stock"
         onChange={e => { setQ(e.target.value); setHi(0); setOpen(true); }} onFocus={() => setOpen(true)}
         onKeyDown={e => { if (e.key === "ArrowDown") { e.preventDefault(); setHi(i => Math.min(i + 1, found.length - 1)); }

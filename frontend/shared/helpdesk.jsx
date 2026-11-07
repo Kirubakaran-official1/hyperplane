@@ -106,7 +106,8 @@ const RichBox = forwardRef(function RichBox({ placeholder, minHeight = 160, onEr
     }
     sync();
   };
-  useImperativeHandle(ref, () => ({ blocks: () => toBlocks(el.current), clear: () => { el.current.innerHTML = ""; sync(); }, addFiles, focus: () => el.current.focus() }));
+  useImperativeHandle(ref, () => ({ blocks: () => toBlocks(el.current), clear: () => { el.current.innerHTML = ""; sync(); }, addFiles, focus: () => el.current.focus(),
+    setText: t => { el.current.textContent = t; sync(); } }));
   const onPaste = e => {
     e.preventDefault();
     const files = [...(e.clipboardData.files || [])];
@@ -191,10 +192,14 @@ export function InboxBell({ unread, onOpen }) {
 }
 
 // ─── new query: written like an email ───
-function Compose({ api, base, onSent, onCancel }) {
+function Compose({ api, base, onSent, onCancel, templates = [], initial = null }) {
   const [subject, setSubject] = useState(""); const [sev, setSev] = useState("medium");
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
   const box = useRef(null);
+  // ready-made requests (customer app, 2026-11-03): one click fills the subject, severity and message — still editable
+  const [tpl, setTpl] = useState(null);
+  const pickTpl = t => { setTpl(t.key); setSubject(t.subject); setSev(t.severity); box.current.setText(t.body); setMsg(""); };
+  useEffect(() => { const t = templates.find(x => x.key === initial); if (t) pickTpl(t); }, []);
   const send = async () => {
     if (busy) return;
     const body = box.current.blocks();
@@ -207,8 +212,11 @@ function Compose({ api, base, onSent, onCancel }) {
   return (
     <div className="hd-compose">
       <div className="hd-compose-h"><span>New query</span><button type="button" className="hd-x" onClick={onCancel} aria-label="Discard"><HdIc n="x" size={16}/></button></div>
+      {templates.length > 0 && <div className="hd-field hd-tpl"><label>Requests</label>
+        <div className="hd-tpls">{templates.map(t => <button key={t.key} type="button" id={`hd-tpl-${t.key}`} className={tpl === t.key ? "on" : ""} onClick={() => pickTpl(t)}>{t.label}</button>)}</div>
+      </div>}
       <div className="hd-field"><label>To</label><span className="hd-to"><span className="hd-to-av">Q</span>QuantFriday Helpdesk</span></div>
-      <div className="hd-field"><label htmlFor="hd-subj">Subject</label><input id="hd-subj" maxLength={150} value={subject} onChange={e => setSubject(e.target.value)} placeholder="A short summary of your query" autoFocus /></div>
+      <div className="hd-field"><label htmlFor="hd-subj">Subject</label><input id="hd-subj" maxLength={150} value={subject} onChange={e => setSubject(e.target.value)} placeholder="A short summary of your query" autoFocus={!initial} /></div>
       <div className="hd-field"><label>Severity</label>
         <div className="hd-sev" role="radiogroup">{Object.entries(SEV).map(([k, [l, c]]) => (
           <button key={k} type="button" role="radio" aria-checked={sev === k} className={sev === k ? "on" : ""} style={sev === k ? { borderColor: c, color: c, background: c + "1a" } : null} onClick={() => setSev(k)}>
@@ -323,7 +331,7 @@ function Thread({ api, base, id, staff, onChanged, onBack, onNew }) {
 }
 
 // ─── the whole helpdesk page: inbox on the left, compose / conversation on the right ───
-export function Helpdesk({ api, base, staff = false, openReq = null, onChanged = () => {} }) {
+export function Helpdesk({ api, base, staff = false, openReq = null, onChanged = () => {}, templates = [] }) {
   const [status, setStatus] = useState("open");
   const [data, setData] = useState(null); const [err, setErr] = useState("");
   const [sel, setSel] = useState(null);                       // ticket id | "new" | null
@@ -334,7 +342,9 @@ export function Helpdesk({ api, base, staff = false, openReq = null, onChanged =
     try { setData(await call(`${base}/tickets?status=${status}`)); setErr(""); } catch (e) { setErr(e.message); }
   }, [call, base, status]);
   useEffect(() => { load(); const t = setInterval(() => document.visibilityState === "visible" && load(), 20000); return () => clearInterval(t); }, [load]);
-  useEffect(() => { if (openReq) setSel(openReq.id || null); }, [openReq]);
+  const [tpl0, setTpl0] = useState(null);                       // ready-made request to open New query with
+  useEffect(() => { if (openReq) { setTpl0(openReq.tpl || null); setSel(openReq.id || null); } }, [openReq]);
+  const newQuery = () => { setTpl0(null); setSel("new"); };
   const changed = useCallback(() => { load(); onChanged(); }, [load, onChanged]);
 
   const list = (data ? data.tickets : []).filter(t =>
@@ -349,7 +359,7 @@ export function Helpdesk({ api, base, staff = false, openReq = null, onChanged =
         <div className="hd-list-h">
           <div><div className="hd-title">{staff ? "Helpdesk inbox" : "My queries"}</div>
             <div className="hd-sub">{staff ? "Every query from customers and users" : "Ask QuantFriday anything — we reply here"}{unreadTotal ? ` · ${unreadTotal} new` : ""}</div></div>
-          {!staff && <button type="button" className="hd-btn primary" onClick={() => setSel("new")}><HdIc n="pencil"/> New query</button>}
+          {!staff && <button type="button" className="hd-btn primary" onClick={newQuery}><HdIc n="pencil"/> New query</button>}
         </div>
         <div className="hd-tabs">
           {[["open", "Open", counts.open || 0], ["closed", "Closed", counts.closed || 0], ["all", "All", (counts.open || 0) + (counts.closed || 0)]].map(([k, l, n]) => (
@@ -365,7 +375,7 @@ export function Helpdesk({ api, base, staff = false, openReq = null, onChanged =
         <div className="hd-items">
           {err && <div className="hd-err pad">{err}</div>}
           {!data && !err && <div className="hd-none">Loading…</div>}
-          {data && !list.length && <div className="hd-none">{status === "open" ? "No open queries." : status === "closed" ? "No closed queries." : "No queries yet."}{!staff && status !== "closed" && <><br /><button type="button" className="hd-link" onClick={() => setSel("new")}>Raise your first query</button></>}</div>}
+          {data && !list.length && <div className="hd-none">{status === "open" ? "No open queries." : status === "closed" ? "No closed queries." : "No queries yet."}{!staff && status !== "closed" && <><br /><button type="button" className="hd-link" onClick={newQuery}>Raise your first query</button></>}</div>}
           {list.map(t => (
             <button key={t.id} type="button" className={`hd-item ${sel === t.id ? "on" : ""} ${t.unread ? "unread" : ""}`} onClick={() => setSel(t.id)}>
               <div className="r1"><span className="sevbar" style={{ background: SEV[t.severity][1] }} /><span className="subj">{t.subject}</span>{t.unread > 0 && <span className="hd-badge">{t.unread}</span>}</div>
@@ -376,13 +386,13 @@ export function Helpdesk({ api, base, staff = false, openReq = null, onChanged =
         </div>
       </aside>
       <section className="hd-main">
-        {sel === "new" ? <Compose api={call} base={base} onSent={id => { setStatus("open"); setSel(id); changed(); }} onCancel={() => setSel(null)} />
-          : sel ? <Thread key={sel} api={call} base={base} id={sel} staff={staff} onChanged={changed} onBack={() => setSel(null)} onNew={() => setSel("new")} />
+        {sel === "new" ? <Compose key={tpl0 || "blank"} api={call} base={base} templates={staff ? [] : templates} initial={tpl0} onSent={id => { setStatus("open"); setSel(id); changed(); }} onCancel={() => setSel(null)} />
+          : sel ? <Thread key={sel} api={call} base={base} id={sel} staff={staff} onChanged={changed} onBack={() => setSel(null)} onNew={newQuery} />
           : <div className="hd-empty">
               <div className="hd-empty-ic"><HdIc n="mail" size={32}/></div>
               <b>{staff ? "Pick a query to read and reply" : "Pick a query, or raise a new one"}</b>
               <span>{staff ? <>New messages show a badge here and on the <HdIc n="bell" size={12}/> bell.</> : <>Our replies show up here and on the <HdIc n="bell" size={12}/> bell at the top.</>}</span>
-              {!staff && <button type="button" className="hd-btn primary" onClick={() => setSel("new")}><HdIc n="pencil"/> New query</button>}
+              {!staff && <button type="button" className="hd-btn primary" onClick={newQuery}><HdIc n="pencil"/> New query</button>}
             </div>}
       </section>
     </div>
@@ -433,6 +443,9 @@ export const HD_CSS = `
 .hd-field input{border:0;background:none;padding:4px 0;font-size:14px;flex:1;outline:none!important}
 .hd-to{display:inline-flex;align-items:center;gap:7px;padding:3px 10px 3px 3px;border-radius:999px;background:var(--s2);border:1px solid var(--b2);font-size:12.5px}
 .hd-to-av{width:20px;height:20px;border-radius:50%;background:var(--acc);color:var(--on-acc,#04121a);font:800 11px/20px var(--mono);text-align:center}
+.hd-tpls{display:flex;gap:6px;flex-wrap:wrap;flex:1;min-width:0}
+.hd-tpls button{padding:5px 12px;border-radius:999px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.hd-tpls button:hover{border-color:var(--acc);color:var(--t1)}.hd-tpls button.on{border-color:var(--acc);color:var(--acc);background:var(--adim)}
 .hd-sev{display:flex;gap:6px}.hd-sev button{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;border:1px solid var(--b2);background:var(--s2);color:var(--t2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
 .hd-sev .dot{width:7px;height:7px;border-radius:50%}.hd-sev-help{font-size:11px;color:var(--t3)}
 .hd-compose-body{flex:1;overflow-y:auto;min-height:0;padding:4px 14px}

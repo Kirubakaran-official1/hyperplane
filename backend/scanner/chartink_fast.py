@@ -33,6 +33,12 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from collections import defaultdict
+try:                                                     # the funds & indices wall (shared with publish.py)
+    from scanner.funds import is_fund_or_index, is_tradable_etf
+    from scanner.stability import HIGH_SCORE, facts_of, max_fall, stability, weakest
+except ImportError:  # pragma: no cover — run as a plain script from this folder
+    from funds import is_fund_or_index, is_tradable_etf
+    from stability import HIGH_SCORE, facts_of, max_fall, stability, weakest
 
 # Browser / Telegram libraries are only needed for live scraping and sending.
 # They are imported softly so "--offline" recalculation works without them.
@@ -94,6 +100,15 @@ RAW_DATA_URLS = {
 }
 OPTIONAL_RAW_TABLES = {'technicals'}   # if one of these fails to load, the run continues without it
 exclude_words = ['liquid', 'etf', 'nifty', 'bees']   # symbols containing these are skipped
+# Funds & indices wall (owner, 2026-11-06): every fund / index is split off right after the raw tables are read
+# (attempt_scraping); the stock pipeline below never sees one. The ETF pass runs the same builders on the tradable ETFs
+# with the word skip lifted (GOLDBEES, NIFTYBEES … contain 'bees' / 'nifty'). Admin lists set by the worker:
+FUND_ADD, FUND_KEEP = set(), set()                  # Admin → settings → Indices & ETFs (always a fund / always a stock)
+_skip_words = exclude_words                         # what the builders skip; the ETF pass narrows it
+
+
+def _skipped(sym):
+    return any(w in sym.lower() for w in _skip_words)
 
 # ---------------------------------------------------------------- NR (mother candle) --
 #   1. mother candle = the candle N bars ago:
@@ -129,6 +144,8 @@ NR_NEAR_RATIO = 1.9 / 2         # near-high: close >= high * 0.95   |   near-low
 #   Run_Up_From_3Y_Low_X   = current price ÷ lowest low of the last 3 years (+ this year)
 #   POOR    : price is more than HEALTH_POOR_DRAWDOWN_PCT % below its peak            (e.g. IDEA / VI, YESBANK)
 #   WEAK    : more than HEALTH_WEAK_DRAWDOWN_PCT % below its peak, OR lower than HEALTH_WEAK_YEARS years ago
+#   v3 (2026-11-06): HEALTHY / WEAK from the stability score (stability.py, >= HIGH_SCORE = High); a score below
+#             LOW_SCORE is POOR too. Old collections without candles keep the rule above.
 #   HEALTHY : everything else
 # This is the ORIGINAL rule again (owner, 2026-10-13: the stricter crash / round-trip / run-up / stretched rules of
 # 2026-10-04 put too many stocks in Moderate). Worst crash, run-ups and Stretched are still written as information;
@@ -140,20 +157,33 @@ HEALTH_WEAK_YEARS = 5
 # Stretched: price ÷ lowest monthly low of the last 12 months (owner's STLTECH example 2026-10-10: ~100 → ~1,000 in a
 # year). Only the Stretched flag (customer 🔥 tag / "Overextended" verdict) — it no longer lowers the Health level.
 HEALTH_STRETCH_WEAK_X = 3        # ≥ 3x in a year  → Stretched = Yes
+# Reliability v3 (owner, 2026-11-06: RATNAVEER (fell 58 % a year ago, listed ~3 years, 2.7x in a year) was "High"
+# and went into a monthly SIP: "keep the reliability more strong, check all the history, use the zones and levels,
+# multiple strategies, but don't move every slightly deviated stock to Medium"). High / Medium come from the stability
+# score (stability.py: recent falls, past crashes, distance from the peak, consistency, rise speed, zones); Low stays
+# the hard rule below (far below its peak) or a very low score.
+LOW_SCORE = 30                   # below this stability score = Low as well
 
 
-def health_status(dd, r_old, peak=None, peak_bar=None):
-    """Price health from the drawdown from the peak (%) and the return vs HEALTH_WEAK_YEARS years ago (%)."""
+def health_status(dd, r_old, peak=None, peak_bar=None, score=None, parts=None, facts=None):
+    """Price health: Low = far below the peak (hard rule) or a very low stability score; otherwise High / Medium from
+    the stability score (stability.py). Without candles (old collections) the original drawdown / 5-year rule."""
     if dd is not None and dd <= -HEALTH_POOR_DRAWDOWN_PCT:
         pb = int(peak_bar) if peak_bar is not None else 0
         pk = f" of {peak:,.2f}" if peak is not None else ""
         return 'POOR', [f"{-dd:.0f}% below its {pb}-year-ago peak{pk}" if pb else f"{-dd:.0f}% below this year's peak{pk}"]
+    if score is not None:
+        why = weakest(parts or {}, facts)
+        if score < LOW_SCORE:
+            return 'POOR', why or ["very unsteady price history"]
+        return ('HEALTHY', []) if score >= HIGH_SCORE else ('WEAK', why or ["a less steady record"])
     reasons = []
     if dd is not None and dd <= -HEALTH_WEAK_DRAWDOWN_PCT:
         reasons.append(f"{-dd:.0f}% below its peak" + (f" of {peak:,.2f}" if peak is not None else ""))
     if r_old is not None and r_old < 0:
         reasons.append(f"lower than {HEALTH_WEAK_YEARS} years ago ({r_old:.0f}%)")
     return ('WEAK' if reasons else 'HEALTHY'), reasons
+
 
 # ---------------------------------------------------------------- FAILED NR / TRAP (Failed_NR sheet) --
 #   Same mother candle as NR (NR_MOTHER_BODY_PCT), then:
@@ -1995,7 +2025,7 @@ def compute_all_signals(frame, category_stocks=None):
     """
     x = _Ctx(frame, category_stocks)
     symbols = frame['symbol'].tolist()
-    excluded = np.array([any(w in s.lower() for w in exclude_words) for s in symbols], dtype=bool)
+    excluded = np.array([_skipped(s) for s in symbols], dtype=bool)
 
     zone_rules = _zone_rules()
     zone_masks, no_rule = {}, []
@@ -2563,6 +2593,15 @@ def _writable_filename(filename):
         return alt
 
 
+def nr_tf_type(nr_signal):
+    """(timeframe, pattern) of a mother-candle (NR) signal name, e.g. 'M_NR_6M_BO' → ('Monthly', 'Breakout')."""
+    tf = next((t for k, t in (('W', 'Weekly'), ('M', 'Monthly'), ('Q', 'Quarterly'), ('Y', 'Yearly'), ('D', 'Daily'))
+               if f'_{k}_' in nr_signal or nr_signal.startswith(f'{k}_')), 'Unknown')
+    kind = next((t for k, t in (('_BO', 'Breakout'), ('_HN', 'Near High'), ('_LW', 'Near Low'), ('_BD', 'Breakdown'),
+                                ('_B2NR', 'Back to NR')) if k in nr_signal), 'Unknown')
+    return tf, kind
+
+
 def save_excel_with_enhanced_sheets(combined_stock_map, detailed_output, zone_urls, nr_urls,
                                      stock_zone_signal_map, stock_nr_signal_map, category_stocks,
                                      sector_rows=None, industry_rows=None, nr_detail_rows=None,
@@ -2648,31 +2687,7 @@ def save_excel_with_enhanced_sheets(combined_stock_map, detailed_output, zone_ur
 
                 # NR signals
                 for nr_signal in nr_signals:
-                    if '_W_' in nr_signal or nr_signal.startswith('W_'):
-                        timeframe = 'Weekly'
-                    elif '_M_' in nr_signal or nr_signal.startswith('M_'):
-                        timeframe = 'Monthly'
-                    elif '_Q_' in nr_signal or nr_signal.startswith('Q_'):
-                        timeframe = 'Quarterly'
-                    elif '_Y_' in nr_signal or nr_signal.startswith('Y_'):
-                        timeframe = 'Yearly'
-                    elif '_D_' in nr_signal or nr_signal.startswith('D_'):
-                        timeframe = 'Daily'
-                    else:
-                        timeframe = 'Unknown'
-
-                    if '_BO' in nr_signal:
-                        pattern_type = 'Breakout'
-                    elif '_HN' in nr_signal:
-                        pattern_type = 'Near High'
-                    elif '_LW' in nr_signal:
-                        pattern_type = 'Near Low'
-                    elif '_BD' in nr_signal:
-                        pattern_type = 'Breakdown'
-                    elif '_B2NR' in nr_signal:
-                        pattern_type = 'Back to NR'
-                    else:
-                        pattern_type = 'Unknown'
+                    timeframe, pattern_type = nr_tf_type(nr_signal)
 
                     flat_data.append({
                         'Symbol': f"NSE:{ticker},",
@@ -3404,7 +3419,7 @@ def build_zone_level_rows(frame, master_stock_data, category_stocks):
     n500 = category_stocks.get('Nifty_500', set())
     rows = []
     for i, sym in enumerate(frame['symbol'].tolist()):
-        if any(w in sym.lower() for w in exclude_words):
+        if _skipped(sym):
             continue
         c = x.c[i]
         if np.isnan(c):
@@ -3461,7 +3476,7 @@ def build_zone_history_rows(frame):
     x = _Ctx(frame)
     rows = []
     for i, sym in enumerate(frame['symbol'].tolist()):
-        if any(w in sym.lower() for w in exclude_words) or np.isnan(x.c[i]):
+        if _skipped(sym) or np.isnan(x.c[i]):
             continue
         row, have = {'Symbol': sym}, False
         for tf in 'mqy':
@@ -3488,7 +3503,7 @@ def build_candle_rows(frame):
     mats = {tf: [x.ohlc_matrix(tf, f, CANDLE_BARS) for f in ('open', 'high', 'low', 'close')] for tf in 'mqy'}
     rows = []
     for i, sym in enumerate(frame['symbol'].tolist()):
-        if any(w in sym.lower() for w in exclude_words) or np.isnan(x.c[i]):
+        if _skipped(sym) or np.isnan(x.c[i]):
             continue
         row, have = {'Symbol': sym}, False
         for tf in 'mqy':
@@ -3576,6 +3591,7 @@ def build_price_health_rows(frame, zone_rows):
     L = x.ohlc_matrix('y', 'low')
     C = x.ohlc_matrix('y', 'close')
     ML = x.ohlc_matrix('m', 'low')          # this month + the last 12 months
+    QH, QL = x.ohlc_matrix('q', 'high'), x.ohlc_matrix('q', 'low')   # this quarter + the last 12 (≈ 3 years)
     idx = {sym: i for i, sym in enumerate(frame['symbol'].tolist())}
     out = []
     for z in zone_rows:
@@ -3614,7 +3630,12 @@ def build_price_health_rows(frame, zone_rows):
         crash_txt = (f"crashed {-crash:.0f}% ({crash_from:,.2f} → {crash_to:,.2f}, "
                      f"{'this year' if crash_bar == 0 else f'{crash_bar} year' + ('s' if crash_bar > 1 else '') + ' ago'})") if crash_bar is not None else ""
 
-        status, reasons = health_status(dd, r_old, peak, peak_bar)
+        zq = [(x.vzone('q', 'bottom', k)[i], x.vzone('q', 'top', k)[i]) for k in range(5)]
+        zy = [(x.vzone('y', 'bottom', k)[i], x.vzone('y', 'top', k)[i]) for k in range(5)]
+        score, parts, _ = stability(c, list(H[i]), list(L[i]), list(C[i]), list(QH[i]), list(QL[i]), run_1y, zq, zy)
+        facts = facts_of(c, list(H[i]), list(L[i]), list(QH[i]), list(QL[i]), run_1y)
+        fall3 = facts["fall3"]
+        status, reasons = health_status(dd, r_old, peak, peak_bar, score, parts, facts)
         out.append({
             'Symbol': z['Symbol'], 'Stock_Name': z['Stock_Name'], 'Sector': z['Sector'], 'Industry': z['Industry'],
             'Price': c, 'Health': status,
@@ -3622,7 +3643,8 @@ def build_price_health_rows(frame, zone_rows):
             'Drawdown_From_Peak_Pct': _r2(dd),
             f'Return_{HEALTH_WEAK_YEARS}Y_Pct': _r2(r_old), 'Return_3Y_Pct': _r2(r3),
             'Worst_Crash_Pct': _r2(crash) if crash_bar is not None else None, 'Worst_Crash_Years_Ago': crash_bar,
-            'Run_Up_From_3Y_Low_X': _r2(run_up), 'Run_Up_1Y_X': _r2(run_1y),
+            'Run_Up_From_3Y_Low_X': _r2(run_up), 'Run_Up_1Y_X': _r2(run_1y), 'Max_Fall_3Y_Pct': _r2(fall3),
+            'Stability_Score': score,
             'Stretched': 'Yes' if run_1y is not None and run_1y >= HEALTH_STRETCH_WEAK_X else 'No',
             'Years_Of_History': years,
             'Reason': '; '.join(reasons) if reasons else 'price holds up well against its history',
@@ -3800,6 +3822,88 @@ def append_extra_sheets(filename, frame, master_stock_data, category_stocks):
 # ============================================================================
 #   MAIN FLOW  (fast version)
 # ============================================================================
+# ---------------------------------------------------------------- FUNDS & INDICES WALL + ETF PASS --
+# Owner, 2026-11-06. See funds.py. split_funds() runs right after the raw tables are read; build_etf_bundle() runs the
+# SAME calculations on the tradable ETFs and writes etf_data_<stamp>.json next to the Excel (never into the Excel,
+# never to Telegram). The worker stores that file for the ETF analyser (backend/app/etf.py).
+ETF_SKIP_WORDS = []              # the ETF pass skips nothing by name; debt / cash-like funds are dropped by is_tradable_etf
+_VOL_KEYS = ('Volume', 'Weekly_Volume', 'Weekly_Volume_1', 'Weekly_Volume_2', 'Weekly_Volume_3', 'Weekly_Volume_4')
+
+
+def _pos_num(v):
+    try:
+        f = float(str(v).replace(',', ''))
+        return f if f == f and f > 0 else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def split_funds(frame, master_stock_data):
+    """Every fund / index symbol (frame + master), by the shared rule and the admin lists."""
+    names = dict(zip(frame['symbol'], frame['stock_name'])) if 'stock_name' in frame.columns else {}
+    secs = dict(zip(frame['symbol'], frame['sector'])) if 'sector' in frame.columns else {}
+    out = set()
+    for sym in set(frame['symbol'].tolist()) | set(master_stock_data):
+        rec = master_stock_data.get(sym, {})
+        sector = rec.get('Sector') or (secs.get(sym) if isinstance(secs.get(sym), str) else '')
+        name = rec.get('Stock_Name') or (names.get(sym) if isinstance(names.get(sym), str) else '')
+        if is_fund_or_index(sym, sector, name, FUND_ADD, FUND_KEEP):
+            out.add(sym)
+    return out
+
+
+def nr_flat_rows(nr_map):
+    """The mother-candle rows of Flat_Data_For_Slicers (only the fields zone_engine.nr_map reads)."""
+    rows = []
+    for sym, names in nr_map.items():
+        for name in names:
+            tf, kind = nr_tf_type(name)
+            rows.append({'Symbol': f"NSE:{sym},", 'Signal_Name': name, 'Signal_Category': 'NR_PATTERN',
+                         'Signal_Type': kind, 'Timeframe': tf})
+    return rows
+
+
+def build_etf_bundle(etf_frame, etf_master):
+    """The ETF analyser's data: the same sheets as a collection, for the tradable ETFs only."""
+    global _skip_words
+    vol = dict(zip(etf_frame['symbol'], etf_frame['volume'])) if 'volume' in etf_frame.columns else {}
+    names = dict(zip(etf_frame['symbol'], etf_frame['stock_name'])) if 'stock_name' in etf_frame.columns else {}
+    keep = []
+    for sym in etf_frame['symbol'].tolist():
+        rec = etf_master.get(sym, {})
+        name = rec.get('Stock_Name') or (names.get(sym) if isinstance(names.get(sym), str) else '') or ''
+        traded = any(_pos_num(rec.get(k)) for k in _VOL_KEYS) or _pos_num(vol.get(sym))
+        if is_tradable_etf(sym, name, traded):
+            keep.append(sym)
+    f = etf_frame[etf_frame['symbol'].isin(keep)].reset_index(drop=True)
+    if f.empty:
+        return {}
+    old, _skip_words = _skip_words, ETF_SKIP_WORDS
+    try:
+        _, nr_map = compute_all_signals(f, {})
+        zone_rows = build_zone_level_rows(f, etf_master, {})
+        return {'Master_Stock_Data': [etf_master[s] for s in keep if s in etf_master],
+                'Zone_Levels': zone_rows,
+                'Zone_History': build_zone_history_rows(f),
+                'Price_Health': build_price_health_rows(f, zone_rows),
+                'Technicals': build_technical_rows(f, zone_rows),
+                'Flat_Data_For_Slicers': nr_flat_rows(nr_map)}
+    finally:
+        _skip_words = old
+
+
+def save_etf_bundle(bundle, excel_filename):
+    """etf_data_<stamp>.json beside the Excel (same stamp) — never inside the Excel."""
+    if not bundle:
+        return None
+    base = os.path.basename(excel_filename)
+    name = base.replace('detailed_signals_', 'etf_data_', 1).rsplit('.', 1)[0] + '.json'         if base.startswith('detailed_signals_') else f"etf_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    path = os.path.join(os.path.dirname(excel_filename), name)
+    with open(path, 'w', encoding='utf-8') as fh:
+        json.dump(bundle, fh, ensure_ascii=False, separators=(',', ':'), default=lambda v: None)
+    return path
+
+
 def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegram=True,
                      validate=False, validate_only='all', validate_limit=None, validate_filter=None):
     """One full run: 4 raw tables (+ index lists + master) -> calculate -> same Excel -> Telegram"""
@@ -3861,6 +3965,16 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         if not offline_dir and SAVE_RAW_SNAPSHOT:
             save_snapshot_extras(snapshot_dir, category_stocks, master_stock_records)
 
+        current_step = "Separating ETFs and indices"           # the wall: stocks only from here on (see funds.py)
+        funds = split_funds(frame, master_stock_data)
+        etf_frame = frame[frame['symbol'].isin(funds)].reset_index(drop=True)
+        etf_master = {k: v for k, v in master_stock_data.items() if k in funds}
+        frame = frame[~frame['symbol'].isin(funds)].reset_index(drop=True)
+        master_stock_records = [r for r in master_stock_records if r.get('Symbol') not in funds]
+        master_stock_data = {r['Symbol']: r for r in master_stock_records}
+        category_stocks = {k: set(v) - funds for k, v in category_stocks.items()}
+        print(f"  • Funds & indices kept apart: {len(funds)} (stocks: {len(frame)})")
+
         current_step = "Calculating signals"
         stock_zone_signal_map, stock_nr_signal_map = compute_all_signals(frame, category_stocks)
         print(f"⏱ Calculation: {time.time() - t1:.1f}s")
@@ -3916,6 +4030,15 @@ def attempt_scraping(attempt_num, credentials, offline_dir=None, send_to_telegra
         )
         if not filename:
             raise Exception("Failed to generate Excel file")
+
+        current_step = "ETF analyser data"
+        try:                                                    # never fails the collection
+            bundle = build_etf_bundle(etf_frame, etf_master)
+            etf_path = save_etf_bundle(bundle, filename)
+            print(f"  • ETF analyser: {len(bundle.get('Zone_Levels', []))} tradable ETFs → {os.path.basename(etf_path)}"
+                  if etf_path else "  • ETF analyser: no tradable ETFs this run")
+        except Exception as e:  # noqa: BLE001
+            print(f"  ⚠ ETF analyser data not built: {e}")
 
         if validate:
             current_step = "Validating against original screeners"

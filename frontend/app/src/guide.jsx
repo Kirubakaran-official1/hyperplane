@@ -1,7 +1,7 @@
 // Docs tab of the customer edition (file kept as guide.jsx): how to use Hyperplane and how to think with it, in plain words.
 // It explains what every part MEANS — never how anything is calculated (the method stays private).
 import React, { useEffect, useRef, useState } from "react";
-import { Icon } from "./core.jsx";
+import { BrandBand, Icon } from "./core.jsx";
 import { addCss } from "./core.jsx";
 
 const Bars = ({ v, d = "up" }) => {
@@ -33,8 +33,8 @@ const ALL_SECTIONS = [
   { id: "welcome", t: "Welcome", body: <>
     <p><b>Hyperplane</b> shows you, in one screen, <b>which way Indian stocks are trending and how strong that trend is</b> — stock by
       stock, and also for every <b>sector</b> and <b>industry</b>. It helps you find good candidates quickly and avoid weak ones.</p>
-    <p><b>The side menu on the left</b> lists the applications on your plan — <b>Research view</b> (the Control Tower: filters, summary
-      tiles, sector and industry charts and the full stock list), <b>Simplified view (AI Mode)</b> and <b>AI Portfolio Analyser</b> — and,
+    <p><b>The side menu on the left</b> lists the applications on your plan — <b>Deep Research</b> (the Control Tower: filters, summary
+      tiles, sector and industry charts and the full stock list), <b>AI Mode</b> and <b>AI Portfolio Analyser</b> — and,
       below them, <b>Docs</b> and <b>Helpdesk</b>. It starts narrow — each icon with its name underneath. Press <b><Icon name="menu" size={14} title="menu"/></b> at the top of the
       menu to open it wider, and <b>«</b> to make it narrow again. Your choice is remembered on this device. The menu shows up to
       <b> 6 pinned apps</b>; <b>More apps</b> at the bottom lists every app on your plan — search them, open one, or press the pin to put it
@@ -102,7 +102,7 @@ const ALL_SECTIONS = [
     </div>
     <p>Next to the regime, Hyperplane also tells you what it means for the stock itself. For example, "the stock is falling
       along with it, stay away until the regime turns up", or "the stock is still rising, but this rise may not last, protect
-      your gains". The Research view shows every stock's regime in the <b>Regime</b> column, with a filter above the stock list.</p>
+      your gains". The Deep Research shows every stock's regime in the <b>Regime</b> column, with a filter above the stock list.</p>
     <h3>Timeframes — how far you are looking</h3>
     <table className="g-table"><tbody>
       <tr><td><b>Daily</b></td><td>Short term — the last days to a few weeks. For short-term traders.</td></tr>
@@ -114,9 +114,9 @@ const ALL_SECTIONS = [
         Swing: Monthly &amp; Quarterly count most (D 10 · W 20 · M 30 · Q 30 · Y 10 %) · Investing: Quarterly &amp; Yearly count most (D 0 · W 5 · M 15 · Q 40 · Y 40 %).</td></tr>
     </tbody></table>
     <h3>Stock reliability</h3>
-    <p>How healthy the stock's longer-term price history is. <b>Strong</b> = healthy, <b>Moderate</b> = the price is more than
-      50% below its highest level, or lower than 5 years ago, <b>Weak</b> = more than 70% below its highest level (a huge fall,
-      e.g. Vodafone Idea). Prefer <b>Strong</b>.</p>
+    <p>How steady the stock's whole price history is, as a 0–100 stability score: how deep and how recently it fell, how close it
+      stays to its peak, how calmly it rises, how fast it ran up and whether its price zones keep stepping up. <b>High</b> = 58 and above,
+      <b>Medium</b> = 30 to 57, <b>Low</b> = below 30, or it once fell more than 70% (a huge fall, e.g. Vodafone Idea). Prefer <b>High</b>.</p>
     <p><b><Icon name="flame" size={14}/> Stretched</b> — the stock has run up <b>3× or more in about a year</b> (for example ₹100 → ₹1,000). A big winner,
       but prices this stretched often fall back sharply. It is shown with a <Icon name="flame" size={14} title="flame"/> and is never called a “best case” —
       <b>don't chase it</b>; wait for it to cool down.</p>
@@ -210,7 +210,7 @@ const ALL_SECTIONS = [
     <ul>
       <li><b>Header</b> — name, sector › industry, size, F&amp;O, <b>stock reliability</b>, price and today's change, and
         <b> Copy &lt;symbol&gt;</b> to copy just this stock.</li>
-      <li><b>Overall trend</b> — the same meter as in the Simplified view: the stock (50%), its sector (25%) and its industry (25%)
+      <li><b>Overall trend</b> — the same meter as in AI Mode: the stock (50%), its sector (25%) and its industry (25%)
         combined into one needle, with the number below the dial (e.g. “38% · Average uptrend”) and the three inputs underneath.
         On the downtrend side the number is red with a minus, e.g. “−24%”. Next to it: the <b>Direction</b> (one-directional up /
         down, or sideways), the verdict and a one-line summary of the stock.</li>
@@ -276,10 +276,10 @@ const ALL_SECTIONS = [
     </ul>
   </> },
 
-  { id: "simple", t: "Simplified view (AI Mode) & the overall trend meter", body: <>
-    <p>Open <b>Simplified view (AI Mode)</b> in the side menu on the left. Type a company name or ticker, pick it from the list, and the page shows:</p>
+  { id: "simple", t: "AI Mode & the overall trend meter", body: <>
+    <p>Open <b>AI Mode</b> in the side menu on the left. Type a company name or ticker, pick it from the list, and the page shows:</p>
     <ul>
-      <li><b>Trading mode</b> — Balanced, Swing or Investing. It is the same setting as the Research view; changing it in one changes both.</li>
+      <li><b>Trading mode</b> — Balanced, Swing or Investing. It is the same setting as Deep Research; changing it in one changes both.</li>
       <li><b>Hyperplane AI summary</b> — one verdict and a short paragraph in plain words, then four tiles:
         <b> Stock trend strength</b>, <b>Sector strength</b>, <b>Industry strength</b> (all in %, on a bar from −100 to +100: right of 0 = uptrend / bullish, left of 0 = downtrend / bearish — for the sector and industry the side is the same as in the bubble chart) and <b>Historical reliability</b>{" "}
         (High = Strong, Medium = Moderate, Low = Weak reliability).</li>
@@ -343,6 +343,8 @@ const ALL_SECTIONS = [
         weakest first or best first. To remove a stock, use <b>Edit list</b>.</li>
       <li><b>Download report</b>: a PDF with a cover page, the summary, the gauge, the colour groups, the Trend map and every stock
         with its reasons. It is made on your own device; your list is not sent anywhere to make it.</li>
+      <li><b>Hyperplane AI watch</b>: the stocks of your list that need a look today, each with a better alternative and a
+        <b> Swap</b> button. Turn <b>Alerts</b> on and the <Icon name="bell" size={14}/> bell tells you when a stock turns weak.</li>
     </ul>
     <h3>How the strength and colours are decided</h3>
     <p>Hyperplane AI uses <b>only the stock's own data</b>. For the month, the quarter and the year it looks at two things:</p>
@@ -364,8 +366,8 @@ const ALL_SECTIONS = [
       <tr><td><b>Doing well</b></td><td>Stock strength +24% or more, and the quarterly view is not negative.</td></tr>
       <tr><td><b>Keep an eye on</b></td><td>Stock strength between −24% and +24% (moving sideways), or strong but with a negative
         quarter. Also any stock that went up more than 3 times in a year.</td></tr>
-      <tr><td><b>Look at first</b></td><td>Stock strength −24% or lower. Also any stock with low reliability (it once fell more than
-        70% from its highest price), whatever its strength.</td></tr>
+      <tr><td><b>Look at first</b></td><td>Stock strength −24% or lower. Also any stock with low reliability (an unsteady price
+        history), whatever its strength.</td></tr>
       <tr><td><b>Recently listed</b></td><td>Less than 3 years of yearly data. No view is given.</td></tr>
     </tbody></table>
     <Tip kind="warn" title="Information, not advice">Hyperplane AI is built on Hyperplane's own quant algorithms (fixed rules on our
@@ -411,8 +413,52 @@ const ALL_SECTIONS = [
     <p><b>Download (Excel)</b> saves the list and <b>Ticker copy</b> copies the tickers for TradingView. <b>Send to AI Portfolio
       Analyser</b> puts the stocks in your Analyser list so you can follow them: choose <b>Add to my list</b> to keep the stocks
       already there, or <b>Replace my list</b> to start again with only these.</p>
+    <p><b>Save + alerts</b> keeps the portfolio in <b>My portfolios</b>. There, <b>Momentum check</b> re-checks every stock on the
+      latest data and suggests a better one for a stock that turned weak; <b>Apply changes</b> updates the saved portfolio. With
+      alerts on, the <Icon name="bell" size={14}/> bell tells you about each change.</p>
     <Tip kind="warn" title="A model portfolio, not advice">The builder uses fixed rules on our trend data. Prices change during
       the day, so check each price before you buy. It is for education only: decide with your own research or a SEBI-registered adviser.</Tip>
+  </> },
+
+  { id: "sip", app: "sip", t: "AI ETF SIP Builder (Reliable)", body: <>
+    <p>The <b>AI ETF SIP Builder</b> plans a SIP in <b>ETFs only</b> — the same amount every month or quarter, ₹5,000 to ₹1 crore:</p>
+    <ul>
+      <li><b>Core index ETFs</b>, always: Nifty 50 and Next 50 (large), Midcap 150 (mid), Smallcap 250 (small). Set the mix with the sliders.</li>
+      <li><b>Gold</b> (10% to start, up to 50%): it moves differently from shares and steadies the SIP.</li>
+      <li><b>Number of ETFs</b> (6 to 20): after the core index and gold, the other places go to the strongest ETFs today — themes in an uptrend,
+        steady strategy or international ETFs, other broad indices — each kept small and all easy to trade. If fewer qualify, the form tells you.</li>
+    </ul>
+    <ol className="g-steps">
+      <li>Enter the amount and the plan years, set gold and the cap mix, pick the number of ETFs and press <b>Build my SIP</b>.</li>
+      <li>The table shows each ETF with the units, the price per unit and the money every month. Click a market in <b>Markets</b> to show only
+        its ETFs in the table. <b>How to buy</b> shows the steps in your broker.</li>
+      <li>The <b>Growth simulator</b> adds an assumed growth and a yearly step-up — an illustration, not a forecast.</li>
+      <li>Press <b>Save</b>; <b>My portfolios</b> tracks it every day. Turn on <b>Alerts</b> inside it.</li>
+    </ol>
+  </> },
+
+  { id: "msip", app: "msip", t: "AI Momentum SIP Builder (Risk)", body: <>
+    <p>The <b>AI Momentum SIP Builder</b> plans a SIP in <b>momentum stocks only</b>, spread over many stocks and sectors even at ₹10,000.
+      It carries more risk than ETFs: single stocks can fall sharply.</p>
+    <ol className="g-steps">
+      <li>Pick the reliability (High, Medium, Low — any mix), the large / mid / small cap mix and how many stocks.</li>
+      <li>Each stock gets the <b>same money every month</b>; a costly share is bought every few months by itself.</li>
+      <li>Save it, then turn on <b>Alerts</b> in My portfolios: after every update, if a stock's <b>long-term regime turns down</b>, the 🔔 tells
+        you, with a better stock and a <b>Swap</b>. Ordinary pullbacks never ask for a swap.</li>
+    </ol>
+    <Tip kind="warn" title="Higher risk">Invest only money you can keep for years. For education only, not investment advice.</Tip>
+  </> },
+
+  { id: "etf", app: "etf", t: "ETF Analyser", body: <>
+    <p>The <b>ETF Analyser</b> lists every ETF you can buy on the exchange: gold, silver, the main market indices, sectors and
+      themes, strategies and international ETFs. Funds that hold bonds or cash are not included.</p>
+    <ul>
+      <li><b>Strength</b> is the long-term trend of the ETF on the same −100 to +100 scale as the stocks: above zero and green is an
+        uptrend, around zero is sideways, red is a downtrend.</li>
+      <li>ETFs are grouped by what they follow (for example every gold ETF sits under <b>Gold</b>). In each group the
+        <b> Recommended</b> ETF comes first: the one traded the most every day, with a long history — the easiest to buy and to sell.</li>
+      <li>Use the type buttons, the search box or <b>Recommended only</b> to find what you want.</li>
+    </ul>
   </> },
 
   { id: "helpdesk", t: "Helpdesk & notifications", body: <>
@@ -422,6 +468,8 @@ const ALL_SECTIONS = [
         <b> Medium</b> = something is not working as expected, <b>Low</b> = a question or a suggestion.</li>
       <li>Describe the issue. You can <b>paste or drop screenshots</b> right into the text (images only — other files are not allowed).</li>
       <li>Press <b>Send</b>. Our replies appear in the conversation, with a red number on the <b><Icon name="bell" size={14}/> bell</b> and a red dot on your name. Click the bell to jump straight to the reply.</li>
+      <li>The same bell holds <b>Hyperplane AI alerts</b> for your saved SIPs, saved portfolios and Analyser list: click one to see
+        what to remove and the better alternative, then <b>Open</b> to act on it.</li>
       <li>When your question is solved, press <b>Close query</b>. Need more help later? Just raise a new one.</li>
     </ol>
   </> },
@@ -432,7 +480,7 @@ const ALL_SECTIONS = [
       <dt>Why can't I find a stock?</dt><dd>Check your filters (press <b>Reset</b>). Indices and ETFs are not listed — only stocks.</dd>
       <dt>Why is a stock strong on Daily but weak on Yearly?</dt><dd>Different timeframes look at different periods. A short-term rise can happen inside a long-term fall — see golden rule 3.</dd>
       <dt>What does “—” mean?</dt><dd>Not enough data for that timeframe yet (for example a recently listed stock).</dd>
-      <dt>What is the Simplified view?</dt><dd>Switch in the side menu between <b>Research view</b> (the full Control Tower) and <b>Simplified view (AI Mode)</b>. In the Simplified view you type a company name, pick it from the list, and read it in plain words: an <b>overall trend meter</b> (down ← sideways → up; see <b>Simplified view &amp; the overall trend meter</b> above for how it is worked out), and a <b>Hyperplane AI summary</b>: one overall verdict plus four tiles — the stock, its sector and its industry (each as a percentage), and the stock's historical reliability (High / Medium / Low). Hyperplane AI is built on our own quant algorithms (fixed rules on the same data) — no outside AI service.</dd>
+      <dt>What is AI Mode?</dt><dd>Switch in the side menu between <b>Deep Research</b> (the full Control Tower) and <b>AI Mode</b>. In AI Mode you type a company name, pick it from the list, and read it in plain words: an <b>overall trend meter</b> (down ← sideways → up; see <b>AI Mode &amp; the overall trend meter</b> above for how it is worked out), and a <b>Hyperplane AI summary</b>: one overall verdict plus four tiles — the stock, its sector and its industry (each as a percentage), and the stock's historical reliability (High / Medium / Low). Hyperplane AI is built on our own quant algorithms (fixed rules on the same data) — no outside AI service.</dd>
       <dt>Can I look at an earlier day?</dt><dd>When it is available, click <b>Data as of</b> at the top, pick a date, then <b>Day open</b> or <b>Day end</b>. The button turns yellow and says <b>Viewing</b> while you look at a past day — open it again and press <b>↺ Latest data</b> to return.</dd>
       <dt>Do the bubble charts follow my filters?</dt><dd>They follow the <b>Timeframe</b> and they filter the list when you click them. They always show the whole market, so you can compare every group.</dd>
       <dt>Is this a recommendation?</dt><dd>No. It is trend information for education — see below.</dd>
@@ -461,11 +509,8 @@ export default function Guide({ disclaimer, apps = null }) {
         {SECTIONS.map((s, i) => <button key={s.id} type="button" className={`${active === s.id ? "on" : ""} ${s.must ? "must" : ""}`} onClick={() => go(s.id)} title={s.must ? "Must read" : undefined}><span>{i + 1}</span>{s.t}</button>)}
       </aside>
       <article className="g-body">
-        <header className="g-hero">
-          <div className="g-hero-k">Hyperplane docs</div>
-          <h1>Find strong stocks in strong sectors — in minutes</h1>
-          <p>Everything on the screen explained in simple words, plus the rules that make it work.</p>
-        </header>
+        <BrandBand product="Docs" title="Find strong stocks in strong sectors" accent="in minutes" id="g-band"
+          sub="Everything on the screen explained in simple words."/>
         {SECTIONS.map((s, i) => (
           <section key={s.id} id={`g-${s.id}`} ref={el => { refs.current[s.id] = el; }} className={`g-sec ${s.must ? "must" : ""}`}>
             <h2><span>{i + 1}</span>{s.t}{s.must && <em className="g-must"><Icon name="star" size={12}/> Must read</em>}</h2>

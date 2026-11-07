@@ -1,14 +1,32 @@
 // AI Portfolio Analyser — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AiSpark, Icon, addCss, trackAction } from "../core.jsx";
+import { AiSpark, BrandBand, Icon, addCss, api, loadChunk, trackAction, useToast } from "../core.jsx";
 import { G_ZONES, Info, RELIABILITY, RG_INFO, StockLink, StockSearch, TrendGauge, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
 import { LT_TF, PF_CAT, PF_CATS, PF_MIN_YEARS, PF_ORDER, StrengthTiles, analyseHolding, portfolioSummary, zDir } from "./portfolio-engine.jsx";
 import { placeLabels } from "../labels.js";
 import { CSS } from "./portfolio.css.js";
+import { MyPortfolios, SaveBar, SavedNote } from "../saved.jsx";
 
 addCss("portfolio", CSS);
 
-function HoldingItem({ r, flash }) {
+// "Better alternative" (owner 2026-11-06: "give swap as an option, then show the best alternative of that stock")
+function BetterAlt({ sym, symbols, onSwap }) {
+  const [st, setSt] = useState(null);                 // null · "busy" · items[] · error text
+  const find = () => { setSt("busy"); api(`/app/api/alternatives?s=${encodeURIComponent(sym)}&exclude=${encodeURIComponent(symbols.join(","))}`)
+    .then(r => setSt(r.items)).catch(e => setSt(e.message)); };
+  return (
+    <div className="pf-alt" data-alt={sym}>
+      {st == null ? <button type="button" className="px-btn pf-altb" onClick={find}><AiSpark/> Better alternative</button>
+        : st === "busy" ? <span className="dim">Finding the best alternatives…</span>
+        : typeof st === "string" ? <span className="pf-miss">{st}</span>
+        : !st.length ? <span className="dim">No better stock in its sector or market cap today. <button type="button" className="pf-altx" onClick={() => setSt(null)}>Close</button></span>
+        : <><div className="pf-altl">{st.map(a => <div key={a.s} className="pf-alti"><b>{a.s}</b><small>{a.sec} · strength {a.st > 0 ? "+" : ""}{signed(a.st)} · {a.why}</small>
+            <button type="button" className="px-btn pf-swap" onClick={() => onSwap(sym, a.s)} title={`Replace ${sym} with ${a.s} in your list`}>Swap</button></div>)}</div>
+            <button type="button" className="pf-altx" onClick={() => setSt(null)}>Close</button></>}
+    </div>);
+}
+
+function HoldingItem({ r, flash, symbols, onSwap }) {
   const [, label, tone] = PF_CAT[r.cat];
   const rel = r.s.h && r.cat !== "new" ? RELIABILITY[r.s.h] : null;
   const grp = x => !x ? ["no data", ""] : x.nb > 0 ? ["strong", "good"] : x.nb < 0 ? ["weak", "bad"] : ["flat", ""];
@@ -43,6 +61,7 @@ function HoldingItem({ r, flash }) {
       <div className="px-whyc">
         <div className="px-aih"><AiSpark/><b>Hyperplane AI</b><span>Research summary</span></div>
         <ul className="px-why">{(isNew ? r.why.slice(0, 1) : r.why).map((w, i) => <li key={i}>{w}</li>)}</ul>
+        {onSwap && r.s.rp && r.s.rp[0] === -1 && <BetterAlt sym={r.s.s} symbols={symbols} onSwap={onSwap}/>}
       </div>
     </article>
   );
@@ -102,7 +121,7 @@ function TrendMap({ rows, onPick }) {
 
 // PDF report (owner, 2026-10-17): the page hands report.js the same numbers and words it shows; report.js only draws.
 const PF_LONG = {
-  review: "The stock's strength is weak (-24% or lower), or its reliability is low because it once fell more than 70% from its highest price. Look at these first.",
+  review: "The stock's strength is weak (-24% or lower), or its reliability is low (an unsteady price history). Look at these first.",
   watch: "Mixed signs: the strength is between -24% and +24% (moving sideways), the quarterly view is negative, or the price rose very fast. Check these from time to time.",
   intact: "The stock's strength is +24% or more and the quarterly view is not negative. The bigger picture is holding up well.",
   new: "Less than 3 years of yearly price data, so Hyperplane AI gives no view on these yet.",
@@ -111,7 +130,7 @@ const PF_GUIDE = [
   ["Stock strength", "A number from -100 to +100. Above +24% is an uptrend, below -24% is a downtrend, in between is sideways. Weak, Average, Good and Strong tell how strong the trend is (up to 30%, up to 60%, up to 80%, above 80%)."],
   ["Monthly, quarterly and yearly views", "For each period Hyperplane AI checks whether the trend is going up, flat or going down and for how long (for example, going down for the last 3 quarters), and how strong today's price is for this month, quarter and year. The quarter counts most, then the year, then the month. Daily and weekly moves are left out."],
   ["Long-term regime", "Tells you whether the long-term regime of each stock is up or down. A monthly, quarterly or yearly trend that goes against it is not trusted yet, so it is shown as sideways. Turning down means it has started changing from up to down; changed to down means the change is complete. Turning up is not confirmed until it lasts a few more weeks."],
-  ["Reliability", "High, Medium or Low, from the stock's whole price history. Low means it once fell more than 70% from its highest price, which means more risk."],
+  ["Reliability", "High, Medium or Low: a 0–100 stability score from the stock's whole price history. Low means deep falls or an unsteady history, which means more risk."],
   ["Rose very fast", "The price went up more than 3 times in a year. Such fast gains often cool off, so these stocks are never marked Doing well."],
   ["Trend map", "Each dot is one stock. Top right (Rising): the quarterly and yearly trends are both up. Bottom left (Falling): both down. Top left (Cooling off) and bottom right (Recovering) are mixed."],
   ["Sector and industry", "Shown on each stock for reference only. They are never used to calculate the strength and never change a colour."],
@@ -155,7 +174,86 @@ function reportModel(rows, sum, data, me) {
   };
 }
 
-function PortfolioView({ data, symbols, setSymbols, status, me }) {
+// Hyperplane AI watch (owner, 2026-11-06, round 5: "header slightly bigger, brand … each row takes too much space … need
+// accordion … the 2 more alternatives in the same row with animation … add the sector: show both are same sector and
+// industry"): a folding card above the holdings. Each stock whose long-term regime turned down is ONE compact row — the
+// stock, an animated arrow, the better stock (its sector · industry and a "Same industry" badge) — with up to three
+// better stocks switched in place (no list opening below) and an animated Swap. Only a regime turn asks for a swap.
+const REL_W = { S: "High", M: "Medium", W: "Low" };
+const SAME = { "same industry": ["Same sector & industry", "ind"], "same sector": ["Same sector", "sec"], "same market cap": ["Same market cap", "cap"] };
+function AiWatch({ symbols, setSymbols, bySym }) {
+  const [ck, setCk] = useState(null), [pick, setPick] = useState({}), [anim, setAnim] = useState(null), [toast, showToast] = useToast();
+  const [open, setOpenRaw] = useState(() => { try { return sessionStorage.getItem("hp_watch_shut") !== "1"; } catch { return true; } });
+  const setOpen = v => { setOpenRaw(v); try { v ? sessionStorage.removeItem("hp_watch_shut") : sessionStorage.setItem("hp_watch_shut", "1"); } catch { /* ignore */ } };
+  const load = () => api("/app/api/portfolio/check").then(r => { setCk(r); setPick({}); }).catch(e => setCk({ err: e.message }));
+  const key = symbols.join();
+  const [exp, setExp] = useState(() => new Set());                  // rows whose drop-down of every option is open
+  const flip = k => setExp(o => { const x = new Set(o); x.has(k) ? x.delete(k) : x.add(k); return x; });
+  useEffect(() => { const t = setTimeout(load, 900); return () => clearTimeout(t); }, [key]);   // after the list is saved
+  const swap = (s, alt) => {
+    setAnim({ out: s, to: alt });
+    setTimeout(() => { setSymbols(symbols.includes(alt) ? symbols.filter(x => x !== s) : symbols.map(x => x === s ? alt : x)); showToast(`${s} → ${alt} swapped`); setAnim(null); }, 420);
+  };
+  if (!ck) return null;
+  if (ck.err) return <div className="pf-miss">{ck.err}</div>;
+  const n = ck.items.length;
+  const rs = v => v == null ? "—" : `₹${(+v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const cr = v => v == null ? "—" : v >= 1e5 ? `₹${(v / 1e5).toFixed(2)} L Cr` : `₹${Math.round(v).toLocaleString("en-IN")} Cr`;
+  // amount + size of one stock: the Analyser tracks 1 share of each, so the amount is its price (round 17: "amount is missing")
+  const _money = x => x && (x.p != null || x.mcap != null) ? <span className="pf-wmoney"><span className="amt" title="Amount: 1 share at the last price">1 share · {rs(x.p)}</span>
+    <span title="Market value of the company">{cr(x.mcap)}</span>{x.cap && <span>{x.cap} cap</span>}</span> : null;
+  const strength = v => v == null ? null : <span className={`pf-wst ${v < 0 ? "dn" : v >= 24 ? "up" : ""}`}>{v > 0 ? "+" : ""}{signed(v)}</span>;
+  return (
+    <section className={`px-card pf-watch ${n ? "warn" : "clear"} ${open ? "open" : "shut"}`} id="pf-watch">
+      <button type="button" className="pf-wh" id="pf-watch-tog" aria-expanded={open} aria-controls="pf-watch-body" onClick={() => setOpen(!open)}>
+        <span className="pf-wic">{n ? <Icon name="alert" size={18}/> : <Icon name="check" size={18}/>}</span>
+        <span className="pf-whb">
+          <span className="pf-wbrand"><AiSpark/> Hyperplane AI <em>watch</em></span>
+          <span className="pf-wt">{n ? `${n} of ${ck.total} stock${ck.total === 1 ? "" : "s"}: long-term regime turned down` : "All clear: every long-term regime is still up"}</span></span>
+        <span className="pf-wn">{n ? "A better stock from the same sector is ready for each" : "Checked on the latest data"}
+          <Info text="Only a stock whose long-term regime has turned down asks for a swap — never an ordinary pullback. Save the portfolio to get alerts."/></span>
+        {n > 0 && <span className="pf-wcount" aria-label={`${n} to review`}>{n}</span>}
+        <span className="pf-wchev" aria-hidden="true"><Icon name="chevron" size={16}/></span>
+      </button>
+      {open && n > 0 && <div className="pf-wl" id="pf-watch-body">
+        <div className="pf-whd" aria-hidden="true"><span>Regime turned down</span><span/><span>Better stock</span><span className="r">Options</span></div>
+        {ck.items.map(it => {
+          const b = bySym[it.s] || {}, alts = it.alts || (it.alt ? [it.alt] : []), i = Math.min(pick[it.s] || 0, Math.max(0, alts.length - 1)), a = alts[i];
+          const same = a && (a.up ? [`Upgrade · ${a.cap} cap`, "up"] : SAME[a.why]);        // round 15: bigger company, same industry / sector
+          return (
+            <div key={it.s} className={`pf-wr ${anim && anim.out === it.s ? "hp-leaving" : ""}`} data-watch={it.s}>
+              <div className="pf-wfrom">
+                <span className="pf-wl1"><b className="sym">{it.s}</b><span className="hp-flag">Regime down</span>{strength(it.st)}{it.p != null && <span className="pf-wpx" title="Last price (1 share)">{rs(it.p)}</span>}</span>
+                <small>{it.n || b.n || ""}{(it.sec || b.sec) ? ` · ${it.sec || b.sec}` : ""}{(it.ind || b.ind) ? ` › ${it.ind || b.ind}` : ""}</small></div>
+              <span className="hp-arrow pf-warr" aria-hidden="true">→</span>
+              {a ? <div className="pf-wto" key={a.s} data-alt={a.s}>
+                  <span className="pf-wl1"><b className="sym">{a.s}</b>{same && <span className={`pf-wsame ${same[1]}`}><Icon name="check" size={11}/> {same[0]}</span>}{strength(a.st)}
+                    {a.rel && <span className={`hp-rel ${a.rel}`}><i/>{REL_W[a.rel]}</span>}{a.p != null && <span className="pf-wpx" title="Last price (1 share)">{rs(a.p)}</span>}</span>
+                  <small>{a.n || ""}{a.sec ? ` · ${a.sec}` : ""}{a.ind ? ` › ${a.ind}` : ""}</small></div>
+                : <div className="pf-wto none"><span className="pf-wl1"><b>No better stock today</b></span><small>We look again after every update.</small></div>}
+              <div className="pf-wact">
+                {alts.length > 0 && <button type="button" className={`pf-wtog ${exp.has(it.s) ? "on" : ""}`} aria-expanded={exp.has(it.s)} onClick={() => flip(it.s)} data-opts={it.s}>
+                  <Icon name="swap" size={14}/> {exp.has(it.s) ? "Hide options" : `Swap options · ${alts.length}`} <Icon name="chevron" size={13}/></button>}
+              </div>
+              {exp.has(it.s) && <div className="pf-wdd" data-dd={it.s}>
+                <div className="pf-wddh"><span>Option</span><span>Amount</span><span>Company size</span><span>Strength</span><span/></div>
+                {alts.map((x, j) => { const sm = x.up ? [`Upgrade · ${x.cap} cap`, "up"] : SAME[x.why]; return (
+                  <div key={x.s} className={`pf-wddr ${j === i ? "top" : ""}`} data-opt={x.s}>
+                    <span className="o"><span className="ot"><b className="sym">{x.s}</b>{j === 0 && <span className="pf-wbest">Best match</span>}{sm && <span className={`pf-wsame ${sm[1]}`}>{sm[0]}</span>}</span>
+                      <small>{x.n || ""}{x.sec ? ` · ${x.sec}` : ""}{x.ind ? ` › ${x.ind}` : ""}</small></span>
+                    <span className="n">{rs(x.p)}<small>1 share</small></span><span className="n">{cr(x.mcap)}<small>{x.cap ? `${x.cap} cap` : ""}</small></span>
+                    <span className="n st">{x.st != null && <span className={`pf-wstp ${x.st < 0 ? "dn" : x.st >= 24 ? "up" : ""}`}>{x.st > 0 ? "+" : ""}{signed(x.st)}</span>}
+                      {x.rel && <span className={`hp-rel ${x.rel}`}><i/>{REL_W[x.rel]} reliability</span>}</span>
+                    <button type="button" className="px-btn pf-swap" onClick={() => swap(it.s, x.s)} data-pick={x.s} title={`Replace ${it.s} with ${x.s}`}>⇄ Swap</button>
+                  </div>); })}
+              </div>}
+            </div>); })}
+      </div>}
+      {toast}
+    </section>);
+}
+
+function PortfolioView({ data, symbols, setSymbols, status, me, sent = 0, onOut = () => {} }) {
   const bySym = useMemo(() => Object.fromEntries(data.stocks.map(x => [x.s, x])), [data]);
   const added = useMemo(() => new Set(symbols), [symbols]);
   const rows = useMemo(() => symbols.filter(k => bySym[k]).map(k => analyseHolding(bySym[k], data)), [symbols, bySym, data]);
@@ -164,6 +262,20 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
   const add = k => { if (!added.has(k)) setSymbols([...symbols, k]); };
   const remove = k => setSymbols(symbols.filter(x => x !== k));
   const [stage, setStage] = useState(symbols.length ? "result" : "build");
+  // stocks sent from the AI Portfolio Builder while the Analyser was already open (on its start screen): show the analysis
+  useEffect(() => { if (sent && symbols.length) setStage("result"); }, [sent]);
+  const [tab, setTab] = useState(() => { try { const r = JSON.parse(sessionStorage.getItem("hp_open_portfolio") || "null"); return r && r.ref ? "mine" : "analyse"; } catch { return "analyse"; } });
+  const [saving, setSaving] = useState(false), [saveMsg, setSaveMsg] = useState(""), [nSaved, setNSaved] = useState(null);
+  useEffect(() => { api("/app/api/saved?kind=analyser").then(r => setNSaved(r.length)).catch(() => {}); }, []);
+  useEffect(() => {                                    // opened from a notification (🔔): a saved portfolio → My portfolios
+    const go = () => { let req = null; try { req = JSON.parse(sessionStorage.getItem("hp_open_portfolio") || "null"); } catch { return; }
+      if (!req) return;
+      if (req.ref) { setTab("mine"); return; }                         // MyPortfolios opens that portfolio
+      try { sessionStorage.removeItem("hp_open_portfolio"); } catch { /* ignore */ }
+      setTab("analyse"); setStage("result"); setTimeout(() => { const el = document.getElementById("pf-watch"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 1200); };
+    go(); const on = e => e.detail && e.detail.app === "portfolio" && go();
+    window.addEventListener("hp-open", on); return () => window.removeEventListener("hp-open", on);
+  }, []);
   const [confirmClear, setConfirmClear] = useState(false);
   const [show, setShow] = useState("all");
   const [order, setOrder] = useState("bad");            // bad = weakest first · good = best first (recently listed always last)
@@ -178,20 +290,30 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
   const clearAll = <>{confirmClear
     ? <span className="pf-clr">Remove all {symbols.length}? <button type="button" onClick={() => { setSymbols([]); setConfirmClear(false); setStage("build"); }}>Yes, clear</button><button type="button" onClick={() => setConfirmClear(false)}>Cancel</button></span>
     : <button type="button" className="pf-clrbtn" onClick={() => setConfirmClear(true)}>Clear all</button>}</>;
-  const brand = <div className="px-eyebrow"><AiSpark/> Hyperplane AI · Portfolio Analyser <span>by QuantFriday</span></div>;
+  const swap = (s, alt) => setSymbols(symbols.includes(alt) ? symbols.filter(x => x !== s) : symbols.map(x => x === s ? alt : x));
+  const tabs = (
+    <div className="hp-tabs" role="tablist">
+      <button type="button" role="tab" aria-selected={tab === "analyse"} className={tab === "analyse" ? "on" : ""} onClick={() => setTab("analyse")} id="pf-tab-analyse"><Icon name="sparkles" size={14}/> Analyse</button>
+      <button type="button" role="tab" aria-selected={tab === "mine"} className={tab === "mine" ? "on" : ""} onClick={() => setTab("mine")} id="pf-tab-mine"><Icon name="star" size={14}/> My portfolios{nSaved ? ` · ${nSaved}` : ""}</button>
+    </div>);
   const lock = <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>;
   const search = <StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Type a stock name or ticker to add it"/>;
   const privacy = <div className="pf-priv"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
     <span><b>Private to you.</b> Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin, as per SEBI norms. We take the privacy of your investments seriously.</span></div>;
 
+  if (tab === "mine") return (
+    <div className="pf" id="pf-saved">
+      <BrandBand product="Portfolio Analyser" title="My portfolios" accent="tracked every day" id="pf-band" right={tabs}
+        info="Each saved portfolio is tracked from the day you saved it, as 1 share of every stock. Turn on alerts inside a portfolio."/>
+      <MyPortfolios app="portfolio" onOut={onOut} onCount={setNSaved}/>
+    </div>);
+
   if (stage === "build" || !symbols.length) return (
     <div className="pf">
+      <BrandBand product="Portfolio Analyser" title="Know where your portfolio" accent="stands today" id="pf-band" right={tabs}
+        info="Add the stocks you own. Hyperplane AI checks each one and puts it in a clear colour group, with a simple reason. No quantities, no prices."/>
       <section className="card pf-start">
         <div className="pf-sl">
-          {brand}
-          <h1>Know where your portfolio <span>stands today</span></h1>
-          <p className="pf-lead">Add the stocks you own. Hyperplane AI checks each one and puts it in a clear colour group,
-            with a simple reason for every stock. No quantities, no prices, no spreadsheets.</p>
           <div className="pf-add">{search}</div>
           <div className="pf-build">
             <div className="pf-bhead"><b>Your list</b><span className="dim">{plural(symbols.length)}{status ? ` · ${status}` : ""}</span>{symbols.length > 0 && clearAll}</div>
@@ -237,23 +359,23 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
   ] : [];
   return (
     <div className="pf px">
-      <header className="px-head">
-        <div className="px-ht">
-          {brand}
-          <h1>Your portfolio</h1>
-          <div className="px-meta">{plural(symbols.length)} · Data as of {fmtDT(data.as_of)}{status ? ` · ${status}` : ""}</div>
-        </div>
-        <div className="px-actions">
+      <BrandBand product="Portfolio Analyser" title="Your" accent="portfolio" id="pf-band" right={tabs} sub={`${plural(symbols.length)}${status ? ` · ${status}` : ""}`}/>
+      <div className="hp-actbar">
           <div className="px-search"><StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Add a stock: name or ticker"/></div>
           <button type="button" className="px-btn" onClick={() => { setStage("build"); window.scrollTo(0, 0); }}>Edit list</button>
+          <button type="button" className="px-btn" id="pf-save" onClick={() => { setSaving(v => !v); setSaveMsg(""); }}><Icon name="star" size={14}/> Save portfolio</button>
           {sum && <button type="button" className="px-btn primary pf-dl" disabled={making === "busy"} onClick={() => {
             setMaking("busy");
-            import("../report.js").then(({ downloadReport }) => { downloadReport(reportModel(rows, sum, data, me)); setMaking(""); trackAction("portfolio", "report"); })
+            Promise.all([loadChunk(() => import("../report.js")), api("/app/api/portfolio/check").catch(() => null)])
+              .then(([{ downloadReport }, ck]) => { downloadReport({ ...reportModel(rows, sum, data, me), swaps: ck && ck.items ? ck.items : null }); setMaking(""); trackAction("portfolio", "report"); })
               .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
           }}><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
             {making === "busy" ? "Preparing…" : "Download report"}</button>}
-        </div>
-      </header>
+      </div>
+      {saving && <SaveBar kind="analyser" defName={`My portfolio · ${rows.length} stocks`} inputs={{}} onCancel={() => setSaving(false)}
+        holdings={rows.map(r => ({ kind: "stock", s: r.s.s, n: r.s.n, cap: r.s.cap, sec: r.s.sec }))}
+        onDone={m => { setSaving(false); setSaveMsg(m); setNSaved(n => (n || 0) + 1); }}/>}
+      {saveMsg && <SavedNote id="pf-saved-msg" msg={saveMsg} onOpen={() => setTab("mine")} onClose={() => setSaveMsg("")}/>}
       <div className="px-privacy">{lock}<span><b>Private to you.</b> Your stock list is visible only to you, the account holder. It is never visible to other users or to the admin, as per SEBI norms. We take the privacy of your investments seriously.</span></div>
       {making && making !== "busy" && <div className="pf-miss">{making}</div>}
       {missing.length > 0 && <div className="pf-miss">Not in today's data: {missing.join(", ")}. They stay in your list and are checked again when they appear.</div>}
@@ -284,16 +406,17 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
           <TrendMap rows={rows} onPick={jump}/>
         </section>
 
+        <AiWatch symbols={symbols} setSymbols={setSymbols} bySym={bySym}/>
         <section className="px-card px-hold">
           <div className="px-ch">
             <div><h3>Holdings</h3><p>{listed.length} of {rows.length} stocks · every stock with its strength and the reasons in plain words</p></div>
             <div className="px-tools">
               <div className="px-seg" role="group" aria-label="Reliability">
                 <span className="px-segl">Reliability <Info wide text={<>
-                  <b>Reliability</b> comes from the stock's whole price history. It tells you how safely the stock has behaved in the past, not how strong it is today.
-                  <br/><br/><b>Low:</b> it once fell more than 70% from its highest price. That means more risk, so Hyperplane AI always puts it in Look at first.
-                  <br/><b>Medium:</b> it is more than 50% below its highest price, or lower than it was 5 years ago.
-                  <br/><b>High:</b> it has stayed close to its highest price over the years. The steadiest history.
+                  <b>Reliability</b> is a 0–100 stability score from the stock's whole price history: how deep it fell, how close it stays to its peak, how calmly it rises and whether its price zones keep stepping up.
+                  <br/><br/><b>High:</b> 58 and above. The steadiest history.
+                  <br/><b>Medium:</b> 30 to 57.
+                  <br/><b>Low:</b> below 30, or it once fell more than 70%. Always in Look at first.
                 </>}/></span>
                 {[["S", "High"], ["M", "Medium"], ["W", "Low"]].map(([k, l]) => {
                   const n = rows.filter(r => r.s.h === k).length, on = rel.includes(k);
@@ -319,7 +442,7 @@ function PortfolioView({ data, symbols, setSymbols, status, me }) {
           </div>
           {show !== "all" && <p className="px-tdesc"><i className={PF_CAT[show][2]}/>{PF_CAT[show][3]}</p>}
           {!listed.length && <p className="px-tdesc">No stock matches these filters.</p>}
-          <div className="px-list">{listed.map(r => <HoldingItem key={r.s.s} r={r} flash={flash === r.s.s}/>)}</div>
+          <div className="px-list">{listed.map(r => <HoldingItem key={r.s.s} r={r} flash={flash === r.s.s} symbols={symbols} onSwap={swap}/>)}</div>
         </section>
         <div className="sv-foot dim">Data as of {fmtDT(data.as_of)} · Hyperplane AI by QuantFriday · For education only, not investment advice.</div>
       </>}

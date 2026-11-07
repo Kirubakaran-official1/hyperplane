@@ -34,6 +34,7 @@ from . import access_admin
 from . import adoption
 from . import activity as act
 from . import config
+from . import etf
 from . import helpdesk as hd
 from . import mailer
 from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
@@ -203,6 +204,19 @@ def snapshot_data(sid: int, user=Depends(current_user)):
         raise HTTPException(404, "Collection not found")
     return Response(content=bytes(r["data_gz"]), media_type="application/json",
                     headers={"Content-Encoding": "gzip", "Cache-Control": "private, max-age=31536000, immutable"})
+
+
+@app.get("/api/snapshots/{sid}/etf")
+def snapshot_etf(sid: int, user=Depends(current_user)):
+    """ETF analyser (owner, 2026-11-06): every tradable ETF of this collection with all its numbers and the Recommended
+    checklist (Control Tower → ETF analyser). The ETFs never appear in the collection's stock sheets."""
+    with pool.connection() as c:
+        r = c.execute("SELECT taken_at FROM snapshots WHERE id = %s", (sid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "Collection not found")
+    rows = etf.admin_rows(sid, r["taken_at"].isoformat())
+    return {"as_of": r["taken_at"].isoformat(), "rows": rows, "classes": list(etf.CLASSES),
+            "rules": {"min_value": etf.REC_MIN_VALUE, "tie": etf.REC_TIE}}
 
 
 @app.get("/api/snapshots/{sid}/excel")
@@ -504,6 +518,37 @@ def list_customers(user=Depends(admin_user)):
             "(SELECT count(*) FROM customer_sessions s WHERE s.customer_id = customers.id AND s.ended_at IS NULL "
             " AND s.created_at > now() - interval '7 days') AS devices "
             "FROM customers ORDER BY created_at DESC").fetchall()]
+
+
+# ── Shared portfolios (owner 2026-11-07, round 15: "the list of every saved portfolio by the user name with the ID, public or private,
+# value and category — to track the engagement; a separate sub-app in the admin console"). Read only: the customer, the portfolio's ID,
+# name, application, visibility, holdings, changes, how often its public link was opened, and its tracked value. No holdings are sent.
+PF_TAG = {"sip": "AI ETF SIP Builder", "msip": "AI Momentum SIP Builder", "builder": "AI Portfolio Builder", "analyser": "AI Portfolio Analyser"}
+
+
+@app.get("/api/admin/portfolios")
+def admin_portfolios(user=Depends(admin_user)):
+    from . import tracking
+    with pool.connection() as c:
+        rows = c.execute("SELECT s.id, s.kind, s.name, s.inputs, s.holdings, s.versions, s.saved_on, s.created_at, s.share_id, s.visibility, "
+                         "s.alerts, s.views, s.last_view, cu.name AS cname, cu.email FROM customer_sips s JOIN customers cu ON cu.id = s.customer_id "
+                         "ORDER BY s.created_at DESC LIMIT 5000").fetchall()
+        out = []
+        for r in rows:
+            m = None
+            try:
+                m = tracking.track(c, r).get("metrics")
+            except Exception:                                    # noqa: BLE001 — one row without numbers, never a failed list
+                pass
+            i = r["inputs"] or {}
+            out.append({"code": r["share_id"], "name": r["name"], "kind": r["kind"], "app": PF_TAG.get(r["kind"], r["kind"]),
+                        "visibility": r["visibility"], "customer": r["cname"], "email": r["email"],
+                        "created": r["created_at"].isoformat() if r["created_at"] else None, "saved_on": r["saved_on"].isoformat() if r["saved_on"] else None,
+                        "holdings": len(r["holdings"] or []), "changes": max(0, len(r["versions"] or []) - 1), "alerts": r["alerts"],
+                        "views": r["views"] or 0, "last_view": r["last_view"].isoformat() if r["last_view"] else None,
+                        "monthly": i.get("amount") if r["kind"] in ("sip", "msip") else None,
+                        "invested": m and m.get("invested"), "value": m and m.get("value"), "ret": m and m.get("ret")})
+    return out
 
 
 def _end_sessions(c, cid, reason, by, event=None, name=None):

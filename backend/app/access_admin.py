@@ -26,7 +26,7 @@ from .db import pool
 from .schedule import TZ, now
 
 ROLE_NAME_MAX, ROLE_DESC_MAX = 40, 200
-MAX_PINS = 6                         # same as portal.MAX_PINS (applications pinned to the customer's side menu)
+MAX_PINS = 8                         # same as portal.MAX_PINS (applications pinned to the customer's side menu)
 PAGE_MAX = 200
 BULK_MAX = 20000
 OWNER_CONFIRM = "This gives owner-level access. Send confirm_owner_level to go ahead."

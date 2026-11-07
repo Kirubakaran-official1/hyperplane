@@ -3,7 +3,7 @@
 // change (amber) until "Review & save" shows who gains / loses access.
 import React, { useEffect, useMemo, useState } from "react";
 import { Badge, Empty, LockIcon, Switch, btn, fmtDT, input, plural } from "./shared.jsx";
-import { AppHead, PendingBar, PermName, ReviewDialog, SearchBox, withNeeds, withoutKey } from "./ui.jsx";
+import { GroupHead, PendingBar, PermName, ReviewDialog, SearchBox, useFold, withNeeds, withoutKey } from "./ui.jsx";
 
 const fold = t => String(t || "").toLowerCase();
 
@@ -93,6 +93,7 @@ function RoleView({ role, acc, perms, mods, now, base, setPerm, blocked, q, api,
   const cur = now(role.id), b = base(role.id);
   const run = async (fn, msg) => { setBusy(true); try { const r = await fn(); await reload(); if (msg) notify(typeof msg === "function" ? msg(r) : msg); return r; } catch (e) { notify(e.message, "err"); return null; } finally { setBusy(false); } };
   const groups = mods.map(m => ({ m, list: perms.filter(p => p.module === m.key && match(p, q) && (!only || cur.has(p.key))) })).filter(g => g.list.length);
+  const gf = useFold("hp_ax_fold_roles", groups.map(g => g.m.key));
   const defRole = acc.roles.find(r => r.is_default);
   return (
     <div className="ax-rv" id="role-view">
@@ -123,16 +124,16 @@ function RoleView({ role, acc, perms, mods, now, base, setPerm, blocked, q, api,
         <b>{plural(cur.size, "permission")}</b>{dirty > 0 && <span className="ax-chg">{plural(dirty, "unsaved change")}</span>}
         <span style={{ flex: 1 }}/>
         <label className="ax-only"><input type="checkbox" checked={only} onChange={e => setOnly(e.target.checked)} id="role-only"/> Show only what it has</label>
+        {gf.button("role-foldall")}
       </div>
       <div className="ax-pgroups" id="role-perms">
         {groups.map(({ m, list }) => {
           const all = list.every(p => cur.has(p.key));
           return (
             <div key={m.key} className="ax-pg" data-app={m.key}>
-              <div className="ax-pgh"><AppHead m={m}/>
-                <span style={{ flex: 1 }}/>
-                <button type="button" className="am-link" onClick={() => list.forEach(p => !blocked(role, p) && setPerm(role.id, p.key, !all))}>{all ? "None" : "All"}</button></div>
-              {list.map(p => { const on = cur.has(p.key), chg = on !== b.has(p.key), bl = blocked(role, p); return (
+              <GroupHead m={m} open={gf.isOpen(m.key)} onFlip={() => gf.flip(m.key)} count={`${list.filter(p => cur.has(p.key)).length} of ${list.length}`}
+                right={<button type="button" className="am-link" onClick={() => list.forEach(p => !blocked(role, p) && setPerm(role.id, p.key, !all))}>{all ? "None" : "All"}</button>}/>
+              {gf.isOpen(m.key) && list.map(p => { const on = cur.has(p.key), chg = on !== b.has(p.key), bl = blocked(role, p); return (
                 <label key={p.key} className={`ax-check row ${chg ? "chg" : ""} ${bl ? "dis" : ""}`} data-perm={p.key} title={bl ? "Owner-level permissions never go on the default role" : p.description}>
                   <input type="checkbox" checked={on} disabled={bl && !on} onChange={() => setPerm(role.id, p.key, !on)}/>
                   <span style={{ minWidth: 0 }}><PermName p={p}/>

@@ -179,6 +179,8 @@ CREATE TABLE IF NOT EXISTS customer_history (
 CREATE INDEX IF NOT EXISTS customer_history_day ON customer_history (trade_date, taken_at);
 -- which strength formula built a stored past day (publish.FORMULA_VERSION); older ones are rebuilt by the worker
 ALTER TABLE customer_history ADD COLUMN IF NOT EXISTS formula INT NOT NULL DEFAULT 0;
+-- the ETF analyser's customer view of that day too (round 16: every application follows a past day) — filled by the worker
+ALTER TABLE customer_history ADD COLUMN IF NOT EXISTS etf_gz BYTEA;
 -- Strength evidence (owner, 2026-11-01: "check all the combinations as much as possible … store the final output"):
 -- one row per stock per collection with its full combination (per timeframe: zone trend × price place × mother candle
 -- = 90 states; full = M × Q × Y = 729,000) and the exact results, so each combination can be checked against what the
@@ -202,10 +204,101 @@ CREATE TABLE IF NOT EXISTS stock_states (
     PRIMARY KEY (snapshot_id, symbol)
 );
 CREATE INDEX IF NOT EXISTS stock_states_symbol ON stock_states (symbol, taken_at);
+-- ETF analyser (owner, 2026-11-06): the scanner's ETF file per collection (scanner/funds.py, app/etf.py). Admin side only:
+-- the customer service has no grant; customers get the published summary in published.etf_gz.
+CREATE TABLE IF NOT EXISTS etf_collections (
+    snapshot_id  BIGINT PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+    etfs         INT         NOT NULL,
+    data_gz      BYTEA       NOT NULL
+);
+ALTER TABLE published ADD COLUMN IF NOT EXISTS etf_gz BYTEA;   -- ETF analyser (customer): strength + Recommended only
 CREATE OR REPLACE FUNCTION portal_history_enabled() RETURNS boolean
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
     AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'history'), false) $$;
 REVOKE ALL ON FUNCTION portal_history_enabled() FROM PUBLIC;
+-- AI ETF SIP Builder (owner, 2026-11-06): a customer's saved SIPs (inputs + the holdings when saved), private to them
+CREATE TABLE IF NOT EXISTS customer_sips (
+    id           BIGSERIAL PRIMARY KEY,
+    customer_id  BIGINT      NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    name         TEXT        NOT NULL,
+    inputs       JSONB       NOT NULL,
+    holdings     JSONB       NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    refreshed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS customer_sips_customer ON customer_sips (customer_id);
+-- saved plans also hold AI Portfolio Builder portfolios (kind); alerts on = checked after every publish (monitor.py)
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'sip';          -- sip | builder
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS alerts BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS state JSONB;                              -- last alert check
+-- tracking (owner 2026-11-06): kind analyser too; the date it was saved and every change since ([{d, holdings}])
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS saved_on DATE;
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS versions JSONB NOT NULL DEFAULT '[]'::jsonb;
+UPDATE customer_sips SET saved_on = (created_at AT TIME ZONE 'Asia/Kolkata')::date WHERE saved_on IS NULL;
+-- sharing (owner 2026-11-07: "an ID for every saved portfolio, with private and public control"): a short ID made by the database,
+-- and private (default) / public. A public portfolio is read through shared_portfolio() below — never by reading other customers' rows.
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS share_id TEXT;
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private';
+-- owner 2026-11-07: "a 16-character random ID — more security": XXXX-XXXX-XXXX-XXXX from 31 letters / digits (no 0 O 1 I L), drawn
+-- from gen_random_uuid() (a cryptographic random source, only its fully random bytes): 31^16 ≈ 7.3 × 10^23 IDs, and the public page
+-- answers a limited number of requests a minute per address (portal.py) — guessing one is out of reach
+CREATE OR REPLACE FUNCTION hp_share_id() RETURNS text LANGUAGE plpgsql VOLATILE AS $$
+DECLARE
+    alpha CONSTANT text := 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    b bytea := decode(replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''), 'hex');
+    pick CONSTANT int[] := ARRAY[0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17];   -- not the UUID version / variant bytes (6, 8)
+    s text := '';
+BEGIN
+    FOR i IN 1..16 LOOP
+        s := s || substr(alpha, (get_byte(b, pick[i]) % 31) + 1, 1);
+        IF i IN (4, 8, 12) THEN s := s || '-'; END IF;
+    END LOOP;
+    RETURN s;
+END $$;
+ALTER TABLE customer_sips ALTER COLUMN share_id SET DEFAULT hp_share_id();
+UPDATE customer_sips SET share_id = hp_share_id() WHERE share_id IS NULL OR share_id !~ '^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$';
+CREATE UNIQUE INDEX IF NOT EXISTS customer_sips_share ON customer_sips (share_id);
+-- one public portfolio by its ID: what a viewer may see (no owner, no amounts of money are in this answer's holdings use — the portal trims them)
+CREATE OR REPLACE FUNCTION shared_portfolio(p_code TEXT) RETURNS jsonb
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+    AS $$ SELECT jsonb_build_object('id', id, 'kind', kind, 'name', name, 'inputs', inputs, 'holdings', holdings, 'versions', versions,
+                                    'saved_on', saved_on, 'created_at', created_at, 'share_id', share_id)
+          FROM customer_sips WHERE visibility = 'public' AND share_id = upper(p_code) LIMIT 1 $$;
+REVOKE ALL ON FUNCTION shared_portfolio(TEXT) FROM PUBLIC;
+-- engagement (owner 2026-11-07, round 15: the admin's list of shared portfolios): how often a public link was opened. Only counts —
+-- no visitor data is stored. Called by the open public page; touches only a public row with that exact ID.
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS views INT NOT NULL DEFAULT 0;
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS last_view TIMESTAMPTZ;
+CREATE OR REPLACE FUNCTION shared_portfolio_seen(p_code TEXT) RETURNS void
+    LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public
+    AS $$ UPDATE customer_sips SET views = views + 1, last_view = now() WHERE visibility = 'public' AND share_id = upper(p_code) $$;
+REVOKE ALL ON FUNCTION shared_portfolio_seen(TEXT) FROM PUBLIC;
+-- daily closing prices of every published stock and ETF (tracking of saved portfolios); market data, no customer data
+CREATE TABLE IF NOT EXISTS price_hist (
+    sym    TEXT NOT NULL,
+    d      DATE NOT NULL,
+    close  REAL NOT NULL,
+    PRIMARY KEY (sym, d)
+);
+-- stock splits / bonuses found in price_hist (tracking.detect_splits): from day d one old share = factor new shares
+CREATE TABLE IF NOT EXISTS price_adj (
+    sym     TEXT NOT NULL,
+    d       DATE NOT NULL,
+    factor  REAL NOT NULL,
+    PRIMARY KEY (sym, d)
+);
+-- in-app notification centre (owner 2026-11-06: "notify in the notification centre at the top what to change")
+CREATE TABLE IF NOT EXISTS customer_notifications (
+    id           BIGSERIAL PRIMARY KEY,
+    customer_id  BIGINT      NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    kind         TEXT        NOT NULL,                    -- sip | builder | portfolio
+    ref_id       BIGINT,                                  -- the saved plan (sip / builder); NULL for the Analyser list
+    title        TEXT        NOT NULL,
+    body         JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    read_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS customer_notifications_customer ON customer_notifications (customer_id, created_at DESC);
 -- AI Portfolio Analyser: the customer's list of stocks (symbols only — no quantities, no prices)
 CREATE TABLE IF NOT EXISTS customer_portfolio (
     customer_id  BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
@@ -213,6 +306,8 @@ CREATE TABLE IF NOT EXISTS customer_portfolio (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 REVOKE ALL ON FUNCTION customers_auto_approve() FROM PUBLIC;
+ALTER TABLE customer_portfolio ADD COLUMN IF NOT EXISTS alerts BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE customer_portfolio ADD COLUMN IF NOT EXISTS alert_state JSONB;
 CREATE INDEX IF NOT EXISTS hd_images_uploader ON hd_images (uploader, created_at);
 
 -- Access manager (RBAC for the customer app only, owner 2026-10-27). Applications = the customer app's modules (fixed
@@ -226,11 +321,21 @@ CREATE TABLE IF NOT EXISTS app_modules (
     enabled      BOOLEAN NOT NULL DEFAULT true        -- off = hidden from everyone (maintenance)
 );
 INSERT INTO app_modules (key, name, description, sort) VALUES
-    ('research',  'Research view',              'Control Tower: every stock with filters, sectors, industries and the stock card', 1),
-    ('simple',    'Simplified view (AI Mode)',  'Search one stock and read the AI verdict in plain words', 2),
+    ('research',  'Deep Research',              'Control Tower: every stock with filters, sectors, industries and the stock card', 2),
+    ('simple',    'AI Mode',                    'Search one stock and read the AI verdict in plain words', 1),
     ('portfolio', 'AI Portfolio Analyser',      'The customer''s own stock list with strength, trend map and the PDF report', 3),
-    ('builder',   'AI Portfolio Builder',       'Builds a model portfolio from an amount, stock count, market-cap mix and reliability', 4)
+    ('builder',   'AI Portfolio Builder',       'Builds a model portfolio from an amount, stock count, market-cap mix and reliability', 4),
+    ('etf',       'ETF Analyser',               'Tradable ETFs (gold, silver, index, sector, international) with their strength and the recommended ETF for each', 5),
+    ('sip',       'AI ETF SIP Builder',             'A monthly or quarterly SIP in ETFs only: Nifty large, mid and small caps, gold, and themes kept small — the reliable way to invest', 6),
+    ('msip',      'AI Momentum SIP Builder',    'A monthly or quarterly SIP in momentum stocks only, spread across many stocks and sectors — higher risk, re-checked after every update', 7)
 ON CONFLICT (key) DO NOTHING;
+-- owner 2026-11-06: the SIP split into the AI ETF SIP Builder (ETFs, reliable) + the AI Momentum SIP (stocks, risk); Research
+-- view → Deep Research, Simplified view (AI Mode) → AI Mode, AI Mode first. A name the admin changed is left alone.
+UPDATE app_modules SET name = 'AI ETF SIP Builder', description = 'A monthly or quarterly SIP in ETFs only: Nifty large, mid and small caps, gold, and themes kept small — the reliable way to invest' WHERE key = 'sip' AND name IN ('Momentum SIP', 'AI SIP Builder');   -- owner 2026-11-07: "AI ETF SIP Builder in all the places"
+UPDATE app_modules SET name = 'AI Momentum SIP Builder' WHERE key = 'msip' AND name = 'AI Momentum SIP';   -- owner 2026-11-07
+UPDATE app_modules SET name = 'Deep Research' WHERE key = 'research' AND name = 'Research view';
+UPDATE app_modules SET name = 'AI Mode' WHERE key = 'simple' AND name = 'Simplified view (AI Mode)';
+UPDATE app_modules SET sort = CASE key WHEN 'simple' THEN 1 WHEN 'research' THEN 2 ELSE sort END WHERE key IN ('simple', 'research');
 CREATE TABLE IF NOT EXISTS roles (
     id           BIGSERIAL PRIMARY KEY,
     name         TEXT NOT NULL,
@@ -402,6 +507,15 @@ def init_db():
         perms.migrate_v2(c)
         _seed_roles(c)
         perms.migrate_builder_plans(c)                         # builder for every role + its Customer plan
+        perms.migrate_sip(c)                                   # AI ETF SIP Builder for every role (owner 2026-11-06)
+        perms.migrate_msip(c)                                  # AI Momentum SIP for every role (owner 2026-11-06)
+        perms.migrate_pin_order(c)                             # AI Mode first in saved menu pins (owner 2026-11-06)
+        perms.migrate_research_second(c)                       # AI Mode, then Deep Research first in saved pins (owner 2026-11-07)
+        perms.migrate_share(c)                                 # Customer Admin may share saved portfolios (owner 2026-11-07)
+        perms.migrate_share_all(c)
+        perms.migrate_history_perm(c)                          # past data = a permission, Customer Admin (owner 2026-11-07, round 16)                             # …then every role that opens the app (owner 2026-11-07, round 15)
+        perms.migrate_pins8(c)                                 # 8 pins: the AI Momentum SIP joins saved pins (owner 2026-11-06)
+        perms.migrate_msip_levels(c)                           # Momentum SIP Customer / Admin levels (owner 2026-11-06 r6)
         perms.rename_builder_levels(c)
         _setup_portal_role(c)
 
@@ -474,7 +588,24 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("GRANT SELECT ON customer_history TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION portal_history_enabled() TO {}").format(role))
     # AI Portfolio: each customer sees and changes only their own row (hp.cid set per transaction, like the helpdesk)
-    c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, symbols, updated_at), UPDATE (symbols, updated_at) ON customer_portfolio TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, symbols, updated_at, alerts), UPDATE (symbols, updated_at, alerts, alert_state) ON customer_portfolio TO {}").format(role))
+    # saved SIPs: the same "own rows only" rule as the Analyser list
+    c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, name, inputs, holdings, kind, alerts, saved_on, versions), "
+                      "UPDATE (refreshed_at, alerts, holdings, state, name, versions, visibility), DELETE ON customer_sips TO {}").format(role))
+    c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION shared_portfolio(TEXT) TO {}").format(role))
+    c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION shared_portfolio_seen(TEXT) TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT ON price_hist, price_adj TO {}").format(role))     # market prices for tracking
+    # notification centre: read, mark read, delete own rows (the worker writes them)
+    c.execute(sql.SQL("GRANT SELECT, UPDATE (read_at), DELETE ON customer_notifications TO {}").format(role))
+    c.execute("ALTER TABLE customer_notifications ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON customer_notifications")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON customer_notifications TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
+                      "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
+    c.execute(sql.SQL("GRANT USAGE ON SEQUENCE customer_sips_id_seq TO {}").format(role))
+    c.execute("ALTER TABLE customer_sips ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON customer_sips")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON customer_sips TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
+                      "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     c.execute("ALTER TABLE customer_portfolio ENABLE ROW LEVEL SECURITY")
     c.execute("DROP POLICY IF EXISTS portal_own ON customer_portfolio")
     c.execute(sql.SQL("CREATE POLICY portal_own ON customer_portfolio TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
@@ -487,7 +618,8 @@ def _setup_portal_role(c):
                       "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     c.execute("ALTER TABLE customer_history ENABLE ROW LEVEL SECURITY")
     c.execute("DROP POLICY IF EXISTS portal_history ON customer_history")
-    c.execute(sql.SQL("CREATE POLICY portal_history ON customer_history FOR SELECT TO {} USING (portal_history_enabled())").format(role))
+    # round 16: who may read a past day is the permission research:history, checked by the customer service per request
+    c.execute(sql.SQL("CREATE POLICY portal_history ON customer_history FOR SELECT TO {} USING (true)").format(role))
     # Access manager: read-only (roles are changed in Admin only). Activity: the service records sessions, events and
     # minutes per module but can never read the log back or change who holds which role.
     c.execute(sql.SQL("GRANT SELECT ON app_modules, roles, role_modules, customer_roles, app_permissions, role_permissions, "

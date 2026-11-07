@@ -20,7 +20,9 @@ import traceback
 from datetime import timedelta
 
 from . import activity as act
+from . import tracking
 from . import config
+from . import etf
 from . import mailer
 from .db import get_history_enabled, get_meta, get_settings, init_db, pool, set_meta
 from .adoption import ADOPTION_DAYS
@@ -109,6 +111,8 @@ def run_scanner(run_dir, settings):
     """Runs chartink_fast inside run_dir; returns the path of the Excel it wrote."""
     from scanner import chartink_fast as sc                      # imported late: heavy module
     sc.NR_MOTHER_BODY_PCT = float(settings["nr_mother_body_pct"])
+    sc.FUND_ADD = {str(x).upper() for x in settings.get("index_add") or []}      # the funds & indices wall (scanner/funds.py)
+    sc.FUND_KEEP = {str(x).upper() for x in settings.get("index_keep") or []}
     print(f"NR mother candle: body >= {sc.NR_MOTHER_BODY_PCT:g}% of the range")
     creds = config.telegram() if settings.get("telegram_enabled", True) else None
     send = creds is not None
@@ -156,6 +160,12 @@ def run_job(job, bg):
         if job["kind"] == "manual" and settings.get("manual_keep") == "latest":
             _drop_older_manual(started.date(), keep_id=sid)
         print(f"✓ Stored as collection #{sid} ({len(sheets)} sheets)")
+        etf_files = sorted(glob.glob(os.path.join(run_dir, "etf_data_*.json")), key=os.path.getmtime)
+        if etf_files:                                            # ETF analyser (owner, 2026-11-06) — before publishing
+            try:
+                print(f"📀 ETF analyser: {etf.store(sid, etf_files[-1])} tradable ETFs stored with the collection")
+            except Exception as e:                               # noqa: BLE001 — never fail the collection for this
+                print(f"⚠ Could not store the ETF data: {e}")
         if get_settings().get("publish_mode") == "auto":
             issues = quality_issues(sheets)                      # incomplete data never replaces good data by itself
             if issues:
@@ -196,7 +206,7 @@ def _drop_older_manual(day, keep_id):
             os.remove(r["excel_path"])
 
 
-HEALTH_RULES = "original-70-50"     # bump when the Price_Health rule changes → stored collections are re-rated once
+HEALTH_RULES = "v3-stability"       # bump when the Price_Health rule changes → stored collections are re-rated once
 
 
 def rerate_stored_health():
@@ -205,7 +215,20 @@ def rerate_stored_health():
     if get_meta("health_rules") == HEALTH_RULES:
         return
     from scanner.chartink_fast import health_status                  # imported late: heavy module
+    from scanner.stability import facts_of, stability
     num = lambda v: None if v in (None, "", "None") else float(v)
+
+    def stored_candles(sid):
+        """symbol -> {"Y": [[o, h, l, c] …13], "Q": …} from the candles stored with a collection (None = none stored)"""
+        with pool.connection() as c:
+            r = c.execute("SELECT data_gz FROM snapshot_candles WHERE snapshot_id = %s", (sid,)).fetchone()
+        if not r:
+            return None
+        out = {}
+        for row in json.loads(gzip.decompress(bytes(r["data_gz"]))):
+            out[str(row.get("Symbol") or "").upper()] = {tf: [[float(v) for v in str(row.get(f"{tf}{k}") or "").split()] or [None] * 4
+                                                              for k in range(13)] for tf in "YQ"}
+        return out
     with pool.connection() as c:
         ids = [r["id"] for r in c.execute("SELECT id FROM snapshots ORDER BY id").fetchall()]
     touched = 0
@@ -215,15 +238,32 @@ def rerate_stored_health():
         if not r:
             continue
         sheets = json.loads(gzip.decompress(bytes(r["data_gz"])))
-        changed = []
+        changed, added = [], False
+        cand = stored_candles(sid)                                   # older collections: no candles → original rule
+        zh = {str(z.get("Symbol") or "").upper(): z for z in sheets.get("Zone_History") or []}
         for row in sheets.get("Price_Health") or []:
+            sym = str(row.get("Symbol") or "").upper()
+            score = parts = facts = None
+            bars = (cand or {}).get(sym)
+            price = num(row.get("Price"))
+            if bars and price:
+                y, q, z = bars["Y"], bars["Q"], zh.get(sym, {})
+                col = lambda b, k: [x[k] if len(x) == 4 and x[k] is not None else None for x in b]
+                zq = [(num(z.get(f"Q{k}_Bottom")), num(z.get(f"Q{k}_Top"))) for k in range(5)]
+                zy = [(num(z.get(f"Y{k}_Bottom")), num(z.get(f"Y{k}_Top"))) for k in range(5)]
+                run1y = num(row.get("Run_Up_1Y_X"))
+                score, parts, _ = stability(price, col(y, 1), col(y, 2), col(y, 3), col(q, 1), col(q, 2), run1y, zq, zy)
+                facts = facts_of(price, col(y, 1), col(y, 2), col(q, 1), col(q, 2), run1y)
+                for k, v in (("Stability_Score", score), ("Max_Fall_3Y_Pct", round(facts["fall3"], 2))):
+                    if row.get(k) != v:
+                        row[k] = v; added = True
             st, reasons = health_status(num(row.get("Drawdown_From_Peak_Pct")), num(row.get("Return_5Y_Pct")),
-                                        num(row.get("Peak_High")), num(row.get("Peak_Years_Ago")))
+                                        num(row.get("Peak_High")), num(row.get("Peak_Years_Ago")), score, parts, facts)
             why = "; ".join(reasons) if reasons else "price holds up well against its history"
             if row.get("Health") != st or row.get("Reason") != why:
                 row["Health"], row["Reason"] = st, why
                 changed.append((st, sid, row.get("Symbol")))
-        if not changed:
+        if not changed and not added:
             continue
         raw = json.dumps(sheets, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         gz = gzip.compress(raw, compresslevel=6)
@@ -298,6 +338,19 @@ def main():
     try:
         rerate_stored_health()
     except Exception:                                                # noqa: BLE001 — never block the worker
+        traceback.print_exc()
+    try:                                                             # tracking: daily prices from the stored collections, once
+        n = tracking.backfill()
+        if n:
+            print(f"📈 Tracking: {n} daily prices from the stored collections", flush=True)
+    except Exception:                                                # noqa: BLE001
+        traceback.print_exc()
+    try:                                                             # past days: their ETF view too (round 16), once
+        from .publish import history_etf_backfill
+        n = history_etf_backfill()
+        if n:
+            print(f"🗓 Past days: ETF view stored for {n} day(s)", flush=True)
+    except Exception:                                                # noqa: BLE001
         traceback.print_exc()
     bg = Background()
     bg.start()

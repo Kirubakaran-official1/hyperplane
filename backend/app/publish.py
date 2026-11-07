@@ -28,7 +28,11 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 from . import detail
+from . import etf
+from . import monitor
+from . import tracking
 from . import liquidity
+from scanner.funds import is_fund_or_index
 from .db import get_meta, get_settings, pool, set_meta, TECH_TF_DEFAULT
 from .zone_engine import read_all as zone_read_all, apply_regime as zone_apply_regime
 
@@ -39,8 +43,6 @@ EVENT_W = {"BREAKOUT": 1.0, "BREAKDOWN": 1.0, "CROSS": 1.0, "VIRGIN": 1.2, "FLAG
 TF_WORDS = {"daily": "D", "weekly": "W", "monthly": "M", "quarterly": "Q", "quaterly": "Q", "yearly": "Y"}
 POS_SCORE = {"ABOVE_TOP": 1.0, "IN_TOP_BAND": 0.5, "INSIDE": 0.0, "IN_BOTTOM_BAND": -0.5, "BELOW_BOTTOM": -1.0}
 _TF_RE = re.compile(r"(daily|weekly|monthly|quarterly|quaterly|yearly)|(?:^|_)([dwmqy])_?z(?=_|$|[hl])")
-_IDX_SYM = re.compile(r"NIFTY|SENSEX|BEES|ETF$")
-_IDX_NAME = re.compile(r"\bETF\b|\bindex fund\b|\bfund of funds?\b", re.I)
 CAP = {"largecap": "Large", "midcap": "Mid", "smallcap": "Small"}
 KEEP_PUBLISHED = 30
 # Strength formula version (owner, 2026-11-01: past dates must show the same final output). Bump it whenever the customer
@@ -232,6 +234,9 @@ def build_public(sheets, settings, as_of, earlier=None):
     health = {_sym(r.get("Symbol")): str(r.get("Health") or "").upper() for r in sheets.get("Price_Health", [])}
     stretched = {_sym(r.get("Symbol")) for r in sheets.get("Price_Health", []) if str(r.get("Stretched") or "") == "Yes"}
     years = {_sym(r.get("Symbol")): _num(r.get("Years_Of_History")) for r in sheets.get("Price_Health", [])}
+    # long-term safety (reliability v2, owner 2026-11-06): worst fall within 3 years (%) and the 1-year rise (x)
+    safety = {_sym(r.get("Symbol")): (_num(r.get("Max_Fall_3Y_Pct")), _num(r.get("Run_Up_1Y_X")), _num(r.get("Stability_Score")))
+              for r in sheets.get("Price_Health", [])}
     tech = {_sym(r.get("Symbol")): r for r in sheets.get("Technicals", [])} if settings.get("tech_enabled") else {}
     zv = zone_read_all(sheets)                   # AI Portfolio zone engine codes (empty for collections without Zone_History)
     atr = {_sym(r.get("Symbol")): _num(r.get("D_ATR")) for r in sheets.get("Technicals", []) or []}   # daily price swing
@@ -243,6 +248,15 @@ def build_public(sheets, settings, as_of, earlier=None):
     prev = (earlier or {}).get("R")              # previous trading day's weekly regime ("regime shifted")
     mc = {_sym(r.get("Symbol")): [_num(r.get(f"M{k}_Close")) for k in range(1, 5)] for r in sheets.get("Zone_History", [])}
     m3 = {k: v[2] for k, v in mc.items()}                                                              # close 3 months ago
+
+    def rise4(mr):
+        """the rise over the last 4 months (this one so far + 3 full ones), %, from the month moves"""
+        if not mr or any(v is None for v in mr):
+            return None
+        k = 1.0
+        for v in mr:
+            k *= 1 + v / 100
+        return round((k - 1) * 100, 1)
 
     def month_moves(sym, price):
         """% change of each of the last 4 months, oldest first: [m−3, m−2, m−1, this month so far]; a move outside
@@ -267,12 +281,9 @@ def build_public(sheets, settings, as_of, earlier=None):
             per = sig.setdefault(_sym(r.get("Symbol")), {})
             per[tf] = per.get(tf, 0) + d * w
 
-    def is_index(sym, z, m):
-        if sym in keep:
-            return False
-        sector = str((m or {}).get("Sector") or (z or {}).get("Sector") or "").lower()
-        name = str((m or {}).get("Stock_Name") or (z or {}).get("Stock_Name") or "")
-        return sym in add or sector == "indices" or bool(_IDX_SYM.search(sym)) or bool(_IDX_NAME.search(name))
+    def is_index(sym, z, m):                     # the scanner's funds & indices wall (scanner/funds.py), for older collections
+        return is_fund_or_index(sym, (m or {}).get("Sector") or (z or {}).get("Sector"),
+                                (m or {}).get("Stock_Name") or (z or {}).get("Stock_Name"), add, keep)
 
     stocks, scored, index_syms = [], [], set()
     for sym, z in zl.items():
@@ -346,7 +357,14 @@ def build_public(sheets, settings, as_of, earlier=None):
                        **({"r3": r3} if (r3 := (round((price / m3[sym] - 1) * 100, 1) if m3.get(sym) else None)) is not None
                           and -95 <= r3 <= 400 else {}),
                        # last 4 months, % per month (Investment AI summary in the Research stock card)
-                       **({"mr": mr} if (mr := month_moves(sym, price)) else {})})
+                       **({"mr": mr} if (mr := month_moves(sym, price)) else {}),
+                       # safety checklist: [years listed, worst fall in 3 years %, 1-year rise x, rise over the last 4 months %]
+                       **({"sf": [int(years[sym]) if years.get(sym) is not None else None,
+                                  round(safety[sym][0], 1) if safety[sym][0] is not None else None,
+                                  round(safety[sym][1], 2) if safety[sym][1] is not None else None, rise4(mr)]}
+                          if sym in safety else {}),
+                       # stability score 0…100 (scanner/stability.py; reliability High from 58)
+                       **({"rs": int(safety[sym][2])} if sym in safety and safety[sym][2] is not None else {})})
         if "-" not in rating and health.get(sym) != "POOR":
             weighted = sum(TF_WEIGHT[tf] * (1 if ch == "G" else -1 if ch == "W" else 0) for tf, ch in zip(TFS, rating))
             if weighted > 0:
@@ -527,14 +545,39 @@ def build_history(snapshot_id):
     payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat(), earlier_zones(snap["trade_date"]))
     if snap["source"] == "scheduled":
         gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
+        egz = _etf_gz(snap["id"], snap["taken_at"].isoformat())
         with pool.connection() as c:
-            c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz, formula) "
-                      "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET data_gz = EXCLUDED.data_gz, "
-                      "stocks = EXCLUDED.stocks, formula = EXCLUDED.formula, built_at = now()",
-                      (snap["id"], snap["trade_date"], snap["taken_at"], snap["slot"], len(payload["stocks"]), gz, FORMULA_VERSION))
+            c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz, formula, etf_gz) "
+                      "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET data_gz = EXCLUDED.data_gz, "
+                      "stocks = EXCLUDED.stocks, formula = EXCLUDED.formula, etf_gz = COALESCE(EXCLUDED.etf_gz, customer_history.etf_gz), built_at = now()",
+                      (snap["id"], snap["trade_date"], snap["taken_at"], snap["slot"], len(payload["stocks"]), gz, FORMULA_VERSION, egz))
     n = _store_states(snap, payload)
     d = _store_detail(snap, sheets, payload) if snap["taken_at"] >= _detail_since() else 0
     return {"snapshot_id": snap["id"], "stocks": len(payload["stocks"]), "states": n, "detail": d}
+
+
+def _etf_gz(snapshot_id, as_of):
+    """the ETF analyser's customer view of one collection (None when it has no ETF file)"""
+    try:
+        rows = etf.admin_rows(snapshot_id, as_of)
+        return gzip.compress(json.dumps(etf.customer_payload(rows, as_of), separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6) if rows else None
+    except Exception as e:                       # noqa: BLE001
+        print(f"⚠ ETF view of collection #{snapshot_id}: {e}")
+        return None
+
+
+def history_etf_backfill():
+    """round 16: the stored past days get their ETF view (once; days without an ETF file stay without one)"""
+    with pool.connection() as c:
+        rows = c.execute("SELECT snapshot_id, taken_at FROM customer_history WHERE etf_gz IS NULL").fetchall()
+    n = 0
+    for r in rows:
+        g = _etf_gz(r["snapshot_id"], r["taken_at"].isoformat())
+        if g:
+            with pool.connection() as c:
+                c.execute("UPDATE customer_history SET etf_gz = %s WHERE snapshot_id = %s", (g, r["snapshot_id"]))
+            n += 1
+    return n
 
 
 def _detail_since():
@@ -617,10 +660,30 @@ def publish(snapshot_id=None, mode="manual", by=None, dry_run=False):
     if dry_run:
         return payload
     gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
+    etf_gz, etf_payload = None, None             # ETF analyser (owner, 2026-11-06): strength + Recommended only
+    try:
+        rows = etf.admin_rows(snap["id"], snap["taken_at"].isoformat())
+        if rows:
+            etf_payload = etf.customer_payload(rows, snap["taken_at"].isoformat())
+            etf_gz = gzip.compress(json.dumps(etf_payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
+    except Exception as e:                       # noqa: BLE001 — never block the stock publish for it
+        print(f"⚠ ETF analyser not published: {e}")
     with pool.connection() as c:
-        r = c.execute("INSERT INTO published (snapshot_id, data_as_of, mode, published_by, stocks, data_gz) "
-                      "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id, published_at",
-                      (snap["id"], snap["taken_at"], mode, by, len(payload["stocks"]), gz)).fetchone()
+        r = c.execute("INSERT INTO published (snapshot_id, data_as_of, mode, published_by, stocks, data_gz, etf_gz) "
+                      "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id, published_at",
+                      (snap["id"], snap["taken_at"], mode, by, len(payload["stocks"]), gz, etf_gz)).fetchone()
         c.execute("DELETE FROM published WHERE id NOT IN (SELECT id FROM published ORDER BY id DESC LIMIT %s)", (KEEP_PUBLISHED,))
+    try:                                         # tracking: today's closes of every stock and ETF (+ splits found)
+        prices = {x["s"]: x.get("p") for x in payload["stocks"]}
+        prices.update({x["s"]: x.get("p") for x in (etf_payload or {}).get("etfs", [])})
+        tracking.record_day(snap["trade_date"], prices, tracking.changes_of(snap["id"]))
+    except Exception as e:                       # noqa: BLE001 — never block the publish for it
+        print(f"⚠ Prices not recorded for tracking: {e}")
+    try:                                         # alerts: saved SIPs / portfolios / Analyser lists (monitor.py)
+        n = monitor.run_alerts(payload, etf_payload)
+        if n:
+            print(f"🔔 {n} customer notification(s) for changed holdings")
+    except Exception as e:                       # noqa: BLE001 — never block the publish for it
+        print(f"⚠ Alerts not checked: {e}")
     return {"id": r["id"], "published_at": r["published_at"].isoformat(), "snapshot_id": snap["id"],
             "as_of": snap["taken_at"].isoformat(), "stocks": len(payload["stocks"]), "mode": mode, "by": by}

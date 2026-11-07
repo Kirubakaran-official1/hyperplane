@@ -25,7 +25,20 @@ export const AX_CSS = `
 .ax-t td{vertical-align:middle}
 .ax-row{cursor:pointer}.ax-row:hover td{background:var(--hover,rgba(127,127,127,.05))}
 .ax-row.dim{opacity:.55}
-.ax-grp td{background:var(--s2);padding:8px 10px!important}
+.ax-grp td{background:var(--s2);padding:0!important;border-top:1px solid var(--b1)}
+.ax-gh{display:flex;align-items:center;gap:10px;min-height:56px;padding:0 14px 0 0}
+.ax-ghb{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:10px 14px;border:0;background:none;cursor:pointer;text-align:left;font-family:inherit;color:var(--t1)}
+.ax-chev{flex:none;color:var(--t3);transition:transform .2s}.ax-gh.open .ax-chev{transform:rotate(90deg);color:var(--acc)}
+.ax-ghi{flex:none;display:inline-flex;width:34px;height:34px;border-radius:10px;align-items:center;justify-content:center;background:var(--adim);color:var(--acc)}
+.ax-ght{display:flex;flex-direction:column;gap:1px;min-width:0}.ax-ght b{font-size:14.5px;font-weight:700}
+.ax-ght small{font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:720px}
+.ax-ghn{flex:none;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:999px;background:var(--s1);border:1px solid var(--b1);color:var(--t2)}
+.ax-ghb:hover .ax-ght b{color:var(--acc)}.ax-ghb:focus-visible{outline:2px solid var(--acc);outline-offset:-2px;border-radius:10px}
+.ax-ghr{display:inline-flex;align-items:center;gap:8px;flex:none}
+.ax-foldall{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--b2);background:var(--s1);color:var(--t1);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
+.ax-foldall:hover{border-color:var(--acc);color:var(--acc)}
+.ax-pg .ax-gh{min-height:48px;padding-right:6px}.ax-pg .ax-ghb{padding:6px 8px}
+.ax-pg>.ax-check{margin:0 2px}
 .ax-fold{border:0;background:none;color:var(--t2);cursor:pointer;width:20px;font-size:12px}
 .ax-apph{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
 .ax-appi{display:inline-flex;width:24px;height:24px;border-radius:7px;align-items:center;justify-content:center;background:var(--adim);color:var(--acc)}
@@ -103,7 +116,7 @@ export const AX_CSS = `
 .ax-rvmeta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px;color:var(--t2)}
 .ax-chg{font-size:11.5px;font-weight:700;color:var(--mixed)}
 .ax-only{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--t2);cursor:pointer}
-.ax-pgroups{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px}
+.ax-pgroups{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px;align-items:start}
 .ax-pg{display:flex;flex-direction:column;gap:4px;border:1px solid var(--b1);border-radius:11px;padding:8px;background:var(--bg)}
 .ax-pgh{display:flex;align-items:center;gap:6px;padding:2px 2px 6px;font-size:12.5px;color:var(--t1)}
 .ax-needs{display:block;font-size:10.5px}

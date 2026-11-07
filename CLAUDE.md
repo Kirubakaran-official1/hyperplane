@@ -43,6 +43,27 @@ the exact trading rules, how to test, how to deploy, and how the owner wants to 
   info buttons instead of long text, filters on every list, bubble view by default for sector/industry, a minimal
   pull-out side nav (☰ in the tab bar, takes no space when closed), equal-height widget rows, dark theme first.
 
+### 2a. The UI the owner expects (read before ANY UI change — he repeats these)
+Collected from his feedback; apply them to every screen you add or touch, and check each in the browser (desktop, phone width, dark mode).
+1. **Use the real estate — no wasted space.** One gap between blocks (12 px, from the flex gap of the page; never a gap *plus* margins),
+   a slim one-line brand band (~50 px), a plain action bar (no tray), cards that fill their row. An empty area beside or under a card
+   (e.g. under the AI summary) is a bug: fill it with a useful stat or rebalance the grid. Pages run full width.
+2. **One page format in every app**: slim `BrandBand` (eyebrow · title · sub · right-hand tabs), then `.hp-actbar`, then tabs / KPI tiles.
+   The same tiles (`.tk-k` family), the same table (`.hp-t`, Builder style: accordion group rows, ticker in the accent colour, numbers
+   right-aligned), the same form (Builder layout: numbered steps left, "How it works" + "Your plan" right, `.al` slider rows).
+3. **Modern, not "old school"**: soft rounded tiles and pills, light shadows, calm colours, icons in rounded tiles, gauges with a marker,
+   a key under a bar instead of text inside it. No heavy borders, hatched fills, thick bars with text inside, or dated boxed widgets.
+4. **Buttons stay normal**: the standard solid `.px-btn.primary` for the one call to action, plain `.px-btn` for the rest. No gradient
+   buttons, no loud glow, nothing "too contrast". Green means *good / safe* only — never a decorative colour.
+5. **Colours**: no green except for "up / good"; market-cap shades are one blue family (`--mx-l/m/s`); every colour must work in light
+   and dark. Validate chart palettes with the dataviz validator.
+6. **Pop-ups are centred** (never a side panel); an (i) pop-up must always be readable (normal case, inside the screen, never under a card).
+7. **Motion is small and meaningful** (a swap slides out / in, a block fades up) and respects `prefers-reduced-motion`. Effects he tried and
+   rejected stay out (the click "water bed" ripple).
+8. **Plain customer words**: outcomes only, no method names, no plan / tier names, no weekly / daily wording; the admin sees the technical terms.
+9. **Every list / table can be filtered**, bars that show shares filter the table below them, big numbers are readable (₹ lakh / crore words).
+10. **Mobile first-class**: no sideways scroll at 400 px, the same content reachable; dark theme is a full theme, not an afterthought.
+
 ---
 
 ## 3. Repository layout
@@ -490,6 +511,20 @@ Price_Health, Failed_NR, Zone_Retest, Technicals (+ Zone_History, Candles — Ca
   combined `os` ≥ 24 for Combined; ≤ −24 = downtrend). Disclaimer everywhere (owner told to confirm SEBI rules with compliance).
 
 ### Helpdesk (2026-10-03) — `backend/app/helpdesk.py` (shared logic) + `frontend/shared/helpdesk.jsx` (shared UI)
+- **Ready-made requests + one-click limit request (owner, 2026-11-03):** "if the limit is increasing in the customer
+  account, ask the user to raise a ticket … the template in the predefined queries … in one click it can send to the
+  admin". `core.jsx` `HD_TEMPLATES` (Increase my portfolio limit · Renew my access · Add an application · Change my email ·
+  Report wrong data) → `Helpdesk templates=` (customer app only; never for staff) shows them as chips in New query: one
+  click fills subject + severity + message, still editable. `openReq {id:"new", tpl}` opens New query pre-filled.
+  Builder `LimitAsk`: only when the amount or the stock count goes past the access limit (NOT in the locked More options —
+  owner removed it there), "Request a higher limit" sends the query directly (subject `HD_LIMIT_SUBJECT`, low, body = current limit + what was
+  asked for); an OPEN query with that subject is shown ("already with QuantFriday") instead of a duplicate; "View
+  request" opens it. Uses the normal ticket endpoint (its rate limits apply); the limits stay enforced server-side.
+  The custom stock count may now be typed past the limit so the message shows (the server refuses it anyway).
+  Test: scratchpad `limit_ui_test.py`.
+- **Builder → Analyser hand-off fix (2026-11-03):** the Analyser picks its screen (start / result) once, when it opens; if it
+  was already open on the start screen (empty list) and the builder then sent stocks, it stayed on "Analyse my portfolio".
+  Now `shell.addToPf` bumps `pfSent` → `PortfolioView sent=` → shows the result. Test: scratchpad `pf_handoff_ui_test.py`.
 - Customers (/app → 🎧 Helpdesk tab) and dashboard users (🎧 Helpdesk tab) raise queries written like an email: To
   "QuantFriday Helpdesk", Subject, Severity High/Medium/Low, a contenteditable body where images can be pasted /
   dropped / inserted (re-drawn on a canvas → PNG/JPEG ≤ 1.1 MB, max 3; any other file is refused), Send. Admins see
@@ -708,11 +743,11 @@ customer may not use: "this is the wrong way … this is not only for the AI por
   COLLAPSED by default (76 px: icon with its 9.5 px name underneath, up to 3 lines), the open / close toggle at the TOP
   under the logo (☰ when closed, « when open), open = 208 px with 12.5 px names beside the icons (long names wrap, never
   cut). No "Your plan" box in the menu (owner 2026-10-28: the plan is in the Account window) (`qf_nav` = full|min,
-  default min). Items: the customer's PINNED applications (max 6, `MAX_PINS` in portal.py), Docs, Helpdesk (unread dot /
+  default min). Items: the customer's PINNED applications (max 8 since 2026-11-06, `MAX_PINS` in portal.py and access_admin.py; `migrate_pins8` adds the AI Momentum SIP to saved pins), Docs, Helpdesk (unread dot /
   badge) and **More apps** at the bottom (owner 2026-10-28, reference image): a panel beside the rail with search, every
   application on the plan (Pinned / More apps groups), pin / unpin per row (pins disabled once 6 are pinned), click =
   open. Pins live on the account: table `customer_prefs` (customer_id, pins[]; RLS like customer_portfolio), `/me` returns
-  `pins` (null = never chose → the first 6 in catalogue order) + `max_pins`, `PUT /app/api/pins` (≤6, only apps on the
+  `pins` (null = never chose → the first 8 in catalogue order) + `max_pins`, `PUT /app/api/pins` (≤8, only apps on the
   plan). More apps is highlighted while an unpinned app is open. Test: `rbac_ui_moreapps.py` (adds 5 temporary apps).
   ≤900 px: off-canvas drawer opened by ☰ in the top bar (scrim / Esc / picking an item closes it). Top bar = current
   page icon + name + description, Data as of, quick guide, bell, account (Account window shows Plan + Applications).
@@ -721,6 +756,209 @@ customer may not use: "this is the wrong way … this is not only for the AI por
   the nav (1615 px open / 1480 px collapsed).
 - Tests (scratchpad): `rbac_api_test.py` (103 API checks incl. DB-role permissions), `rbac_ui_customer.py`,
   `rbac_ui_admin.py` (Selenium).
+
+### Momentum SIP v3 + saved plans + alerts / notification centre (owner, 2026-11-06) — app key `sip`
+- Owner: "brand it as the Momentum SIP … index / stock / commodity as 3 sliders, gold 10 % by default … the index part must
+  always cover Nifty large, mid and small caps; themes are going high, so don't push huge lots into one ETF … High / Medium /
+  Low as a multi-select … stock mix as sliders … stock SIP is secondary … a Momentum check and Portfolio adjuster tab …
+  alerts in the notification centre (what to change, the better alternative — only for stocks) … ETFs: never remove
+  core index ETFs when the trend falls; a theme only in the worst case … how many years + a step-up and a growth simulator
+  (no growth, 5 %, 10 %) … remove the 'Next 12 months' calendar … the same save + alerts for the Builder and the Analyser".
+- **Reliability v3 (`scanner/stability.py`, `HEALTH_RULES = "v3-stability"`)**: a 0–100 stability score from the whole
+  price history (recent / crash (recency-weighted) / peak / steady / speed / zones stepping), confidence-shrunk for short
+  histories. High ≥ 58, Low < 30, hard POOR at a fall ≤ −70 %. Published per stock: `rs` (score) and `sf = [years, fall 3y %,
+  1-year rise ×, 4-month rise %]`. Builder/SIP eligibility also drops a stock up > `RUN_4M_MAX` 50 % in 4 months and adds
+  `STEADY_BONUS`. Customer wording: "a 0–100 stability score" (portfolio-engine `relWhy`, guide, Builder ⓘ).
+- **`backend/app/sip.py`** (pure function on the published stock view + ETF summary): `alloc` {index, stock, commodity}
+  ints summing to 100 (a missing part = 0; default 60/30/10), `rel` ⊆ S/M/W (any mix), `mix` {Large, Mid, Small} (70/15/15),
+  `count` (None = `STOCK_RULE`, or 3/5/10/15/20/25), `stepup` 0/5/10/15/20, `years` 1–40.
+  Index = `CORE` (Nifty 50 40 · Next 50 15 · Midcap 150 25 · Smallcap 250 20, always, whatever the trend) + up to
+  `THEME_MAX` themes (recommended theme / strategy / international with st ≥ 24 and regime up) for `THEME_SHARE` 25 % of
+  the index money, each ≤ `THEME_CAP` 10 % (also through upgrades / top-ups). Commodity = gold; silver only from 20 % and
+  when not falling. Over budget ≤ `OVER_MAX` 10 %, ONLY to buy a holding every instalment that costs ≤ `UPGRADE_MAX_X` 2× its
+  share (so the split stays true); the top-up never passes the amount. No calendar. `check_holdings` (keep / exit / new —
+  a saved plan keeps its units while prices move ≤ `DRIFT` 5 %; a Builder portfolio keeps its shares, a replacement gets
+  whole shares for the money of the one sold), `apply_changes`, `stock_status`, `etf_status` (core + gold never flagged).
+- **Saved plans** (`customer_sips` with `kind` sip | builder, `alerts`, `state`; RLS `portal_own`, `MAX_SAVED` 5 per kind):
+  `GET/POST /app/api/saved`, `PATCH/DELETE /app/api/saved/{id}`, `GET …/check`, `POST …/apply`. Frontend `saved.jsx`
+  (`SavedPlans`, `SaveBar`) is shared by the SIP's **Momentum check** tab and the Builder's **My portfolios** tab.
+- **Alerts** (`backend/app/monitor.py`, run by `publish` after every publish, never fails it): saved plans with alerts →
+  NEW stock exits only (state.flags) → a notification `{items: [{s, n, why, alt}]}`; a SIP also gets "this month's /
+  quarter's order is ready" once per period; the Analyser list (`customer_portfolio.alerts / alert_state`) → stocks whose
+  long-term colour turned red or direction turned down, with an alternative from the same sector (else cap). Kept 120 days.
+- **Notification centre** (`frontend/app/src/notify.jsx`, replaces `InboxBell` in the customer top bar): one bell for
+  Hyperplane AI alerts (`GET /app/api/notifications`, `POST …/read {ids|all}`) + helpdesk replies; an alert opens a side
+  panel (what to remove → the better alternative) and **Open** goes to the app (sessionStorage `hp_open_<app>` + window
+  event `hp-open`, read by `saved.jsx` / `portfolio.jsx`).
+- **Analyser**: `AiWatch` panel (`GET /app/api/portfolio/check`) with Swap + Alerts toggle (`PUT /app/api/portfolio/alerts`).
+- **UI** `apps/sip.jsx` (BrandBand "Momentum SIP", `.hp-tabs` Build | Momentum check, linked sliders `rebalance()`, insights
+  side panel, growth simulator — an assumed rate, labelled an illustration), `sip-report.js` PDF (simulator at the chosen
+  rate). Tests (scratchpad): `sip_v3_test.py` (API, 70+ checks), `sip_v3_ui_test.py` (browser).
+
+### My portfolios + tracking, one page format, ETF sections (owner, 2026-11-06, after the SIP v3 release)
+- **Saved portfolios** (`customer_sips`, kinds `analyser` (→ app portfolio) · `builder` · `sip`, `MAX_SAVED` 50 per kind,
+  `saved_on`, `versions [{d, holdings}]`): Save takes a name only; alerts are switched on inside a saved portfolio. Every
+  change (Apply changes, a Swap via `PUT /app/api/saved/{id}/holdings` — the server sizes the replacement from the money of
+  the old holding) appends a dated version (a second change the same day replaces that day's version).
+  `GET /app/api/saved?kind=all&spark=1` = every kind the customer's apps allow, with `tag` and a sparkline.
+  `GET /app/api/alternatives?s=&exclude=` = `monitor.alternatives` (same sector, else same cap; High/Medium uptrend; top 3).
+  The Analyser kind is checked by `monitor.portfolio_flags` (portal `_check`, monitor alerts with kind `analyser`); the
+  old Analyser-list alert switch is gone from the UI (`customer_portfolio.alerts` unused).
+- **Tracking** (`backend/app/tracking.py`): `price_hist(sym, d, close)` written by `publish` for every stock + ETF
+  (`record_day`, upsert per trade date; backfilled once from the stored collections by the worker). Splits / bonuses →
+  `price_adj(sym, d, factor)`: raw close ÷ previous close outside 0.78…1.3 while the SOURCE daily change
+  (`snapshot_stocks.change_pct`, split-adjusted) is small → factor snapped to a standard ratio (±4 %); across a gap
+  > `GAP_DAYS` 4 only clear 1:2/1:5/1:10; ETFs (no source change) ratio-only ±2 %; never when the last 3 stored closes
+  are identical (stale data resuming). `track(conn, row, sym, stepup)`: analyser = 1 share each, builder = saved qty,
+  sip = instalments on the first trading day of each month / quarter (cadence `every`, step-up × (1+s)^years, switchable),
+  versions sell at that close and buy the new ones (whole shares, rest = cash); output dates / value / put_in / bench
+  (NIFTYBEES with the same cash flows) / holdings (return, gain, sold) / groups Large·Mid·Small·ETF / metrics (gain, vs
+  Nifty, biggest fall on value ÷ put-in, best/worst, days, changes) / splits; one holding's split-adjusted % line with
+  `?sym=`; > 400 points thinned; cached per (id, last price day, versions+inputs hash, options). Reads use the caller's
+  connection (the portal's restricted role has SELECT on price_hist / price_adj only).
+- **UI** `frontend/app/src/saved.jsx`: `MyPortfolios({app})` (tag chips, cards with value / return / sparkline) →
+  `Tracker` (KPIs, `LineChart` hand-built SVG: one axis, 2 px lines, crosshair + one tooltip for every series, keyboard,
+  table fallback; series colours validated with the dataviz validator — portfolio #0891b2, Nifty 50 #8b5cf6, put in
+  #c2410c / dark #ea580c), contribution bars (`--mx-*` + ETF violet), holdings with Better alternative + Swap, momentum
+  check + Apply, alerts / step-up switches). Tabs "My portfolios" in the Analyser (`pf-tab-mine`), Builder
+  (`bd-tab-saved`) and SIP (`sip-tab-mine`); notifications open the portfolio (`hp_open_<app>` {ref}).
+- **One page format**: `BrandBand` = compact (eyebrow, then title with the sub beside it; tabs / actions vertically
+  centred on the right); result actions go in a `.hp-actbar` row below the band; every app is full width; "DATA AS OF"
+  always in the top bar (`AsOfCtx` / `useAsOf(app, as_of)` for ETF, SIP, Builder); AI Mode empty state = centred hero.
+- **ETF Analyser**: no top picks / tiles — search + trend filter, then sections Commodities · Broad market · Sectors &
+  themes · Strategy · International (+ Other), one row per market with its best ETF; row → side panel listing every ETF.
+- **Momentum SIP**: index part = core four + up to `EXTRA_MAX` 10 themes (uptrend) and diversifiers (Strategy low
+  volatility / equal weight / value / quality, International — not falling), together ≤ 40 %, each ≤ 6 % of the index
+  money; simulator = one slider with the % on a bubble. Tests: `track_test.py`, `sip_v3_test.py`, `sip_v3_ui_test.py`.
+
+### Round 4 (owner, 2026-11-06): two SIP apps, one table format, swap only on regime-down, renames + app order
+- **Two SIP apps** on one engine (`sip.py`): `sip` "AI ETF SIP Builder" (Reliable) = `build_etf` (ETFs only; opts gold 0–50,
+  index cap mix Large → Nifty 50 + Next 50 / Mid → Midcap 150 / Small → Smallcap 250, themes / diversifiers / international
+  on-off, easy-to-trade, extra 0/4/6/10 — replaced in round 5 by `count`; `check_etf`) — `POST /app/api/sip`; `msip` "AI Momentum SIP" (Risk) = `build_stock`
+  (stocks only, `MSIP_RULE` 12 → 30 stocks, `MSIP_MAX_EVERY` 6, amount-based; `check_stock`) — `POST /app/api/msip`,
+  `msip:view` for every role (`migrate_msip`). Frontend: `apps/sip.jsx` `SipView mode="etf"|"stock"`, `apps/msip.jsx`;
+  element ids are prefixed with the app key (`sip-*` / `msip-*`). Saved kind `msip` (tracked like `sip`).
+- **Swap only when the long-term REGIME turns down** (`rp[0] == -1`): `monitor.regime_flags` / `portfolio_flags`,
+  `sip.stock_status`; the tracking response flags held rows (`flag`) — only those rows show Swap; ETFs: a theme in the
+  worst case shows "Consider removing".
+- **One table format** (`shell.css.js` `.hp-t`, `.hp-grp`, `.hp-gbtn`, `.hp-tbar`, `.hp-gall`; `core.jsx` `GroupRow`):
+  the Builder look — accordion group rows with a swatch + summary stripe, ticker `.sym`, numbers right — in the tracking
+  holdings (Large / Mid / Small / ETFs), both SIP results (Qty each month, Price per unit, ₹ per month, Size, Reliability /
+  Role) and the ETF Analyser (one table, type groups). Swap animation: `.hp-leaving` / `.hp-swapped` / `.hp-toast`
+  (`useToast`), `prefers-reduced-motion` respected.
+- **Header strip** = one line (~52 px): eyebrow chip, title, sub, tabs right. **Renames**: research → "Deep Research",
+  simple → "AI Mode" (app_modules + permission labels updated only from the old defaults). **Order**: simple 1, research 2;
+  `migrate_pin_order` puts AI Mode first in saved pins; the landing app = the first pin; More apps has ↑ / ↓ to arrange.
+- Analyser watch redesigned (comparison cards, regime-down only) and placed above the holdings; "Better alternative" on a
+  card only for a regime-down stock. ETF card pop-up scrolls to the top on a pick and shows "How to buy" (Zerodha Kite).
+  SIP "How to buy" pop-up; a Helpdesk "Request a higher limit" note in both SIP forms; AI mark white in primary buttons.
+- Tests: `sip_split_test.py` (API), `sip_v3_ui_test.py` (browser, round 4), `track_test.py`.
+
+### Round 5 (owner, 2026-11-06): AI watch rows, report swaps, SIP forms in the Builder layout, ETF count, filters
+- **AI ETF SIP Builder: number of ETFs** instead of on/off switches: `opts = {gold, caps, count}`, `count` in `sip.ETF_COUNTS`
+  (6, 8, 10, 12, 15, 20). Core index ETFs (Large = Nifty 50 + Next 50) and gold come first; the other places go to
+  `sip._extras()` in order — themes in an uptrend, steady strategy / international not falling, sector ETFs with the
+  regime up (0 < st < 24), other broad indices — one per market, easy to trade only. More than 6 asked → the extras may
+  take up to 60 % of the index money (core ≥ 40 %), each ≤ `EXTRA_CAP`. `info.etf_extra` = how many qualify today; the
+  form dims counts above that and the result says "N of M asked". Old saved inputs with themes / extra keys still load.
+- **SIP forms** (both apps) use the AI Portfolio Builder layout: `.pf-start.bd-start` with numbered `.bd-f` steps on the
+  left, `aside.pf-sr` (How it works, Your plan, a "ETFs are the safest" note / a "Prefer lower risk? AI ETF SIP Builder"
+  card) on the right. The Builder's slider rows (`.al*`, `.bd-f`, `.bd-l`, `.bd-amt`, `.bd-chips`, `.bd-hint`, `.bd-sum`,
+  `.mx-*`) moved from `builder.css.js` to `shell.css.js` so every app shares them. The Momentum SIP RISK banner has a
+  `#msip-to-sip` button.
+- **Result bars filter the table**: ETF SIP "Where the money goes" / "Markets", Momentum SIP "Stocks by market cap" /
+  "Sectors" (computed in the page from the holdings, all of them) — click = filter, again = clear, `#<app>-fclear`.
+  KPI "ETFs picked for you" (`#sip-picked`) with a role bar (core · strongest · gold).
+- **AI watch** (`portfolio.jsx` `AiWatch`): branded folding header (`#pf-watch-tog`, closed state in sessionStorage
+  `hp_watch_shut`), one compact row per regime-down stock (~58 px): stock + sector › industry → better stock with a
+  "Same sector & industry" / "Same sector" / "Same market cap" badge and up to 3 options switched in place
+  (`.pf-wopts`, animated), Swap. Data: `GET /app/api/portfolio/check` items carry `sec, ind, cap, st, alts[3]`;
+  `monitor.alternatives` ranks same industry → same sector → same cap; strengths use `monitor.lt_strength` (the
+  Analyser card's M 20 · Q 50 · Y 30), not the short-term `os`.
+- **Report**: "Download report" fetches `/portfolio/check` and `report.js` draws a **Suggested swaps** page at the end
+  (before the disclaimer; "All clear" when none). `core.loadChunk()` wraps every lazy import (apps, Docs, detail, both
+  PDF reports): retry once, else reload the page once (sessionStorage `hp_reloaded`) — a page opened before an update
+  no longer fails to load a renamed chunk.
+- **ETF Analyser M · Q · Y**: coloured pills (green rising, red falling, grey sideways) with the letter.
+
+### Round 6 (owner, 2026-11-06 / 07): Momentum SIP levels, count box, advanced options, PDF cover, AI Mode gradient
+- **AI Momentum SIP Builder** (renamed 2026-11-07 from "AI Momentum SIP"; app key `msip`, DB name / permission labels updated
+  only from the old defaults): two levels like the AI Portfolio Builder — `msip:customer` (every role) and `msip:admin`
+  (Customer Admin role; owner-level, needs `confirm_owner_level`). `sip.MSIP_TIERS`: Customer = ≤ ₹50,000 an instalment,
+  10–50 stocks, High reliability only, More options locked; Admin = any amount (sanity bound), 5–2000 stocks, High / Medium /
+  Low, every option. Enforced in `sip.check_stock(..., tier)` (`SipPlanError` → HTTP 403; other bad input → 422), also on
+  `POST /app/api/saved`; `GET /app/api/msip/info` returns `plan` (+ `sectors`). Test: `msip_level_test.py`.
+- Count: chips + a whole-number box (`#msip-n`; any integer within the level, the recommended count when empty).
+- **More options** = the Builder's own (horizon, trend quality, regime, run-up, F&O only, leave out sectors) + "most stocks in
+  one sector" (`sector_max`, default 25). `inputs.opts` / `inputs.sector_max` are saved with the plan and passed to
+  `builder.candidates(opts)`. Shared CSS (`.bd-more`, `.bd-cards2`, `.bd-fs`, `.bd-lock`, `.px-points`) moved to `shell.css.js`.
+- Result: under the AI summary `AiNumbers` (trend spread bar + strongest / biggest group / High-reliability or core share).
+- Redirect: solid green `.sp-tosafe` button in the RISK banner + a green card with "Sleep peacefully with ETFs." in the form.
+- **SIP PDF** (`sip-report.js`, both apps): cover page like the Portfolio report, overview, holdings by group, growth chart +
+  table, how to buy, disclaimer. **AI Mode** landing: animated gradient aura + fading grid (`.sv-aura`, `.sv-grid`).
+
+### UI round 2 (owner, 2026-11-06: "the detail page looks ugly … take the inspiration from Dhan, Zerodha, Groww")
+- **SIP tracking is AMOUNT-based** (tracking.py): each instalment puts the holding's planned rupees (`amt` × (1 + step-up)
+  ^years) into a per-holding bucket, buys whole units at that day's price, the rest waits (shown as "₹x waiting", counted in
+  the value). A swap / version change buys the new holding at once with the money of the one sold (Builder and SIP).
+  `GET /app/api/saved/{id}/track?stepup=N` takes the step-up % (0/5/10/15/20; None = the saved one). The SIP form has no
+  step-up any more — it lives in the growth simulator (and on the tracking page). Holding rows carry qty / avg / ltp /
+  day / day_gain; metrics carry day_gain / day_ret ("since <prev stored day>"), last / prev.
+- **Tracking page** (`saved.jsx` Tracker): header (← back, name + tag, step-up select, Alerts switch, Momentum check,
+  delete) · 6 summary tiles · Performance card (period tabs 1W…All, holding selector, chart) · Allocation table + stacked
+  bar · Top movers · Holdings table like a broker (Qty, Avg cost, LTP, Invested, Cur. value, P&L, Net chg, Day chg, Swap)
+  + Exited · Swap = centre pop-up (`.tk-modal`) with the 3 best alternatives.
+- **Global**: `.page` is full width (no 1440 px cap); inputs no longer force `color-scheme:dark` (checkboxes follow the
+  theme); `.hp-switch` = the on/off switch; one summary-tile look (`.tk-k`, `.sp-kpi`, `.bd-kpi` in shell.css.js); ETF card,
+  SIP insights and the notification detail open as CENTRE pop-ups; Save = a small name box (`SaveBar`) and a closable
+  "Saved as …" strip (`SavedNote`); the simulator bubble stays inside the slider (clamp).
+
+### Funds & indices wall + ETF analyser (owner, 2026-11-06)
+- "Remove the wall … add the wall before sending to the current applications … keep the ETF as a separate section; I
+  don't want ETF in my admin and customer applications … only the tradable ones, not the bonds … admin: all the real data
+  and why it is picked, at the end before the algo signals … customer: only the strength and the recommended one".
+- **Wall** (`backend/scanner/funds.py`, shared by scanner + `publish.is_index`): `is_fund_or_index` = sector "Indices",
+  NIFTY/SENSEX/BEES/…ETF symbols, ETF / index fund / fund of funds in the name, Admin `index_add` / `index_keep` (worker →
+  `sc.FUND_ADD/FUND_KEEP`). `chartink_fast.attempt_scraping` splits right after `build_market_frame` + master: stocks →
+  `frame` / master / category lists (EVERYTHING else — signals, the 14 sheets, Excel, Telegram, snapshot, admin, customer —
+  sees stocks only; the old `exclude_words` leak of HDFCGOLD, GOLDCASE, MON100 … is closed), funds → `etf_frame`.
+- **ETF pass** `build_etf_bundle`: keeps `is_tradable_etf` = traded (any weekly volume; plain indices such as NIFTY500 /
+  India VIX report 0) and not debt / cash-like (`funds.DEBT`: bond, Bharat Bond, gilt, G-Sec, SDL, liquid, 1D rate,
+  overnight, money market, T-bill …; CPSE ETF stays). Same builders with `_skip_words` narrowed to `ETF_SKIP_WORDS` (the
+  builders' old inline `exclude_words` checks are `_skipped(sym)`); `nr_flat_rows` emits the NR_PATTERN rows
+  (`nr_tf_type` is shared with the Excel writer). Writes `etf_data_<stamp>.json` beside the Excel — never into the Excel
+  or Telegram. ~295 ETFs (Nov 2026), ~140 with a long-term strength (the rest are too young for zone history).
+- **Storage**: `etf_collections(snapshot_id → snapshots CASCADE, etfs, data_gz)` (no portal grant); the worker stores the
+  file right after `save_snapshot`, BEFORE auto-publish. `published.etf_gz` = the customer summary (NULL without ETF data).
+- **`backend/app/etf.py`**: `classify` (RULES, first match: Gold · Silver · Broad market · Sector & theme · Strategy ·
+  International · Other; underlying e.g. every gold ETF → "Gold"); per ETF the same engines as stocks (zone_engine strength
+  + `apply_regime` on the monthly regime, `publish.regimes`, `liquidity.analyse`, Price_Health years). **Recommended**, one
+  per underlying: the most traded (avg ₹ a day) among those ≥ `REC_MIN_VALUE` ₹1 Cr a day and not erratic; within
+  `REC_TIE` 10 % of the top the longer history wins; reason "Most traded Gold ETF · ₹224 Cr a day · 13+ years". Picks seen:
+  GOLDBEES, SILVERBEES, NIFTYBEES, JUNIORBEES, BANKBEES, ITBEES, PSUBNKBEES, CPSEETF, MON100. `admin_rows` (cached per
+  collection) = every number + `checks` (4 ✓/✗) + `why_not`; `customer_payload` = s, n, k (class), u, st, c, r, why only.
+- **Access / API**: app module `etf` + permission `etf:view` (Access manager — not default). Customer `GET /app/api/etf`
+  (`need("etf")`, ETag/304). Admin `GET /api/snapshots/{sid}/etf` (`current_user`).
+- **Customer app** `frontend/app/src/apps/etf.jsx` (+ `etf.css.js`, nav icon "coins", Docs section) — owner 2026-11-06:
+  "long-term model, like the portfolio builder, the best ETF … less text on the page (use ⓘ) … proper navigation back …
+  feel like AI, small AI summaries, branding". Three levels: **Home** (branded AI header band with ⓘ for the explanation;
+  `#ef-ai-home` Hyperplane AI summary — headline follows the biggest bucket: "Most markets are moving sideways — 4 up, 16
+  sideways, 1 down", strongest / gold & silver / weakest lines; Popular groups; type chips + search; group cards per type,
+  Gold & silver share a row, left edge coloured by the best ETF's trend) → **Group** (`#ef-ai-group` summary, `#ef-hero`
+  the best ETF's card, other ETFs → `#ef-modal`, "More in <type>" chips, `#ef-back`) → **ETF card** (AI one-liner
+  `.ef-take`, verdict + strength, trend over months / quarters / years, overall direction, easy to trade, track record,
+  recommended reason or why another is preferred, alternatives). Sticky `.ef-nav`: breadcrumb (`#ef-home` All groups ›
+  type › group) + "Jump to a group" `<select id="ef-group">` (optgroups by type). Opening a group pushes a history step,
+  so the browser's Back returns home; "All groups" always goes home. AI texts = fixed rules on the published data.
+  Payload: tf, rg, lq, v, e, y, wn + `groups` — no prices, zones or formulas. Access: "Open ETF Analyser" (etf:view).
+- **Admin** `frontend/src/etf.jsx` → Control Tower section "📀 ETF analyser" (`CT_NAV` `ct-etf`, rendered just before
+  Technical Quant; `EtfSnapCtx` = newest collection on screen; version objects carry `id`): type + group dropdown
+  (`#etf-group`, optgroups by type, most traded group first), sort, search, ★ only, Excel, copy. Clicking an ETF opens its
+  report in a side panel (`#etf-panel`, like a stock's deep-dive; Esc / ✕ closes): headline numbers, the timeframe table
+  (zones, steps, T, P, raw → after-regime strength, mother candle), trading (volume analyser + 4w/4m/4q/4y), the ✓/✗
+  Recommended checklist, and every ETF of the same group by trading with why each is or isn't the pick. Collections from
+  before the wall have no ETF data ("appears from the next collection").
+- Tests (scratchpad): `etf_test.py` (18 API checks), `etf_ui_test.py` (customer + admin browser).
 
 ### Final output for every date + strength evidence (owner, 2026-11-01)
 - "Check all the combinations as much as possible … the date picker needs the same output on previous dates … store
@@ -913,6 +1151,11 @@ customer may not use: "this is the wrong way … this is not only for the AI por
   (4-column grid, bars shrink). Old saved results (no `kp` / `qt` / `yrs`) fall back to the reasons list / fewer
   strips. Research: Bidirectional removed everywhere (always 0 since the regime squeeze makes a timeframe against the
   regime sideways, so G and W never meet); Master data tools compact (32 px, 12 px) on the right of the title.
+- **Builder overview cards (2026-11-06):** "Where the money goes" = the two comparison bars (You chose / Plan, `MixBar`) +
+  an aligned list per segment (`.mx-list`: name · plan % with "you chose X%" · stocks · full amount) — a donut and small
+  tiles were rejected ("previous bar better for comparison", "unreadable"). Sectors card: ranked rows (01, 02 …), rounded
+  bars, "N stocks" chips, a "top 3 hold X%" line; its list fills the money card's height (no empty space). Master data
+  header: title left, tools right on one row (fixed select widths), wrapping only under 1100 px.
 - UI (first version): the option with ⓘ (`#bd-float`, `#bd-ff-y/n`); in a stock's expanded row a "Free float ⓘ" card
   (`FloatCard`, `#ff-SYM`; now for every stock — see the accordion above); "⚠ x% of free float" under the Liquidity cell
   (`.bd-ffx`); banner `#bd-ffbanner` / notes `#bd-ffcapped`, `#bd-ffrepl` in the Volume analyser; 5 download columns;
@@ -1464,3 +1707,213 @@ address (cookies are per address). Keep the DuckDNS updater running a few months
   (each outside −95 … +400 % → None). No `mr` → "Month-by-month prices are not available for this stock yet."
   Then (owner: "only the summary part"): the block is ONLY "✦ LONG-TERM · AI INVESTMENT SUMMARY" (ⓘ) + the plain-word
   research sentences in a soft accent panel — no status, strength, tiles or month bars. `mr` / `r3` stay published, unused.
+
+### Round 7 (owner, 2026-11-07): ETF styles, stock count from the Builder engine, ETF stats, menu order, AI Mode page gradient
+- **AI ETF SIP Builder style** replaces "number of ETFs" (round 5): `opts = {gold, caps, style}`, `style` in `sip.ETF_STYLES`
+  (`focus` / `standard` / `diverse`; default standard). `focus` = only what is going up (`sip._up`: regime up and strength ≥ 24) —
+  the core markets only when they are up, up to 8 others, no forced core (falls back to Nifty 50 with a note when nothing is
+  up); `standard` = all core (by the cap mix) + up to 5 going-up ETFs; `diverse` = standard + up to 5 diversifiers (steady
+  strategy, international not falling, steady sector ETFs, other broad indices). A diversifier is never added to focus /
+  standard. `STYLE_EXTRA` = (most extras, most of the index money in one). `info.etf_pool` (core / core_up / up / div / per style).
+- **AI Momentum SIP Builder**: the recommended stock count = the AI Portfolio Builder's advice (`builder.SPREAD` table,
+  `builder.spread_best`) with the SIP floor `MSIP_RULE` (15 / 20 / 20): `sip.msip_recommended`, `sip.msip_rule()` →
+  `info.msip_rule` / `info.spread` (₹1 Cr → 80, ₹10 Cr → 150). The sector limit defaults to 10 %.
+- **ETF Analyser** type stats (`#ef-stats`): All ETFs + one tile per type (ETFs, markets, up / sideways / down); a tile opens its group.
+- **Menu**: AI Mode first, Deep Research second as the DEFAULT (`migrate_research_second` reorders saved pins once); ↑ ↓ in More apps still arrange every app freely.
+- **AI Mode**: the whole page is the gradient (`.sv-aura` fixed behind the app — `body` is transparent, `html` carries the colour);
+  choosing a stock on the landing page plays "Hyperplane AI is reading …" (`.sv-think`, ~1.1 s, skipped with reduced motion), then the
+  answer rises in (`.sv-in`). The redirect button / card in the Momentum SIP are gradient (accent → violet), not green.
+- A swap or a plan saved after the last price day (before the day's prices arrive): `tracking.track` applies the pending version at
+  the last close, so the new holding shows at once.
+
+### Round 8 (owner, 2026-11-07): ETF Analyser lists every ETF
+- The table shows EVERY ETF by default (one row each, grouped by type, best of a market first; columns ETF · Market · strength ·
+  M·Q·Y · Trade · Price). The **Best in segment** button (`#ef-best`, `aria-pressed`) narrows it to the old one-row-per-market view.
+  Search matches ticker, name and market; the trend filter applies per ETF.
+- Clicking an ETF opens the card with **About this ETF** (`#ef-about`): a plain-word line for its market (`apps/etf-about.js`
+  `MARKET_ABOUT`, one per market, `CLASS_ABOUT` as the fallback — add a line there when a new market appears), what one unit costs,
+  how easy it is to trade, the record and where it stands among the ETFs of its market. Test: `etf_ui_test.py`.
+- **ETF Analyser column**: "Trade" (a word) became **Traded a day** — the rupees that change hands on a normal day (`e.v`, `₹11.8 Cr`) with the
+  plain word under it ("Easy to trade"); in both the all-ETFs and the Best in segment views.
+- **AI Mode blocks** (`CellField` in `apps/simple.jsx`, canvas `.sv-cells`): on opening, square cells pop in a wave from the top to the bottom;
+  the cell under the mouse lights up and leaves a fading trail; choosing a stock sends a ring of cells out from the centre. Drawn only while
+  something moves; reduced motion / touch: still grid only. It sits behind the page (z-index −1, `pointer-events:none`).
+- **AI Mode result** (round 11): the header names the stock (`title = name`, `accent = · TICKER`, sub = sector › industry) with the verdict as a coloured chip
+  (`#sv-vchip`); the four stat cards are `Stat` + `Gauge` (icon tile, big number, −100 … +100 gauge with a marker, plain-word pill; reliability = three steps).
+  `.sv-in>*` uses `backwards` fill (a forwards fill kept a stacking layer that hid (i) pop-ups under later cards). `core.Info` moves a pop-up back inside
+  the screen on narrow windows (`keepInside`). `.hp-actbar .px-btn.primary:hover` must repeat the gradient (a plain `background` on the base hover rule turned it white).
+- The click ripple ("water bed") was tried and removed at the owner's request (2026-11-07); the blocks keep the opening wave and the mouse trail only.
+- **Normal buttons** (2026-11-07): the gradient was dropped — the action bar's call to action is the standard solid `.px-btn.primary`, and the Momentum SIP
+  switch button / card button are plain solid buttons.
+- **Mix bar** (`MixBar` in `apps/builder.jsx`, CSS at the end of `shell.css.js`): soft pills with gaps + a one-line key with every percentage
+  (no text inside the bar); new Large / Mid / Small tokens `--mx-l/m/s` (indigo → periwinkle → pale, inverse in dark); cash = dotted grey pill.
+
+### Round 9 (owner, 2026-11-07): sharing saved portfolios (ID + private / public, RBAC)
+- Every saved portfolio (`customer_sips`, kinds sip / msip / builder / analyser) has `share_id` (8 hex, made by the database, unique) shown as
+  **ETF-1A2B3C4D / MOM-… / PB-… / PA-…** (`portal.SHARE_PREFIX`) and `visibility` = `private` (default) | `public`. The ID is on every card and on the
+  portfolio page (`.svp-id`, click copies) for every customer.
+- **RBAC**: one permission per application — `sip:share`, `msip:share`, `builder:share`, `portfolio:share` (each requires that app's `:view`).
+  `migrate_share` gives them to the **Customer Admin** role only; the Customer role has none, so its **Share button is shown disabled** (lock icon,
+  "Sharing is not available for your access."). The owner can grant them to any role in Admin → Access manager. Enforced on the server:
+  `PATCH /app/api/saved/{id}` with `visibility: "public"` → 403 without the permission (making it private is always allowed, even after the permission
+  is taken away).
+- **Reading a public one**: `GET /app/api/shared/{code}` (any signed-in customer who has that application; read only). It goes through the SQL function
+  `shared_portfolio(code)` (SECURITY DEFINER) — other customers' rows are never readable by the portal role (the RLS policy is unchanged). The answer has
+  no owner, no rupee amount, no quantity, no tracking: instrument, group, sector and the % share only. `OpenById` on My portfolios opens it
+  (`SharedView`). Tests: `share_test.py` (API), `share_ui_test.py` (browser).
+
+### Round 10 (owner, 2026-11-07): an address for every app and every saved portfolio
+- **Addresses** (`core.jsx` `APP_SLUG`, `routeOf`, `goPath`; the History API, no router library; Caddy already sends `/app/*` to the page):
+  `/app/ai-mode`, `/app/deep-research`, `/app/portfolio-analyser`, `/app/portfolio-builder`, `/app/etf-analyser`, `/app/etf-sip-builder`,
+  `/app/momentum-sip-builder`, `/app/docs`, `/app/helpdesk`, and **`/app/portfolio/<ID>`** for a saved portfolio. The shell reads the address on
+  first paint (`/app/` → the first pin, then `replaceState` to its address), pushes a step for every app change (`setFace(f, push)`), and follows
+  Back / Forward (`popstate`). The browser tab title names the app. Each app stays its own lazily loaded file (no monolith).
+- `/app/portfolio/<ID>`: the prefix names the application (`CODE_APP`: ETF → sip, MOM → msip, PB → builder, PA → portfolio). If the ID is one of the
+  customer's own (`/app/api/saved?kind=all`) it opens in that application's My portfolios (the `hp_open_<app>` + `hp-open` path the notifications use);
+  otherwise the read-only `SharedView` page (`#shr-page`, lazily loaded from `saved.jsx`) — "not found" while it is private. Opening / closing a
+  portfolio in My portfolios moves the address (`MyPortfolios` listens to `hp-route` / `popstate`).
+- **Share controls on the page** (no pop-up): `Private | Public` (`#svp-visseg`, Public disabled with "Sharing is not available for your access." without
+  the app's `:share` permission) + **Copy link** (`#svp-copylink`, the full `/app/portfolio/<ID>` address) + the address shown under the title (`#svp-url`).
+- Tests: `route_ui_test.py` (addresses, Back / Forward, own / shared / private portfolio), `share_ui_test.py`, `share_test.py`.
+
+### Round 11 (owner, 2026-11-07): the public portfolio page, 12-character IDs, tampering
+- **IDs**: `db.hp_share_id()` makes every saved portfolio's ID — `XXXX-XXXX-XXXX-XXXX`, **16** characters from 31 letters / digits (no 0 O 1 I L),
+  drawn from the fully random bytes of `gen_random_uuid()` (cryptographic): about 7.3 × 10^23 IDs, no kind prefix, no order. Older IDs were replaced.
+- **Public page** `/app/portfolio/<ID>`: `main.jsx` renders ONLY `public.jsx` (no app shell, no side nav, no `/app/api/me`, no sign-in).
+  It calls `GET /app/api/public/portfolio/<ID>` — open on purpose (`route_guards.PUBLIC`), no session read or made, `Cache-Control: no-store`,
+  `X-Robots-Tag: noindex`, the same 404 for a wrong / private / missing ID, at most 20 a minute and 200 an hour per address (and 1,200 a minute
+  overall). The answer is `shared_portfolio()` trimmed by `_public_view` (no owner, amounts, quantities, row ids, tracking). The old signed-in
+  `/app/api/shared/{code}` is gone. An owner's own portfolio in the app lives at `/app/<app-name>/portfolio/<ID>`.
+- **Tampering** (everything the page limits, the server limits — tested with direct requests in `tamper_test.py`):
+  `_clean_holdings` checks every saved holding (known symbols of today's data only, each once, the right kind for the app, finite numbers in range,
+  role / sleeve from a fixed list, names and prices taken from the server, the total inside the plan's amount, at most `HOLD_MAX` rows);
+  saving a Builder plan checks its amount / count / reliability against the customer's builder level (403); a swap (`PUT …/holdings`) can only
+  keep a stored holding as stored or replace one stock with one stock from today's data, sized by the server — nothing can be added or resized.
+- **Public page** (round 13, owner: "full width, a better format, no plan section, ₹ quick starts"): `public.jsx` is its own full-width design
+  (not the Tracker): sticky header (Log in / Sign up free), a hero (name, what it is, tag / ₹ a month / style / years / since, Copy link) with a
+  **quick start** card — SIP: ₹10K / ₹25K / ₹50K a month, portfolio: ₹50K / ₹1 L — that stores `hp_intent` {app, amount} in sessionStorage and opens
+  `/app/<app-name>?signup=1`; after sign-up / log-in that application opens with the amount filled in (`builder.jsx` / `sip.jsx` read and clear it).
+  Then six KPI tiles, the performance chart (`saved.LineChart`, height 340) with the step-up chips (SIP), periods and a per-stock line; "Where the
+  money is" (groups + top sectors / markets) and Top movers; one holdings table (initials avatar, weight bar, P&L pill); a closing brand band with a
+  second quick start. A portfolio saved after the last trading day shows a "Tracking starts with the next trading day" note and the plan only.
+  Data: `GET /app/api/public/portfolio/<ID>` (plan) + `…/track?stepup&sym`; open on purpose, no session, no-store, noindex, 60 a minute / 600 an hour
+  per address; the owner and the row id are never sent.
+- **Public page, round 14** (owner: "rethink completely — it is forward-tested, mostly little or no data … the Large / Mid / Small mix first with a
+  progress symbol … no weight bar … simulators like the brokers, with animation … the chart full width"). It replaces the round-13 layout above
+  (CSS prefix `.pq-*`; no `saved.LineChart`, no table, no movers). The order is:
+  1. Hero with the quick start. The facts include "Live since" and the step-up.
+  2. **The mix** (`#pub-mix`): one tile per cap with an animated ring.
+     - Large / Mid / Small, plus "Gold & themes" when there is any.
+     - A stock is placed by its `cap`; an ETF by its index `u` (Nifty 50 / Next 50 → Large, Midcap → Mid, Smallcap → Small, else Other).
+     - Each tile shows the share %, the count, and ₹ (a month for a SIP).
+  3. **Live tracking** (`#pub-track`):
+     - When tracked (≥ 2 days): 5 KPIs, plus its own SVG line chart (`Lines`, ResizeObserver, so it fills the card), with a hover tooltip and a draw-in animation.
+     - Before that: `#pub-notyet` with a pulse.
+     - A forward-test road (Saved → First close → 1 week → 1 month → 3 months, `#pub-road`) shows while under 21 days.
+  4. **Simulators** (`#pub-sim`): sliders for amount / years / assumed growth, step-up chips, two result cards that count up, and animated year bars (`#pub-bars`).
+     - Tabs for a SIP: SIP growth / Goal planner / Start now vs later. For a portfolio: Lump sum growth / Goal planner / As a monthly SIP.
+     - A "Start with ₹X" button goes through the same `hp_intent` sign-up. A monthly amount from a portfolio opens the AI ETF SIP Builder.
+     - Always labelled "an illustration at the growth you pick, never a forecast".
+  5. **The portfolio** (`#pub-table`): cards, biggest first, filtered by the mix chips.
+     - Each card has a coloured top edge per cap, the weight as a number (no bar), ₹ a month / amount, units or shares, the sector or index, and "Since saved" (a P&L chip, or "Live soon").
+  6. The brand band.
+  
+  `route_ui_test` checks the mix tiles, cards (no table / bar), the chart width and all three simulators.
+
+### Round 15 (owner 2026-11-07) — swaps on the record, AI watch on the overview, sharing for all, admin light + shared portfolios
+- **Sharing:** every role that opens an application holds its `:share` permission (`perms.migrate_share_all`, once, `share_all_v1`).
+  It is still one permission per application, so the owner can remove it per role.
+- **Rename:** pencil next to the name on the tracker (`#svp-rename`), using `PATCH /app/api/saved/{id}` `{name}`.
+- **Swap log:** `portal._new_version(conn, c, r, hold, pairs)` appends `{d, out, in}` (s, n, kind, cap, sec) to `versions[-1].log`, up to 200 entries.
+  - The log carries over to every later version, so a same-day replacement or a swap on the save day never loses it.
+  - A hand swap passes its pairs, and so does apply (`replaces`). Anything left over pairs up in order.
+  - `tracking._swaps` turns the log into `swaps` (newest first), split / bonus adjusted:
+    - `out.ret`: what the stock that left did after the swap ("if kept");
+    - `in.ret`: what the new one did;
+    - `edge = in − out`.
+  - `_sym_set` loads the log's symbols too.
+  - Shown in the tracker as `SwapHistory` (`#svp-swaps`) and on the public page as `Swaps` (`#pub-swaps`). A swap from today reads "Starts next close".
+- **Upgrades:** `monitor.alternatives(…, up=3)` adds up to 3 bigger companies (Small → Mid / Large, Mid → Large) in the same industry, else the same sector.
+  - Each item has `up: true`; the like-for-like ones carry `up: false`.
+  - `/app/api/alternatives` (now open to portfolio / builder / msip) and `/app/api/portfolio/check` use it.
+  - `saved.SwapOptions` shows "Same size" and "Upgrade to a bigger company" groups; the Analyser watch marks upgrades with ↑.
+  - Swap still only appears on regime-down stocks.
+- **AI watch on the overview:**
+  - `GET /app/api/saved` adds `watch` (the count of regime-down stocks) to every portfolio.
+  - `GET /app/api/saved/{id}/watch` returns each flagged stock with its `alts` (same-size and upgrades). It is own-row only and rate-limited.
+  - Each overview tile (now a `div role=button`) has the "Hyperplane AI watch" button (`#svp-aiw-<id>`, red count or ✓). ETF SIP tiles have none.
+  - A click opens `AiWatch`: about 1.6 s of scan animation (orb + ticking symbols, `#aw-scan`), then the swaps (`#aw-list`) or "All clear". A swap can be made right there.
+- **Public page:**
+  - **Simulators:** a fixed `RATE = 5` % a year, with a note that it is below the long-run average. There is no growth slider and no one-time amount anywhere.
+    - A portfolio's own amount is fixed (`#pub-fixed`); its tabs are "This portfolio" and "Add a monthly SIP".
+    - SIP tabs: growth / goal (monthly only) / start now vs later.
+    - Labels are "Amount invested" and "Projected value".
+  - **Quick start:** portfolios get ₹50K / ₹1 L / ₹5 L. The Customer builder level allows up to ₹1 L, so ₹5 L shows the limit note there.
+  - **Wording and colours:** the tagline is "Forward-tested portfolios, tracked live every trading day". "Portfolio spread" replaces "The mix". Cap colours are solid (#2563eb / #7c3aed / #ea580c / #ca8a04).
+  - **Road:** the forward-test road rolls on past 3 months (6 months, 1 year, then every year). It always shows the five milestones around today and the next one.
+  - **Signed in:** a browser signed in to the app (`localStorage hp_signed`, set / cleared by `shell.App`; a hint only) gets "Open Hyperplane" instead of Log in / Sign up. Its quick starts skip `?signup`.
+  - **Link opens:** each open of the plan endpoint counts one via the SECURITY DEFINER `shared_portfolio_seen(code)` (`customer_sips.views`, `last_view`). Only a number is stored.
+- **Admin:**
+  - **Theme:** light is the default (`hp_theme`). The colour tables (`BIAS_COLOR`, `STRENGTH_COLOR`, `SECTOR_PALETTE`, `MCAP_COLOR`) are `themed(dark, light)` proxies driven by `LIGHT`, which the Dashboard sets on each render. The page background follows `html.hp-dark`.
+  - **Removed:** the Opportunities and Horizon tabs, and Admin → Strength evidence (`evidence.jsx` is no longer imported; the backend is untouched).
+  - **Access manager:** one `GroupHead` (the whole bar folds, rotating chevron, 34 px icon, "x of n on") and `useFold(store, keys)`, which remembers closed groups and gives "Collapse all / Expand all". Used in the Permission manager (`#pm-foldall`) and the Roles view (`#role-foldall`).
+  - **📂 Shared portfolios** (`frontend/src/portfolios.jsx`, `GET /api/admin/portfolios`):
+    - every saved portfolio with the customer, ID, application, visibility, holdings count, changes, tracked value / return and link opens;
+    - an "Open ↗" link (public only) opens `/app/portfolio/<ID>` in a new tab (`target=_blank`, `noopener`);
+    - search, filters, sort, Copy and Excel export;
+    - no holdings are ever sent.
+    - Note: this shows the admin the customers' private portfolios too (by name and value), which the owner asked for (round 15). It goes past the earlier "the customer portfolio list stays private" rule.
+- **Tests:**
+  - `round15_test` (49 checks).
+  - `share_test`, `share_ui_test` and `route_ui_test` now check the no-permission path on a test role, "No-share (suite)", which is the Customer role without `:share`.
+
+### Round 16 (owner 2026-11-07) — past data as a permission, every app follows the day; overall AI watch; simulators everywhere
+- **Past data = permission `research:history`** ("Past data in every application", owner-level).
+  - The Customer Admin role gets it (`migrate_history_perm`, `history_perm_v1`); Customers don't.
+  - It replaces the admin switch: the admin card now only shows how many days are ready. `portal_config.history` is no longer read, and the `customer_history` RLS policy is `USING (true)`.
+- **How a day travels:**
+  - The app sends `X-HP-Day: YYYY-MM-DD.open|end` with every `/app/api/*` call (`core.setApiDay`, set by the shell's day picker).
+  - Portal middleware `_day` keeps the header per request. `_session()` → `_check_day` refuses it with 403 without the permission, 404 for an unknown day and 422 for a bad format.
+  - `_latest_view()` / `_latest_etf_view()` then answer with that day (`_hist_views`, LRU of 12).
+  - These always use today: swaps (`holdings` PUT), apply / check, the AI watch, tracking flags and alternatives (`today=True`).
+- **Per-day capabilities** (`_day_caps`):
+  - **Zones:** collections before 29 Oct 2026 have no `zv` zone view. The Builder, Builder preview and both SIP Builders answer 422 "collected before the zone view was stored", never an empty result.
+  - **ETF:** `customer_history.etf_gz` is built with each past day (`publish._etf_gz`) and backfilled once by the worker (`history_etf_backfill`). Days without an ETF file get a clear 422 / 404.
+  - **Picker:** `/app/api/history` returns `zones` and `etf` per day, and the picker notes when the open app can't use a day.
+- **Shell:** for permission holders, the day picker shows in every application. The apps with their own server data (ETF, SIP, Momentum SIP, Builder) remount with `key={dayKey}` when the day changes.
+- **Saved on a past day:** `saved_on` = that trade date and `inputs.as_of` = that collection's time. Tracking runs from that day to today.
+  - The tracker shows a "Back-tested from …" chip (`#svp-bt`).
+  - The shared page says it was built on that day's data and shows "Back-tested from" (`#pub-back`); the public `inputs` include `as_of`.
+- **Swaps show price + company size:** `monitor.size_of` → `{p, mcap (₹ Cr = ff[1] × p), cap}`.
+  - It's on every alternative, on the AI watch items, and on `/app/api/alternatives` `cur`.
+  - `SwapOptions` shows a "Now" row (`#tk-cur`) and `SizeTags` on every choice.
+- **Overall AI watch:** `#svp-aiall` at the top of My portfolios covers every non-ETF portfolio, with the total count of stocks to change.
+  - `AiWatch({list})` handles one portfolio or all of them: the scan animation, then the swaps grouped by portfolio.
+- **Portfolio page:**
+  - Sticky section tabs like the Builder's (`SectionTabs`, `#svp-tabs`): Overview · Performance · Allocation · Holdings · Swaps · Simulators.
+  - The simulators come from `sim.jsx` (`idp="svp"`); the holdings stay a table.
+- **Simulators (`sim.jsx`, shared with the public page):** growth is 5 % by default and adjustable from 0 to 100 % (number + slider, clamped, with "Back to 5%").
+  - Notes: 5 % is below average; above 15 % is a stretch.
+  - The CSS is scoped to `.pq-sim`.
+- **Shared page:**
+  - **Colours:** the app's own cap palette (`--mx-l/m/s/c`, a blue ramp, no orange). Avatars use `--mx-*t` text on the tone, and a deeper edge under each ring keeps small cap readable.
+  - **Tile effect:** the AI Mode tile field (`cells.jsx` `CellField`, moved out of `apps/simple.jsx`) appears only in the hero (with a fading grid) and the closing band.
+  - **Spacing:** tighter throughout.
+- **Icon and buttons:**
+  - The ETF SIP icon is now stacked coins with a rising line (the piggy bank is gone).
+  - The result action bars (SIP / Momentum SIP / Builder) are one slim row of 34 px buttons: Edit inputs · Save · [PDF | CSV | Tickers Copy TV] as one joined group · "How to buy" as a quiet link · "Send to AI Portfolio Analyser" as a light accent button on the right.
+- **Tests:** `round16_test` (76 checks).
+
+### Round 17 (owner 2026-11-07: "I couldn't see any data after saving … tracking not happening … swap not showing in the shared one")
+- **Cause:** tracking started at the save day and loaded only price days on or after it. A portfolio saved when that day had no price yet (weekend, holiday, the morning before the first update) had no days at all: value "—", 0 holdings, an empty shared page, until the next trading day.
+- **Rule now (`tracking.track`):**
+  - **Start:** the start is `_price_day_on(save day)`, the LAST close on or before the save day. That is the price the customer saw when saving, and it stays the start forever.
+  - **Changes:** every later version (a swap, an apply) takes effect at the last close on or before its own day (`eff`). A Saturday swap stays at Friday's close when Monday arrives.
+  - **SIP instalments:** the first instalment's period is the save day's month or quarter (`max(d, save0)`). Saved on Sunday 1 Dec and priced at Friday's November close, it is December's instalment, never one for each month.
+- **Pages:** the shared page shows its numbers and holdings from the first close (`have`). The line starts on day 2, and in between the page says "Priced at the close of …" (`#pub-first`). The portfolio page says the same (`#svp-first`).
+- **Tests:** `timing_test` (48 checks) covers:
+  - a save on a no-price day for every kind;
+  - the next trading day: one more day, same purchases, value moves, no extra instalment;
+  - a no-price-day swap: shown at once on both pages, same purchase after the next day;
+  - a month turn: one instalment;
+  - both pages. Among other things, it inserts a simulated next price day to check that tracking (customer and shared) grows day after day, then deletes it.

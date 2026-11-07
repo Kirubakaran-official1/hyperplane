@@ -29,8 +29,10 @@ ACTIONS = {
     "simple": {"search": "Looked up a stock"},
     "portfolio": {"list_saved": "Saved the stock list", "report": "Downloaded the report"},
     "builder": {"build": "Built a portfolio", "sent": "Sent it to the Analyser", "download": "Downloaded the plan"},
+    "sip": {"build": "Built a SIP", "sent": "Sent it to the Analyser", "download": "Downloaded the SIP"},
+    "msip": {"build": "Built a Momentum SIP", "sent": "Sent it to the Analyser", "download": "Downloaded the SIP"},
 }
-SERVER_ACTIONS = {("portfolio", "list_saved"), ("builder", "build")}
+SERVER_ACTIONS = {("portfolio", "list_saved"), ("builder", "build"), ("sip", "build"), ("msip", "build")}
 SEGMENTS = (("champion", "Champion"), ("regular", "Regular"), ("casual", "Casual"), ("at_risk", "At risk"),
             ("dormant", "Dormant"), ("not_started", "Not started"))
 

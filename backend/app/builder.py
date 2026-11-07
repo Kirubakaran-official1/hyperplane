@@ -15,6 +15,8 @@ the owner may tune the constants):
     · long-term regime up (monthly); option "confirmed" = weekly up too. No regime data at all = check skipped
     · reliability High, or High + Medium (Low never); ≥ 3 years of yearly history; Large / Mid / Small cap only
     · NOT already run up: never stretched (3x in a year); 3-month rise above the run-up option (20 / 30 / 50 %, or off)
+      and (2026-11-06) never more than RUN_4M_MAX % over the last 4 months; reliability v2 (scanner health_status):
+      High = stability score ≥ 58 (scanner/stability.py) — ranking also prefers the steadier record
     · options: F&O stocks only; sectors to leave out
   Ranking (conviction) inside each market-cap group
     blended strength + 6 weekly regime up / − 10 turning down + 5 High reliability + 1.5 per quarter of up-streak (≤ 4)
@@ -65,6 +67,9 @@ HORIZONS = {"long": {"M": 20, "Q": 50, "Y": 30}, "medium": {"M": 45, "Q": 40, "Y
 QUALITY = {"strong": (40, None), "good": (24, None), "building": (24, 10)}
 REL_WORD = {"S": "High", "M": "Medium", "W": "Low"}
 PF_MIN_YEARS = 3
+# long-term safety (owner 2026-11-06, RATNAVEER +97 % in 4 months passed the 3-month run-up check with +17 %)
+RUN_4M_MAX = 50                  # % rise over the last 4 months above which a stock has "already run up"
+STEADY_BONUS = 0.15              # ranking: + 0.15 per stability point above 60 (− below): steadier first
 LIQ_WARN = {"Large": 500_000_000, "Mid": 100_000_000, "Small": 20_000_000}   # no volume known: per-stock ₹ that needs care
 # Trading volume (owner, 2026-11-01): buying more than LIQ_PART of a normal day's trading moves the price. A position is
 # "easy" within a day at that pace; more than LIQ_DAYS days of buying is flagged. With the option "size by volume" ON,
@@ -87,6 +92,26 @@ TIERS = {
     "trader": {"name": "Trader", "min_amount": 10_000, "max_amount": 100_000_000_000, "max_stocks": 1000, "reliability": ("S", "M"), "options": True},
     "admin": {"name": "Admin", "min_amount": 1_000, "max_amount": None, "max_stocks": 1000, "reliability": ("S", "M"), "options": True},
 }
+
+
+# How many stocks suit an amount (owner 2026-11-06 round 7: "use the same engine of the AI Portfolio Builder"): the typical
+# range per amount band, the same table the Builder form shows (frontend apps/builder.jsx B_SPREAD) — amount up to, from, to
+SPREAD = ((50_000, 5, 10), (200_000, 8, 20), (1_000_000, 15, 40), (5_000_000, 20, 60), (20_000_000, 30, 80), (100_000_000, 40, 150),
+          (1_000_000_000, 60, 250), (float("inf"), 80, 500))
+SPREAD_MIN_SLICE = 2500            # below this per stock, charges eat the position (a SIP instalment may use a smaller slice)
+
+
+def spread_range(amount):
+    """(low, high) of a typical number of stocks for this amount"""
+    _, lo, hi = next(b for b in SPREAD if amount <= b[0])
+    return lo, hi
+
+
+def spread_best(amount, min_slice=SPREAD_MIN_SLICE):
+    """the number of stocks to suggest: the top of the typical range (higher diversification), never more than the amount
+    can carry at min_slice per stock"""
+    lo, hi = spread_range(amount)
+    return max(MIN_STOCKS, min(hi, int(amount // min_slice)))
 
 
 class BuildError(ValueError):
@@ -220,7 +245,8 @@ def candidates(data, rel, opts=None):
         if has_regime and not (rp and rp[0] == 1 and (not o["confirmed"] or rp[1] == 1)):
             skip["regime"] += 1; continue
         r3 = s.get("r3")
-        if s.get("x") or (o["run_up"] and r3 is not None and r3 > o["run_up"]):
+        sf = s.get("sf") or [None, None, None, None]          # [years, worst fall in 3 years %, 1-year rise x, 4-month rise %]
+        if s.get("x") or (o["run_up"] and r3 is not None and r3 > o["run_up"]) or (sf[3] is not None and sf[3] > RUN_4M_MAX):
             skip["moved"] += 1; continue
         m, q, y = zv[2], zv[3], zv[4]
         parts = [(wts[k], t[2]) for k, t in (("M", m), ("Q", q), ("Y", y)) if t]
@@ -236,6 +262,7 @@ def candidates(data, rel, opts=None):
         score += 3 * q[0] + (1.5 * y[0] if y else 0) + (3 if qstep == 1 else -3 if qstep == -1 else 0)   # zones stepping
         score += (0.1 * (ind - 50) if ind is not None else 0) + (0.05 * (sec - 50) if sec is not None else 0)
         score -= (4 if m and m[1] == 2 else 0) + (0.5 * (r3 - 20) if r3 is not None and r3 > 20 else 0)  # stretched
+        score += STEADY_BONUS * (s["rs"] - 60) if s.get("rs") is not None else 0                      # steadier first
         why = ["Trend still building"] if tier == 2 else []
         why.append(f"Long-term strength {st:+d}")
         if qstreak >= 2:
@@ -257,7 +284,7 @@ def candidates(data, rel, opts=None):
         brk = next(({"n": t[5], "unit": word} for t, word in ((y, "years"), (q, "quarters"), (m, "months")) if t and len(t) > 5 and t[5] > 0), None)
         kp = {"st": st, "qstreak": qstreak, "qturn": bool(q[3] == 1), "qhold": bool(q[1] >= 1), "breakout": brk,
               "regime": (None if not has_regime else "confirmed" if weekly == 1 else "changing" if weekly == -1 else "up"),
-              "rel": s["h"], "ind": round(ind) if ind is not None else None, "r3": r3}
+              "rel": s["h"], "ind": round(ind) if ind is not None else None, "r3": r3, "sf": sf, "rs": s.get("rs")}
         out.append({"s": s, "tier": tier, "st": st, "score": round(score, 2), "why": why, "kp": kp})
     return out, skip
 

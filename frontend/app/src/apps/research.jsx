@@ -1,7 +1,7 @@
-// Research view (Control Tower) — a lazily loaded application module (micro-frontend): its code and styles load
+// Deep Research (Control Tower) — a lazily loaded application module (micro-frontend): its code and styles load
 // only when the customer opens it.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AiSpark, Icon, addCss, trackAction } from "../core.jsx";
+import { AiSpark, BrandBand, Icon, addCss, trackAction } from "../core.jsx";
 import { BG, BG_NAME, CAT, CopyBtns, DISCLAIMER, Info, MODES, Meter, ModeWeights, MultiSelect, OverallMeter, RG_FILTER, RG_INFO, RegimeBox, RegimeTag, SIZES, Seg, StrengthBar, StrengthTag, TFS, TF_NAME, categoryOf, colorOf, combinedView, dirKey, dirTf, dirVal, fmtDT, focusDir, focusOf, groupState, groupWord, isBi, levelOf, pct, regimeMatch, regimeOf, sizeOf, strengthCls, strengthLabel, summaryOf, weightPct } from "../core.jsx";
 import { InvestmentSummary } from "./portfolio-engine.jsx";
 import { CSS } from "./research.css.js";
@@ -320,6 +320,9 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
   const scope = tfs.length ? (tfs.length === 1 ? TF_NAME[tfs[0]] : `all of ${tfs.join(" · ")}`) : "combined";
   return (
     <>
+      <BrandBand product="Deep Research" title="Every stock" accent="every timeframe" id="rv-band"
+        info="Filter the whole market by trend, timeframe, market cap, sector and reliability. Click a stock for its card."
+        sub={data ? `${data.stocks.length.toLocaleString("en-IN")} stocks` : "Loading the latest data…"}/>
       <div className="fbar">
         {/* Trading mode and Timeframe are separate but exclusive: a mode clears the timeframes, a timeframe switches the
             mode off (with no timeframe left, the last mode is back on) */}
@@ -366,7 +369,7 @@ export default function ResearchView({ data, err, sel, mode, setMode }) {
               <input className="search" placeholder="Search a stock" value={q} onChange={e => setQ(e.target.value)} aria-label="Search"/>
               {hasRg && <select value={rgf} onChange={e => setRgf(e.target.value)} aria-label="Regime" id="rg-filter" title={RG_INFO} className={rgf !== "all" ? "on" : ""}>
                 {RG_FILTER.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>}
-              <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
+              <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort" id="t-sort">
                 <option value="best">Best uptrend first (reliable, not stretched)</option><option value="up">Strongest uptrend first</option><option value="down">Strongest downtrend first</option>
                 <option value="change">Biggest gain today</option><option value="name">Name A–Z</option>
               </select>

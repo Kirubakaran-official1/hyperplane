@@ -8,8 +8,8 @@ import {
 } from "./dashboard.jsx";
 import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../shared/helpdesk.jsx";
 import { AccessTab } from "./access.jsx";
+import { PortfoliosTab } from "./portfolios.jsx";
 import { AdoptionTab } from "./adoption.jsx";
-import { EvidenceTab } from "./evidence.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 let onUnauthorized = () => {};
@@ -447,7 +447,7 @@ function AdminTab({ snaps, reloadSnaps, notify, sync, onSync, onSaved }) {
         );
       })()}
 
-      <FocusCard icon="📉" title="Indices & ETFs" sub="The dashboard hides these when “Hide indices & ETFs” is on (side nav, on by default). Found automatically: sector “Indices”, symbols with NIFTY / SENSEX / BEES or ending in ETF, and names with the word ETF / Index Fund / Fund of Funds.">
+      <FocusCard icon="📉" title="Indices & ETFs" sub="Kept out of every other admin and customer screen from the scanner on (sector “Indices”, NIFTY / SENSEX / BEES / …ETF symbols, ETF / Index Fund / Fund of Funds in the name). Tradable ETFs appear only in Control Tower → 📀 ETF analyser and the customer ETF Analyser. Bond, liquid and plain-index funds are left out entirely.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 12 }}>
           {[["add_text", "Also treat as index / ETF (hide)", "e.g. SILVER001, GOLDCASE"], ["keep_text", "Not an index — always show", "e.g. a real stock that got caught"]].map(([k, l, ph]) => (
             <div key={k}>
@@ -840,26 +840,13 @@ function CustomersTab({ snaps, notify }) {
         )) : <div style={{ fontSize: 11, color: "var(--t3)" }}>Nothing published yet — customers see "no data yet" until you publish.</div>}
       </FocusCard>
 
-      <FocusCard icon="🗓" title="Past days for customers" style={{ marginBottom: 12 }}
-        sub="When on, customers get a date picker next to “Data as of”: they pick one date, then Day open (first scheduled run of that day) or Day end (last run). One collection at a time — no ranges. Only scheduled collections (system sync) are offered; manual Sync now and imported files never are.">
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div role="radiogroup" aria-label="Past days for customers" style={{ display: "inline-flex", border: "1px solid var(--b2)", borderRadius: 999, padding: 3, background: "var(--s2)", gap: 3 }}>
-            {[[false, "🔒 Latest data only"], [true, "🗓 Customers can pick a past day"]].map(([on, label]) => (
-              <button key={label} id={`hist-${on ? "on" : "off"}`} role="radio" aria-checked={hist.enabled === on} onClick={() => hist.enabled !== on && setHistory(on)}
-                style={{ padding: "6px 14px", borderRadius: 999, border: 0, cursor: "pointer", fontSize: 12, fontWeight: 700,
-                  background: hist.enabled === on ? (on ? "var(--long)" : "var(--acc)") : "transparent",
-                  color: hist.enabled === on ? "#04121a" : "var(--t2)" }}>{label}</button>
-            ))}
-          </div>
-          <span id="hist-status" style={{ fontSize: 11.5, color: "var(--t2)" }}>
-            {hist.enabled
-              ? <>{hist.days ? <><b>{hist.days}</b> days ready ({hist.collections} collections, {hist.first} → {hist.last})</> : "No days ready yet"}
-                  {hist.pending > 0 && <span style={{ color: "var(--mixed)" }}> · {hist.pending} older scheduled collections still being prepared in the background (a few seconds each) — reload to see progress</span>}
-                  {hist.failed > 0 && <span style={{ color: "var(--short)" }} title={hist.error || ""}> · {hist.failed} could not be prepared ({hist.error}) — switch off and on again to retry</span>}</>
-              : <>Off — customers see only the latest published data. {hist.scheduled} scheduled collections are stored and can be offered.</>}
-            {hist.changed && <span style={{ color: "var(--t3)" }}> · switched {hist.changed.on ? "on" : "off"}{hist.changed.by ? ` by ${hist.changed.by}` : ""} on {fmtDT(hist.changed.at)}</span>}
-          </span>
-        </div>
+      <FocusCard icon="🗓" title="Past data" style={{ marginBottom: 12 }}
+        sub="Round 16: past data is a permission now, not a switch — Access manager → Deep Research → “Past data in every application” (owner-level). The Customer Admin role has it; customers do not. Whoever holds it gets a day picker in every application, and the server answers each application with that day's data.">
+        <span id="hist-status" style={{ fontSize: 11.5, color: "var(--t2)" }}>
+          {hist.days ? <><b>{hist.days}</b> past days ready ({hist.first} → {hist.last})</> : "No past days ready yet"}
+          {hist.pending > 0 && <span style={{ color: "var(--mixed)" }}> · {hist.pending} older scheduled collections still being prepared in the background</span>}
+          {hist.failed > 0 && <span style={{ color: "var(--short)" }} title={hist.error || ""}> · {hist.failed} could not be prepared ({hist.error})</span>}
+        </span>
       </FocusCard>
 
       <FocusCard icon="🚪" title="New sign-ups" style={{ marginBottom: 12 }}
@@ -948,7 +935,7 @@ function CustomersTab({ snaps, notify }) {
   );
 }
 
-// ─── ADMIN AREA: settings, customers, activity log, access manager, strength evidence (admins only) ───
+// ─── ADMIN AREA: settings, customers, adoption, access manager, shared portfolios (admins only) ───
 function AdminArea({ snaps, notify, ...adminProps }) {
   const [sub, setSub] = useState(() => pref("hp_admin_sub", "system"));
   const [pending, setPending] = useState(0);
@@ -965,12 +952,12 @@ function AdminArea({ snaps, notify, ...adminProps }) {
         {tab("customers", "👥 Customers", pending > 0 && <span title="Waiting for approval" style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: "var(--mixed)", color: "#111", fontSize: 10, fontWeight: 800, lineHeight: "18px", textAlign: "center" }}>{pending}</span>)}
         {tab("activity", "📈 Adoption")}
         {tab("access", "🔐 Access manager")}
-        {tab("evidence", "🧪 Strength evidence")}
+        {tab("portfolios", "📂 Shared portfolios")}
       </div>
       {sub === "customers" ? <CustomersTab snaps={snaps} notify={notify} />
         : sub === "activity" ? <AdoptionTab api={api} notify={notify} />
         : sub === "access" ? <AccessTab api={api} notify={notify} />
-        : sub === "evidence" ? <EvidenceTab api={api} notify={notify} />
+        : sub === "portfolios" ? <PortfoliosTab api={api} notify={notify} />
         : <AdminTab snaps={snaps} notify={notify} {...adminProps} />}
     </div>
   );
@@ -988,7 +975,7 @@ function idsFor(sel, snaps) {
 }
 
 export default function Root() {
-  const [theme, setThemeState] = useState(() => pref("hp_theme", "dark"));
+  const [theme, setThemeState] = useState(() => pref("hp_theme", "light"));         // light is the default (owner 2026-11-07)
   const setTheme = f => setThemeState(t => { const n = typeof f === "function" ? f(t) : f; setPref("hp_theme", n); return n; });
   const [user, setUser] = useState(undefined);
   const [snaps, setSnaps] = useState([]);
@@ -1041,7 +1028,7 @@ export default function Root() {
         const part = await Promise.all(metas.slice(i, i + 4).map(async m => {
           if (!cache.current.has(m.id)) cache.current.set(m.id, mapDB(await api(`/api/snapshots/${m.id}/data`)));
           const d = new Date(m.taken_at);
-          return { fileName: `${fmtDay(m.taken_at)} ${fmtTime(m.taken_at)} · ${SOURCE_LABEL[m.source] || m.source}`, db: cache.current.get(m.id), dateValue: d, dateLabel: `${formatDateLabel(d)} ${fmtTime(m.taken_at)}` };
+          return { id: m.id, fileName: `${fmtDay(m.taken_at)} ${fmtTime(m.taken_at)} · ${SOURCE_LABEL[m.source] || m.source}`, db: cache.current.get(m.id), dateValue: d, dateLabel: `${formatDateLabel(d)} ${fmtTime(m.taken_at)}` };
         }));
         out.push(...part);
       }

@@ -48,6 +48,11 @@ export const streakText = (t, k) => {
 };
 export const zDir = t => t.sd != null ? t.sd : Math.sign(t.tr || 0);   // latest direction: 1 up · 0 flat · −1 down
 // regime analyser line for one holding (held = the timeframes the regime holds back: s.rz for the zone view, s.rh else)
+// reliability in plain words (v3 stability score, 0–100 from the whole price history; High from 58, Low below 30 or a fall past 70 %)
+export const relWhy = s => s.h === "W"
+  ? `Reliability is low${s.rs != null ? ` (stability ${s.rs}/100)` : ""}: deep falls or an unsteady price history. That means more risk.`
+  : `Reliability is medium${s.rs != null ? ` (stability ${s.rs}/100)` : ""}: its price history is less steady than the best stocks.`;
+
 export function regimeWhy(s, data, held, dir) {
   const r = regimeOf(s, data.rd, true);
   if (!r || !r.w) return null;
@@ -100,9 +105,8 @@ export function analyseZone(s, data) {
     if (fin === 0 && Q.v >= TREND_CUT) why.push("The quarterly view is strong, but the yearly or monthly view holds it back.");
     else if (fin === 0 && strength >= TREND_CUT && Q.v < 0) why.push("The overall strength is good, but the quarterly view is negative, so it is not marked Doing well yet.");
     if (fin === -1 && Q.v > -TREND_CUT) why.push("The yearly and monthly views are weak enough to pull it down.");
-    if (s.h === "W") why.push(fin === -1 ? "Reliability is low: it once fell more than 70% from its highest price. That means more risk."
-                                         : "Reliability is low: it once fell more than 70% from its highest price. Low reliability always puts a stock in Look at first.");
-    else if (s.h === "M") why.push("It is more than 50% below its highest price, or lower than 5 years ago.");
+    if (s.h === "W") why.push(fin === -1 ? relWhy(s) : `${relWhy(s)} Low reliability always puts a stock in Look at first.`);
+    else if (s.h === "M") why.push(relWhy(s));
     if (s.x) why.push(fin === 1 ? "It went up more than 3 times in a year, so it stays in Keep an eye on. Such fast gains often cool off."
                                 : "It went up more than 3 times in a year. Such fast gains often cool off.");
   }
@@ -149,8 +153,7 @@ export function analyseHolding(s, data) {
                                             : `Its strength is ${signed(lt)}%, but low reliability always puts a stock in Look at first.`);
     } else if (!moved && cat === "watch" && lt < TREND_CUT) why.push(`Its strength is not high enough yet (${signed(lt)}%). Doing well starts at +${TREND_CUT}%.`);
     if (dM === -1 && dQ === 1) why.push("The monthly trend is dipping. So far this looks like a pause.");
-    if (s.h === "W") why.push("Reliability is low: it once fell more than 70% from its highest price. That means more risk.");
-    else if (s.h === "M") why.push("It is more than 50% below its highest price, or lower than 5 years ago.");
+    if (s.h === "W" || s.h === "M") why.push(relWhy(s));
     if (s.x) why.push("It went up more than 3 times in a year. Such fast gains often cool off.");
   }
   return { s, cat, lt, tf, g: groupLongTerm(data, s.sec, s.ind), why, moved, improving, qStep, rg: regimeOf(s, data.rd, true) };
@@ -226,13 +229,13 @@ export function StrengthTiles({ r, label = "Stock strength" }) {
 }
 
 // Long-term AI Investment Summary (owner, 2026-10-17: "only the summary part") — the AI Portfolio engine's plain-word
-// research summary for ONE stock, inside the Research view's stock card. A different formula from the Research strength.
+// research summary for ONE stock, inside Deep Research's stock card. A different formula from the Research strength.
 export function InvestmentSummary({ s, data }) {
   const r = analyseHolding(s, data);
   return (
     <section className="blk inv">
       <div className="px-aih"><AiSpark/><b>Long-term</b><span>AI Investment Summary</span>
-        <Info right text="A long-term reading by Hyperplane AI (the same engine as the AI Portfolio Analyser): the monthly, quarterly and yearly trend of this stock and how long each has lasted. It uses a different formula from the Research view's strength above, which also looks at daily and weekly signals. Information, not advice."/></div>
+        <Info right text="A long-term reading by Hyperplane AI (the same engine as the AI Portfolio Analyser): the monthly, quarterly and yearly trend of this stock and how long each has lasted. It uses a different formula from Deep Research's strength above, which also looks at daily and weekly signals. Information, not advice."/></div>
       <ul className="px-why">{r.why.map((w, i) => <li key={i}>{w}</li>)}</ul>
     </section>
   );

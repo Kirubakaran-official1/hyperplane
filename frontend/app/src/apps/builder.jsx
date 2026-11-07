@@ -1,8 +1,9 @@
 // Hyperplane AI Portfolio Builder — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AiSpark, Icon, addCss } from "../core.jsx";
-import { CopyBtns, Info, MultiSelect, RELIABILITY, StockLink, api, colorOf, fmtDT, signed, tc, trackAction, trendWordOf } from "../core.jsx";
+import { AiSpark, BrandBand, Icon, addCss, useAsOf } from "../core.jsx";
+import { CopyBtns, HD_LIMIT_SUBJECT, Info, MultiSelect, RELIABILITY, StockLink, api, colorOf, fmtDT, signed, tc, trackAction, trendWordOf } from "../core.jsx";
 import { CSS } from "./builder.css.js";
+import { MyPortfolios, SaveBar, SavedNote } from "../saved.jsx";
 
 addCss("builder", CSS);
 
@@ -111,18 +112,20 @@ const loadBuilder = () => {                                   // saved inputs, c
     weighting: v.weighting === "strength" ? "strength" : "equal", opts: cleanOpts(v.opts) };
 };
 
-// Market-cap mix bar (owner, 2026-11-01: "keep the graph of the market cap and cash better"): one 100% bar, 2px gaps,
-// the percentage printed on every part wide enough to hold it, cash as a hatched grey part (money kept aside, not a
-// stock group). The coloured rows next to it (sliders / table) are its legend.
+// Market-cap mix bar (owner round 11: "the bar is a good way to show it, but the look is old school"): one 100% bar of soft pills with
+// gaps, cash as a dotted grey pill (money kept aside, not a stock group), and under it a one-line key with the percentage of
+// every part. The coloured rows next to it (sliders / table) are its legend too.
 function MixBar({ parts, label = "", thin = false }) {
   const vis = parts.filter(([, v]) => v > 0);
   const pc = v => `${+v.toFixed(v % 1 ? 1 : 0)}%`;
   return (
     <div className={`mx-line ${thin ? "thin" : ""}`}>
       {label && <span className="mx-rl">{label}</span>}
-      <div className="mx-bar" role="img" aria-label={`${label ? `${label}: ` : ""}${vis.map(([k, v]) => `${B_NAME[k]} ${pc(v)}`).join(", ")}`}>
-        {vis.map(([k, v]) => <span key={k} className={`mx-seg mx-${k.toLowerCase()}`} style={{ flexGrow: v }} title={`${B_NAME[k]}: ${pc(v)}`}>
-          {!thin && v >= 9 && <em>{pc(v)}</em>}</span>)}
+      <div className="mx-col">
+        <div className="mx-bar" role="img" aria-label={`${label ? `${label}: ` : ""}${vis.map(([k, v]) => `${B_NAME[k]} ${pc(v)}`).join(", ")}`}>
+          {vis.map(([k, v]) => <span key={k} className={`mx-seg mx-${k.toLowerCase()}`} style={{ flexGrow: v }} title={`${B_NAME[k]}: ${pc(v)}`}/>)}
+        </div>
+        {!thin && <div className="mx-key" aria-hidden="true">{vis.map(([k, v]) => <span key={k}><i className={`mx-${k.toLowerCase()}`}/>{B_NAME[k]} <b>{pc(v)}</b></span>)}</div>}
       </div>
     </div>
   );
@@ -463,7 +466,38 @@ function BuyingPlan({ plan, picks, res }) {
     </section>);
 }
 
-function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
+// "Request a higher limit" (owner, 2026-11-03: "if the limit is increasing in the customer account, ask the user to raise a
+// ticket in the Helpdesk … in one click it can send to the admin"). One click sends a Helpdesk query with the current
+// limit and what the customer asked for; an open request is shown instead of sending a second one. The limits themselves
+// stay enforced by the server (builder.check_options).
+function LimitAsk({ id, maxAmt, maxN, want, onHelpdesk }) {
+  const [st, setSt] = useState({ s: "" });                       // "" · busy · sent · open, with the query's id
+  const send = async () => {
+    if (st.s === "busy") return;
+    setSt({ s: "busy" });
+    try {
+      const open = ((await api("/app/api/helpdesk/tickets?status=open")).tickets || []).find(t => t.subject === HD_LIMIT_SUBJECT);
+      if (open) { setSt({ s: "open", id: open.id }); return; }
+      const lines = ["Hello QuantFriday team,", "", "Please increase my AI Portfolio Builder limit.",
+        `My current limit: amounts up to ${inrShort(maxAmt)} and up to ${maxN} stocks.`,
+        ...(want.amount > maxAmt ? [`Amount I would like to invest: ${inr(want.amount)}`] : []),
+        ...(want.count > maxN ? [`Number of stocks I would like: ${want.count}`] : []), "", "Thank you."];
+      const r = await api("/app/api/helpdesk/tickets", { method: "POST", json: { subject: HD_LIMIT_SUBJECT, severity: "low", body: [{ t: "text", v: lines.join("\n") }] } });
+      setSt({ s: "sent", id: r.id });
+    } catch (e) { setSt({ s: "", err: e.message || "The request could not be sent. Please try again." }); }
+  };
+  const view = st.id && onHelpdesk ? <button type="button" className="bd-ask-link" onClick={() => onHelpdesk(st.id)}>View request</button> : null;
+  if (st.s === "sent") return <div className="bd-ask done" id={id} role="status"><Icon name="check" size={14}/><span>Request sent. QuantFriday will reply in the Helpdesk.</span>{view}</div>;
+  if (st.s === "open") return <div className="bd-ask done" id={id} role="status"><Icon name="info" size={14}/><span>Your request for a higher limit is already with QuantFriday.</span>{view}</div>;
+  return (
+    <div className="bd-ask" id={id}>
+      <span>Need more? Ask QuantFriday to raise your limit.</span>
+      <button type="button" className="px-btn" onClick={send} disabled={st.s === "busy"}>{st.s === "busy" ? "Sending…" : "Request a higher limit"}</button>
+      {st.err && <em role="alert">{st.err}</em>}
+    </div>);
+}
+
+function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut, onHelpdesk }) {
   const [inp, setInpRaw] = useState(loadBuilder);
   const setInp = patch => setInpRaw(p => { const n = { ...p, ...patch }; try { localStorage.setItem(B_KEY, JSON.stringify(n)); } catch { /* storage blocked */ } return n; });
   const [amtText, setAmtText] = useState(() => Math.round(loadBuilder().amount).toLocaleString("en-IN"));
@@ -471,6 +505,20 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const [res, setResRaw] = useState(() => { try { return JSON.parse(sessionStorage.getItem(B_RES) || "null"); } catch { return null; } });
   const setRes = r => { setResRaw(r); try { if (r) sessionStorage.setItem(B_RES, JSON.stringify(r)); else sessionStorage.removeItem(B_RES); } catch { /* storage full or blocked */ } }; const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const [added, setAdded] = useState("");                   // "" · "ask" · "busy" · "add" / "replace" (done) · error text
+  // saved portfolios (saved.jsx): Save on a result, "My portfolios" with the tracking, momentum check, adjuster, alerts
+  const [tab, setTab] = useState(() => { try { return sessionStorage.getItem("hp_open_builder") ? "saved" : "build"; } catch { return "build"; } });
+  const [saving, setSaving] = useState(false), [saveMsg, setSaveMsg] = useState(""), [nSaved, setNSaved] = useState(null);
+  useEffect(() => {
+    api("/app/api/saved?kind=builder").then(r => setNSaved(r.length)).catch(() => {});
+    const on = e => { if (e.detail && e.detail.app === "builder") setTab("saved"); };       // opened from a notification
+    window.addEventListener("hp-open", on);
+    return () => window.removeEventListener("hp-open", on);
+  }, []);
+  const tabs = (
+    <div className="hp-tabs" role="tablist">
+      <button type="button" role="tab" aria-selected={tab === "build"} className={tab === "build" ? "on" : ""} onClick={() => setTab("build")} id="bd-tab-build"><Icon name="sparkles" size={14}/> Build</button>
+      <button type="button" role="tab" aria-selected={tab === "saved"} className={tab === "saved" ? "on" : ""} onClick={() => setTab("saved")} id="bd-tab-saved"><Icon name="star" size={14}/> My portfolios{nSaved ? ` · ${nSaved}` : ""}</button>
+    </div>);
   const [pfNow, setPfNow] = useState(null);                 // how many stocks the Analyser list holds right now
   // builder plan (Access manager: builder:customer / trader / admin) — limits shown here, enforced by the server
   // the form is drawn only once the plan is known, so a limited customer never sees options they do not have
@@ -497,7 +545,8 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const per = amtOk && nOk ? inp.amount * eqSum / 100 / inp.count : null;
   const spread = amtOk && nOk ? spreadCheck(inp.amount, inp.count, a.Cash) : null;
   const opt = inp.opts, setOpt = patch => setInp({ opts: { ...opt, ...patch } });
-  const [pool, setPool] = useState(null);                         // how many stocks pass every check today (live, counts only)
+  const [pool, setPool] = useState(null);
+  useAsOf("builder", (res && res.as_of) || (pool && pool.as_of));          // DATA AS OF in the top bar                         // how many stocks pass every check today (live, counts only)
   const optKey = JSON.stringify([inp.rel, opt]);
   useEffect(() => {
     if (!plan) return;                                            // the saved inputs are clamped to the plan first
@@ -532,8 +581,12 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
     }
   };
   const setAmount = t => { const digits = t.replace(/[^\d]/g, "").slice(0, 15); setAmtText(digits ? Number(digits).toLocaleString("en-IN") : ""); setInp({ amount: Number(digits) || 0 }); };
+  // a quick start from a public portfolio page ("Start your SIP · ₹25K a month" → sign up → here): the amount is filled in
+  useEffect(() => { try { const x = JSON.parse(sessionStorage.getItem("hp_intent") || "null");
+    if (x && x.app === "builder" && x.amount > 0) { setAmount(String(x.amount)); sessionStorage.removeItem("hp_intent"); } } catch { /* ignore */ } }, []);
   const limited = !!plan && plan.tier === "customer";            // amounts / stocks / options limited for this access
   const amtProblem = !plan ? "" : amtOk ? "" : maxAmt != null && inp.amount > maxAmt ? `Your access allows amounts up to ${inrShort(maxAmt)}.` : `Enter an amount of at least ${inr(minAmt)}.`;
+  const overAmt = !!plan && maxAmt != null && inp.amount > maxAmt, overN = !!plan && inp.count > maxN;   // past the access limit
   const nProblem = !plan || nOk ? "" : inp.count > maxN ? `Your access allows up to ${maxN} stocks.` : `Choose at least ${B_MIN_N} stocks.`;
   const problem = !plan ? "Loading…" : amtProblem || nProblem || (eqSum <= 0 ? "Put some money in at least one market-cap group." : "");
   const build = () => {
@@ -546,6 +599,13 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   };
   const brand = <div className="px-eyebrow"><AiSpark/> Hyperplane AI · Portfolio Builder <span>by QuantFriday</span></div>;
   const canPf = apps.some(x => x.key === "portfolio");
+
+  if (tab === "saved") return (
+    <div className="pf bd" id="builder-saved">
+      <BrandBand product="Portfolio Builder" title="My portfolios" accent="checked every week" id="bd-band"
+        info="Each saved portfolio is re-checked on the latest data. A stock that no longer passes gets a better one in its place." right={tabs}/>
+      <MyPortfolios app="builder" onOut={onOut} onCount={setNSaved}/>
+    </div>);
 
   if (res) {
     const picks = res.picks, caps = ["Large", "Mid", "Small"].filter(c => picks.some(p => p.cap === c));
@@ -579,17 +639,22 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
     const resSpread = res.stocks >= res.count ? spreadCheck(res.amount, res.stocks, res.alloc.Cash) : null;
     return (
       <div className="pf px bd" id="builder-result">
-        <header className="px-head">
-          <div className="px-ht">{brand}<h1>Your model portfolio</h1>
-            <div className="px-meta">{res.stocks} stocks · <Money v={res.amount}/> · Data as of {fmtDT(res.as_of)}</div></div>
-          <div className="px-actions">
-            <button type="button" className="px-btn" id="bd-edit" onClick={() => { setRes(null); window.scrollTo(0, 0); }}>Edit inputs</button>
-            <span className="tcopy"><span className="lbl">Ticker copy · {picks.length}</span><CopyBtns syms={picks.map(p => p.s)}/></span>
-            <button type="button" className="px-btn" id="bd-csv" onClick={csv}>Download (Excel)</button>
+        <BrandBand product="Portfolio Builder" title="Your model" accent="portfolio" id="bd-band" right={tabs}
+          sub={<>{res.stocks} stocks · <Money v={res.amount}/></>}/>
+        <div className="hp-actbar">
+            <button type="button" className="px-btn" id="bd-edit" onClick={() => { setRes(null); window.scrollTo(0, 0); }}><Icon name="list" size={14}/> Edit inputs</button>
+            <button type="button" className="px-btn" id="bd-save" onClick={() => { setSaving(v => !v); setSaveMsg(""); }}><Icon name="star" size={14}/> Save</button>
+            <span className="hp-grp" role="group" aria-label="Export">
+              <button type="button" className="px-btn" id="bd-csv" onClick={csv}><Icon name="table" size={14}/> Excel</button>
+              <span className="tcopy"><span className="lbl">Tickers · {picks.length}</span><CopyBtns syms={picks.map(p => p.s)}/></span></span>
             {canPf && <button type="button" className="px-btn primary" id="bd-add" disabled={added === "busy" || done} onClick={ask}>
-              {done ? <><Icon name="check" size={16}/> Sent to AI Portfolio</> : "Send to AI Portfolio Analyser"}</button>}
-          </div>
-        </header>
+              {done ? <><Icon name="check" size={16}/> Sent to AI Portfolio</> : <>Send to AI Portfolio Analyser <Icon name="chevron" size={14}/></>}</button>}
+        </div>
+        {saving && <SaveBar kind="builder" defName={`${inrShort(res.amount)} portfolio`} onCancel={() => setSaving(false)}
+          inputs={{ amount: res.amount, count: res.count, reliability: res.reliability }}
+          holdings={picks.map(p => ({ kind: "stock", s: p.s, n: p.n, grp: `${p.cap} cap`, cap: p.cap, sec: p.sec, p: p.p, qty: p.qty, amt: p.amt }))}
+          onDone={m => { setSaving(false); setSaveMsg(m); setNSaved(n => (n || 0) + 1); }}/>}
+        {saveMsg && <SavedNote id="bd-saved-msg" msg={saveMsg} onOpen={() => setTab("saved")} onClose={() => setSaveMsg("")}/>}
         {added === "ask" && <div className="bd-confirm" role="alert" id="bd-ask">
           {pfNow == null ? <span>Checking your AI Portfolio Analyser list…</span>
             : pfNow === 0 ? <><span>Your AI Portfolio Analyser list is empty. Put these {picks.length} stocks in it?</span>
@@ -616,21 +681,32 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
         </section>
 
         <section className="px-row2 bd-row" id="bd-row">
-          <div className="px-card bd-alloc">
-            <div className="px-label">Where the money goes</div>
+          <div className="px-card bd-alloc" id="bd-alloc">
+            <div className="bd-sh"><div className="px-label">Where the money goes</div><span className="bd-shint">of <Money v={res.amount}/></span></div>
             <div className="mx-cmp"><MixBar label="You chose" parts={res.by_cap.map(r => [r.k, r.target])}/><MixBar label="Plan" parts={res.by_cap.map(r => [r.k, r.pct])}/></div>
-            <table className="bd-mix"><thead><tr><th></th><th>You chose</th><th>Plan</th><th className="num">Amount</th><th className="num">Stocks</th></tr></thead>
-              <tbody>{res.by_cap.map(r => (
-                <tr key={r.k}><td><i style={{ background: B_COL[r.k] }}/>{r.k === "Cash" ? "Cash (safety)" : `${r.k} cap`}</td><td>{r.target}%</td><td><b>{r.pct.toFixed(1)}%</b></td>
-                  <td className="num"><Money v={r.amt}/></td><td className="num">{r.k === "Cash" ? "—" : r.n}</td></tr>))}</tbody></table>
+            <div className="mx-list" role="table" aria-label="Where the money goes">
+              <div className="mx-lh" role="row"><span>Segment</span><span className="num">Share</span><span className="num">Stocks</span><span className="num">Amount</span></div>
+              {res.by_cap.map(r => (
+                <div key={r.k} className="mx-li" role="row" title={`${B_NAME[r.k]}: ${r.pct.toFixed(1)}% of the amount (you chose ${r.target}%)`}>
+                  <span className="mx-tn"><i className={`mx-sw mx-${r.k.toLowerCase()}`}/>{r.k === "Cash" ? "Cash (safety)" : B_NAME[r.k]}</span>
+                  <span className="num mx-pc"><b>{r.pct.toFixed(1)}%</b><small>you chose {r.target}%</small></span>
+                  <span className="num mx-n">{r.k === "Cash" ? "—" : r.n}</span>
+                  <span className="num mx-amt"><Money v={r.amt}/></span>
+                </div>))}
+            </div>
           </div>
           <div className="px-card bd-secs">
-            <div className="bd-sh"><div className="px-label">Sectors · {res.by_sec.length} <Info text={`Share of the invested money in each sector. No sector gets more than ${res.sector_max === 100 ? "any limit (you chose no limit)" : `${res.sector_max}%`} of it. Click sectors to show only their stocks in the list below.`}/></div>
+            <div className="bd-sh"><div className="px-label">Sectors <span className="bd-cnt">{res.by_sec.length}</span> <Info text={`Share of the invested money in each sector. No sector gets more than ${res.sector_max === 100 ? "any limit (you chose no limit)" : `${res.sector_max}%`} of it. Click sectors to show only their stocks in the list below.`}/></div>
               {secSel.length > 0 ? <button type="button" className="bd-clr" onClick={() => setSecSel([])}>Clear filter <Icon name="x" size={12}/></button> : <span className="bd-shint">click to filter the list</span>}</div>
-            <div className="bd-sl" id="bd-sectors">{res.by_sec.map(r => (
+            <div className="bd-ssum">
+              <span><b>{res.by_sec.slice(0, 3).reduce((t, r) => t + r.pct, 0).toFixed(1)}%</b> in the top 3 sectors</span>
+              <span><b>{res.by_sec.length}</b> sectors · <b>{picks.length}</b> stocks</span>
+            </div>
+            <div className="bd-sl" id="bd-sectors">{res.by_sec.map((r, i) => (
               <button type="button" key={r.k} className={`bd-s ${secSel.includes(r.k) ? "on" : ""}`} onClick={() => pickSec(r.k)} aria-pressed={secSel.includes(r.k)}
                 title={`${r.k}: ${r.pct.toFixed(1)}% of the invested money, ${r.n} stock${r.n === 1 ? "" : "s"}`}>
-                <span className="bd-sn">{r.k}</span><span className="bd-st"><i style={{ width: `${r.pct / maxSec * 100}%` }}/></span><b>{r.pct.toFixed(1)}%</b><small>{r.n}</small></button>))}</div>
+                <span className="bd-sr">{String(i + 1).padStart(2, "0")}</span>
+                <span className="bd-sn">{r.k}</span><span className="bd-st"><i style={{ width: `${r.pct / maxSec * 100}%` }}/></span><b>{r.pct.toFixed(1)}%</b><small>{r.n} stock{r.n === 1 ? "" : "s"}</small></button>))}</div>
           </div>
         </section>
 
@@ -704,12 +780,10 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
   const st = styleOf(a);
   return (
     <div className="pf bd" id="builder-form">
+      <BrandBand product="Portfolio Builder" title="Build a strong portfolio" accent="in seconds" id="bd-band" right={tabs}
+        info="Enter how much to invest. Hyperplane AI picks the stocks with the strongest long-term trend, tells you how many shares to buy, and keeps some cash aside."/>
       <section className="card pf-start bd-start">
         <div className="pf-sl">
-          {brand}
-          <h1>Build a strong portfolio <span>in seconds</span></h1>
-          <p className="pf-lead">Tell Hyperplane AI how much you want to invest and how. It picks the stocks with the strongest
-            long-term trend, tells you how many shares to buy, and keeps some cash aside for safety.</p>
 
           <div className="bd-f" id="bd-amount">
             <label className="bd-l" htmlFor="bd-amt">1 · Amount to invest</label>
@@ -717,6 +791,7 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
               <em>{amtOk ? inrShort(inp.amount) : ""}</em></div>
             {amtProblem ? <div className="pf-miss bd-ferr" role="alert" id="bd-amt-err">{amtProblem}</div>
               : limited && <div className="bd-hint" id="bd-access">Your access allows amounts up to {inrShort(maxAmt)} and up to {maxN} stocks.</div>}
+            {overAmt && <LimitAsk id="bd-ask-amt" maxAmt={maxAmt} maxN={maxN} want={inp} onHelpdesk={onHelpdesk}/>}
             <div className="bd-chips">{B_AMOUNTS.filter(v => maxAmt == null || v <= maxAmt).map(v => <button key={v} type="button" className={inp.amount === v ? "on" : ""} onClick={() => setAmount(String(v))}>{v < 100000 ? `₹${v / 1000} K` : inrShort(v)}</button>)}</div>
           </div>
 
@@ -725,9 +800,10 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
             <div className="bd-chips">{B_COUNTS.filter(n => n <= maxN).map(n => <button key={n} type="button" className={!custom && inp.count === n ? "on" : ""} onClick={() => { setCustom(false); setInp({ count: n }); }}>{n} stocks</button>)}
               <button type="button" className={custom ? "on" : ""} onClick={() => setCustom(true)}>Custom</button>
               {custom && <input type="number" className="bd-n" id="bd-n" min={B_MIN_N} max={maxN} value={inp.count || ""} aria-label="Number of stocks"
-                onChange={e => setInp({ count: Math.min(maxN, Math.max(0, Math.round(Number(e.target.value) || 0))) })}/>}</div>
+                onChange={e => setInp({ count: Math.min(B_MAX_N, Math.max(0, Math.round(Number(e.target.value) || 0))) })}/>}</div>
             <div className="bd-hint">{per ? <>About <b>{money(per)}</b> per stock. </> : null}Up to {maxN.toLocaleString("en-IN")} stocks{limited ? " with your access" : ""}. More stocks spread the risk; fewer let each idea matter.</div>
             {nProblem && <div className="pf-miss bd-ferr" role="alert" id="bd-n-err">{nProblem}</div>}
+            {overN && !overAmt && <LimitAsk id="bd-ask-n" maxAmt={maxAmt} maxN={maxN} want={inp} onHelpdesk={onHelpdesk}/>}
             <SpreadNote chk={spread} id="bd-spread" onFix={n => { n = Math.min(n, maxN); setCustom(!B_COUNTS.includes(n)); setInp({ count: n }); }}/>
           </div>
 
@@ -758,14 +834,14 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut }) {
           </div>
 
           <div className="bd-f" id="bd-rel">
-            <span className="bd-l">4 · Reliability <Info wide text={<><b>Reliability</b> comes from the stock's whole price history. <b>High</b>: it has stayed close to its highest price over the years.
-              <b> Medium</b>: more than 50% below its highest price, or lower than 5 years ago. <b>Low</b>: it once fell more than 70% from its highest price, so the builder never uses it.</>}/></span>
+            <span className="bd-l">4 · Reliability <Info wide text={<><b>Reliability</b> is a 0–100 stability score from the stock's whole price history. <b>High</b>: 58 and above, the steadiest.
+              <b> Medium</b>: 30 to 57. <b>Low</b>: below 30 or a fall past 70%, so the builder never uses it.</>}/></span>
             <div className="bd-chips">
               <button type="button" className="on locked" disabled title="High reliability is always included"><Icon name="check" size={12}/> High</button>
               {plan && !plan.reliability.includes("M")
                 ? <button type="button" id="bd-rel-m" className="off" disabled title="Medium reliability is not included in your access"><Icon name="lock" size={12}/> Medium</button>
                 : <button type="button" id="bd-rel-m" className={inp.rel.includes("M") ? "on" : ""} onClick={() => setInp({ rel: inp.rel.includes("M") ? ["S"] : ["S", "M"] })}><Icon name={inp.rel.includes("M") ? "check" : "plus"} size={12}/> Medium</button>}
-              <button type="button" id="bd-rel-w" className="off" disabled title="Low reliability stocks once fell more than 70% from their highest price. The builder never uses them."><Icon name="lock" size={12}/> Low</button>
+              <button type="button" id="bd-rel-w" className="off" disabled title="Low reliability stocks have an unsteady price history. The builder never uses them."><Icon name="lock" size={12}/> Low</button>
             </div>
           </div>
 

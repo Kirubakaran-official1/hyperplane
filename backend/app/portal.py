@@ -12,11 +12,13 @@ to the activity log, which this service can write but never read.
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
 import time
-from collections import defaultdict, deque
+import contextvars
+from collections import OrderedDict, defaultdict, deque
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 
@@ -30,6 +32,9 @@ from pydantic import BaseModel
 from . import activity as act
 from . import adoption
 from . import builder
+from . import monitor
+from . import sip
+from . import tracking
 from . import helpdesk as hd
 from .detail import DETAIL_DAYS
 from .security import DUMMY_HASH, hash_password, verify_password
@@ -64,6 +69,81 @@ def _startup():
             if time.time() > deadline:
                 raise
             time.sleep(5)
+
+
+# Past data (owner 2026-11-07, round 16): the day picked in the app travels as "X-HP-Day: YYYY-MM-DD.open|end". This holder is made
+# per request here; _session() checks the customer holds research:history and finds the stored day (403 / 404 otherwise); then every
+# _latest_view() / _latest_etf_view() of that request answers with that day's data. Changes to saved portfolios always use today's.
+_DAY = contextvars.ContextVar("hp_day", default=None)
+DAY_HDR = re.compile(r"^(\d{4}-\d{2}-\d{2})\.(open|end)$")
+HIST_PERM = "research:history"
+_hist = OrderedDict()                                            # snapshot_id → (stock view, ETF view)
+
+
+@app.middleware("http")
+async def _day(request: Request, call_next):
+    tok = _DAY.set({"hdr": request.headers.get("x-hp-day"), "row": None})
+    try:
+        return await call_next(request)
+    finally:
+        _DAY.reset(tok)
+
+
+def _check_day(c):
+    """the day picked, checked for this customer (None = the latest published data)"""
+    h = _DAY.get()
+    if not h or not h["hdr"]:
+        return None
+    m = DAY_HDR.match(h["hdr"])
+    if not m:
+        raise HTTPException(422, "Pick a date and Day open or Day end")
+    if HIST_PERM not in c["perms"]:
+        raise HTTPException(403, "Past data is not part of your access.", headers={"X-Access": "denied"})
+    with pool.connection() as conn:
+        row = _history_days(conn).get(m[1], {}).get(m[2])
+    if not row:
+        raise HTTPException(404, "No data for that day — markets may have been closed.")
+    h["row"] = row
+    return row
+
+
+def _day_row():
+    h = _DAY.get()
+    return h and h["row"]
+
+
+def _hist_views(row):
+    sid = row["snapshot_id"]
+    if sid not in _hist:
+        with pool.connection() as conn:
+            r = conn.execute("SELECT data_gz, etf_gz FROM customer_history WHERE snapshot_id = %s", (sid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "No data for that day")
+        _hist[sid] = (json.loads(gzip.decompress(bytes(r["data_gz"]))), json.loads(gzip.decompress(bytes(r["etf_gz"]))) if r["etf_gz"] else None)
+        while len(_hist) > 12:
+            _hist.popitem(last=False)
+    _hist.move_to_end(sid)
+    return _hist[sid]
+
+
+def _day_caps(row):
+    """what a stored past day can serve: every day has the stock view (AI Mode, Deep Research, Analyser); the Builder and the SIP
+    Builders need the zone view (stored from late Oct 2026 on); the ETF apps need that day's ETF file"""
+    v, e = _hist_views(row)
+    return {"zones": any(x.get("zv") for x in v.get("stocks", [])[:400]), "etf": bool(e)}
+
+
+def _need_day(zones=False, etf=False):
+    """a past day picked that cannot serve this application → a clear 422 (never an empty result)"""
+    row = _day_row()
+    if not row:
+        return
+    cap = _day_caps(row)
+    if zones and not cap["zones"]:
+        raise HTTPException(422, f"The data of {row['trade_date']:%d %b %Y} was collected before the zone view was stored, so this "
+                                 "application cannot work on it. Pick 29 Oct 2026 or later.")
+    if etf and not cap["etf"]:
+        raise HTTPException(422, f"No ETF data is stored for {row['trade_date']:%d %b %Y}. Pick a day that has it.")
 
 
 @app.middleware("http")
@@ -358,6 +438,7 @@ def _session(request: Request, response: Response | None = None):
         perms = c.execute(PERMS_SQL, (r["id"],)).fetchall()
     r["modules"] = {a["key"] for a in r["apps"]}
     r["perms"] = {p["key"] for p in perms if p["module"] in r["modules"]}
+    _check_day(r)                                                 # a past day picked: allowed for this customer?
     return r
 
 
@@ -399,7 +480,7 @@ def logout(request: Request, response: Response):
     return {"ok": True}
 
 
-MAX_PINS = 6                                             # applications pinned to the side menu; the rest are under "More apps"
+MAX_PINS = 8                                             # applications pinned to the side menu (owner 2026-11-06: 8); the rest are under "More apps"
 
 
 def _pins(conn, c):
@@ -430,7 +511,7 @@ class PinsIn(BaseModel):
 
 @app.put("/app/api/pins")
 def set_pins(body: PinsIn, request: Request, c=Depends(customer)):
-    """Pin up to 6 of the customer's own applications to the side menu (order kept)."""
+    """Pin up to MAX_PINS (8) of the customer's own applications to the side menu (order kept)."""
     _rate("pins", str(c["id"]), 60, 60)
     pins = list(dict.fromkeys(str(k) for k in body.pins))
     if any(k not in c["modules"] for k in pins):
@@ -509,23 +590,25 @@ def _history_days(conn):
 def history(request: Request, c=Depends(need(*DATA_APPS))):
     """Past days the customer may pick (only when the admin has switched it on)."""
     _rate("history", _ip(request), 60, 60)
+    if HIST_PERM not in c["perms"]:                                # round 16: a permission (Customer Admin), not the admin switch
+        return {"enabled": False, "days": []}
     with pool.connection() as conn:
-        if not conn.execute("SELECT portal_history_enabled() AS v").fetchone()["v"]:
-            return {"enabled": False, "days": []}
         days = _history_days(conn)
-    return {"enabled": True, "days": [{"d": d, **{k: r["taken_at"].astimezone(IST).isoformat() for k, r in parts.items()}}
-                                      for d, parts in sorted(days.items())]}
+    return {"enabled": True, "days": [{"d": d, **{k: r["taken_at"].astimezone(IST).isoformat() for k, r in parts.items()},
+                                       **_day_caps(parts.get("end") or parts.get("open"))} for d, parts in sorted(days.items())]}
 
 
 @app.get("/app/api/data")
 def data(request: Request, date: str | None = None, part: str | None = None, c=Depends(need(*DATA_APPS))):
+    if not (date or part) and _day_row():                         # the day picked travels in the header too (round 16)
+        date, part = _DAY.get()["hdr"].split(".")
     if date or part:                                       # a past day, chosen in the date picker
         _rate("data-history", _ip(request), 60, 60)
         if part not in ("open", "end") or not date or len(date) != 10:
             raise HTTPException(422, "Pick a date and Day open or Day end")
+        if HIST_PERM not in c["perms"]:
+            raise HTTPException(403, "Past data is not part of your access.", headers={"X-Access": "denied"})
         with pool.connection() as conn:
-            if not conn.execute("SELECT portal_history_enabled() AS v").fetchone()["v"]:
-                raise HTTPException(403, "Past days are not available right now.")
             row = _history_days(conn).get(date, {}).get(part)
             if row and request.headers.get("if-none-match") == f'W/"h{row["snapshot_id"]}"':
                 return Response(status_code=304, headers={"ETag": f'W/"h{row["snapshot_id"]}"', "Cache-Control": "private, no-cache"})
@@ -548,7 +631,27 @@ def data(request: Request, date: str | None = None, part: str | None = None, c=D
                              "ETag": etag, "Cache-Control": "private, no-cache"})
 
 
-PF_MAX = 500                                          # stocks per portfolio ("any number" — capped against abuse)
+@app.get("/app/api/etf")
+def etf_data(request: Request, c=Depends(need("etf"))):
+    if _day_row():                                                # a past day picked (round 16): that day's ETF view
+        e = _hist_views(_day_row())[1]
+        if not e:
+            raise HTTPException(404, "No ETF data is stored for that day.")
+        return e
+    """ETF analyser (owner, 2026-11-06): the latest published ETF summary — strength + Recommended only (app/etf.py)."""
+    with pool.connection() as conn:
+        head = conn.execute("SELECT id, published_at FROM published WHERE etf_gz IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+        if not head:
+            raise HTTPException(404, "ETF data will appear after the next update — please check back soon.")
+        etag = f'W/"e{head["id"]}"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "private, no-cache"})
+        r = conn.execute("SELECT etf_gz FROM published WHERE id = %s", (head["id"],)).fetchone()
+    return Response(content=bytes(r["etf_gz"]), media_type="application/json",
+                    headers={"Content-Encoding": "gzip", "ETag": etag, "Cache-Control": "private, no-cache"})
+
+
+PF_MAX = 500                                         # stocks per portfolio ("any number" — capped against abuse)
 PF_SYM = re.compile(r"^[A-Z0-9&._-]{1,30}$")
 
 
@@ -568,8 +671,9 @@ def _own(c):
 def portfolio_get(request: Request, c=Depends(need("portfolio"))):
     _rate("portfolio", _ip(request), 120, 60)
     with _own(c) as conn:
-        r = conn.execute("SELECT symbols, updated_at FROM customer_portfolio WHERE customer_id = %s", (c["id"],)).fetchone()
-    return {"symbols": list(r["symbols"]) if r else [], "updated_at": r["updated_at"].isoformat() if r else None}
+        r = conn.execute("SELECT symbols, updated_at, alerts FROM customer_portfolio WHERE customer_id = %s", (c["id"],)).fetchone()
+    return {"symbols": list(r["symbols"]) if r else [], "updated_at": r["updated_at"].isoformat() if r else None,
+            "alerts": bool(r and r["alerts"])}
 
 
 @app.put("/app/api/portfolio")
@@ -610,7 +714,10 @@ class PreviewIn(BaseModel):
 _latest = {"id": None, "data": None}                   # the latest published view, parsed once per publish
 
 
-def _latest_view():
+def _latest_view(today=False):
+    """the stock view: the day picked (past data, round 16) unless today=True, else the latest publish"""
+    if not today and _day_row():
+        return _hist_views(_day_row())[0]
     with pool.connection() as conn:
         r = conn.execute("SELECT id FROM published ORDER BY id DESC LIMIT 1").fetchone()
         if not r:
@@ -671,6 +778,7 @@ def portfolio_builder_plan(c=Depends(need("builder"))):
 def portfolio_builder(body: BuilderIn, request: Request, c=Depends(need("builder"))):
     """Hyperplane AI Portfolio Builder: a model portfolio from the latest published data (builder.py), within the
     customer's builder plan — checked here whatever the client sends."""
+    _need_day(zones=True)
     _rate("builder", str(c["id"]), 30, 60)
     tier = builder_tier(c)
     try:
@@ -685,13 +793,603 @@ def portfolio_builder(body: BuilderIn, request: Request, c=Depends(need("builder
     return res
 
 
+_latest_etf = {"id": None, "data": None}               # the latest published ETF summary, parsed once per publish
+
+
+def _latest_etf_view(today=False):
+    """the ETF summary of the latest publish that has one (None when ETFs were never published); the day picked when there is one"""
+    if not today and _day_row():
+        return _hist_views(_day_row())[1]
+    with pool.connection() as conn:
+        r = conn.execute("SELECT id FROM published WHERE etf_gz IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+        if not r:
+            return None
+        if r["id"] != _latest_etf["id"]:
+            g = conn.execute("SELECT etf_gz FROM published WHERE id = %s", (r["id"],)).fetchone()
+            _latest_etf.update(id=r["id"], data=json.loads(gzip.decompress(bytes(g["etf_gz"]))))
+    return _latest_etf["data"]
+
+
+class SipIn(BaseModel):                                          # AI ETF SIP Builder (Reliable): ETFs only
+    amount: float
+    freq: str = "month"
+    opts: dict = {}                                              # gold %, index cap mix, number of ETFs (6 … 20)
+    years: int = 10
+
+
+class MsipIn(BaseModel):                                         # AI Momentum SIP (Risk): stocks only
+    amount: float
+    freq: str = "month"
+    rel: list[str] = ["S"]
+    mix: dict = {"Large": 70, "Mid": 15, "Small": 15}
+    count: int | None = None
+    years: int = 10
+    opts: dict | None = None                                     # the Builder's More options (Admin level only)
+    sector_max: int | None = None
+
+
+def msip_tier(c):
+    """the customer's Momentum SIP level from their permissions (Access manager): admin > customer (everyone)"""
+    return "admin" if "msip:admin" in c["perms"] else "customer"
+
+
+class SavedIn(BaseModel):
+    kind: str = "sip"                                            # sip | msip | builder | analyser
+    name: str
+    inputs: dict
+    holdings: list
+    alerts: bool = False
+
+
+class SavedPatch(BaseModel):
+    alerts: bool | None = None
+    name: str | None = None
+    visibility: str | None = None                                # private | public (public needs the application's :share permission)
+
+
+@app.get("/app/api/sip/info")
+def sip_info(c=Depends(need("sip"))):
+    """AI ETF SIP Builder form: limits, defaults, the core index ETFs, how many themes / diversifiers qualify today"""
+    _need_day(zones=True, etf=True)
+    return sip.info(_latest_view(), _latest_etf_view())
+
+
+@app.get("/app/api/msip/info")
+def msip_info(c=Depends(need("msip"))):
+    """AI Momentum SIP form: limits of the customer's level, how many stocks pass today per reliability, the recommended
+    count rule"""
+    _need_day(zones=True)
+    view = _latest_view()
+    return {**sip.info(view, _latest_etf_view()), "plan": sip.msip_plan(msip_tier(c)),
+            "sectors": sorted({x["sec"] for x in view.get("stocks", []) if x.get("sec")})}
+
+
+@app.post("/app/api/msip")
+def msip_build(body: MsipIn, c=Depends(need("msip"))):
+    """AI Momentum SIP (sip.build_stock) on the latest published stock view — limits checked here"""
+    _need_day(zones=True)
+    _rate("sip", str(c["id"]), 30, 60)
+    try:
+        res = sip.build_stock(_latest_view(), body.amount, body.freq, body.rel, body.mix, body.count, body.years, body.opts,
+                              body.sector_max, msip_tier(c))
+    except sip.SipPlanError as e:
+        raise HTTPException(403, str(e))
+    except sip.SipError as e:
+        raise HTTPException(422, str(e))
+    with pool.connection() as conn:
+        adoption.action(conn, c["id"], "msip", "build")
+    return res
+
+
+@app.post("/app/api/sip")
+def sip_build(body: SipIn, c=Depends(need("sip"))):
+    """AI ETF SIP Builder (sip.build_etf) on the latest published ETF summary — ETFs only, limits checked here"""
+    _need_day(zones=True, etf=True)
+    _rate("sip", str(c["id"]), 30, 60)
+    try:
+        res = sip.build_etf(_latest_view(), _latest_etf_view(), body.amount, body.freq, body.opts, body.years)
+    except sip.SipError as e:
+        raise HTTPException(422, str(e))
+    with pool.connection() as conn:
+        adoption.action(conn, c["id"], "sip", "build")
+    return res
+
+
+# ── saved plans: Momentum SIPs and Portfolio Builder portfolios (owner 2026-11-06: save, check, adjust, alerts) ──
+SAVED_KINDS = {"sip": "sip", "msip": "msip", "builder": "builder", "analyser": "portfolio"}   # kind → the application it needs
+SAVED_TAG = {"sip": "AI ETF SIP Builder", "msip": "AI Momentum SIP Builder", "builder": "Portfolio Builder", "analyser": "AI Portfolio Analyser"}
+SAVED_COLS = "id, kind, name, inputs, holdings, alerts, state, created_at, refreshed_at, saved_on, versions, share_id, visibility"
+SHARE_PERM = {"sip": "sip:share", "msip": "msip:share", "builder": "builder:share", "analyser": "portfolio:share"}   # who may make one public
+SHARE_CODE = re.compile(r"^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$")       # db.hp_share_id()
+SAVED_KEEP = ("kind", "sleeve", "role", "s", "n", "grp", "cap", "sec", "k", "u", "units", "every", "slice", "p", "amt", "qty")
+
+
+HOLD_MAX = {"sip": 60, "msip": 2000, "builder": 1000, "analyser": 1000}
+HOLD_NUM = (("units", 0, 1e7), ("qty", 0, 1e9), ("every", 1, 12), ("slice", 0, 1e13), ("amt", 0, 1e13))
+HOLD_ROLE, HOLD_SLEEVE = (None, "core", "theme", "diversifier", "commodity"), (None, "index", "stock", "commodity")
+
+
+def _clean_holdings(kind, holdings, inputs, c, legacy=False):
+    """the holdings of a saved portfolio, as the server accepts them: known symbols only (today's published stocks / ETFs), each once,
+    the right kind for the application, numbers that are finite and in range, names and prices from the server (never the client),
+    and the total inside the plan's amount (and so inside the customer's level, checked on the inputs)"""
+    if not isinstance(holdings, list) or not holdings or len(holdings) > HOLD_MAX.get(kind, 1000):
+        raise HTTPException(422, "That plan cannot be saved")
+    stocks = {x["s"]: x for x in _latest_view().get("stocks", [])}
+    etfs = {x["s"]: x for x in (_latest_etf_view() or {}).get("etfs", [])} if kind == "sip" else {}
+    kinds = ("etf", "stock") if legacy else {"sip": ("etf",), "msip": ("stock",), "builder": ("stock",), "analyser": ("stock",)}[kind]
+    out, seen = [], set()
+    for h in holdings:
+        if not isinstance(h, dict) or h.get("kind") not in kinds:
+            raise HTTPException(422, "That plan cannot be saved")
+        sym = str(h.get("s") or "")
+        ref = (stocks if h["kind"] == "stock" else etfs).get(sym)
+        if not PF_SYM.match(sym) or sym in seen or not ref:
+            raise HTTPException(422, f"{sym[:30] or 'A holding'} is not in today's data")
+        seen.add(sym)
+        row = {k: h.get(k) for k in SAVED_KEEP if isinstance(h.get(k), (str, int, float)) and not isinstance(h.get(k), bool) or h.get(k) is None}
+        for k, lo, hi in HOLD_NUM:
+            v = row.get(k)
+            if v is not None and (not isinstance(v, (int, float)) or not math.isfinite(v) or not lo <= v <= hi):
+                raise HTTPException(422, "That plan cannot be saved")
+        if row.get("role") not in HOLD_ROLE or row.get("sleeve") not in HOLD_SLEEVE:
+            raise HTTPException(422, "That plan cannot be saved")
+        row.update(s=sym, kind=h["kind"], n=ref.get("n"), p=ref.get("p"))
+        if h["kind"] == "stock":
+            row.update(cap=ref.get("cap"), sec=ref.get("sec"))
+        else:
+            row.update(u=ref.get("u"), k=ref.get("k"))
+        row["grp"] = str(row.get("grp") or "")[:40] or None
+        out.append(row)
+    amount = float((inputs or {}).get("amount") or 0)
+    if kind in ("sip", "msip") and sum(float(r.get("amt") or 0) for r in out) > amount * 1.25 + 1:
+        raise HTTPException(422, "The holdings add up to more than the plan's amount")
+    if kind == "builder" and sum(float(r.get("qty") or 0) * float(r.get("p") or 0) for r in out) > amount * 1.10 + max(float(r.get("p") or 0) for r in out):
+        raise HTTPException(422, "The holdings add up to more than the plan's amount")
+    return out
+
+
+def _saved_need(c, kind):
+    if kind not in SAVED_KINDS or SAVED_KINDS[kind] not in c["modules"]:
+        raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+
+
+def _saved_row(conn, c, sid):
+    r = conn.execute(f"SELECT {SAVED_COLS} FROM customer_sips WHERE id = %s AND customer_id = %s", (sid, c["id"])).fetchone()
+    if not r:
+        raise HTTPException(404, "That saved plan was not found")
+    _saved_need(c, r["kind"])
+    return r
+
+
+def _saved_out(r, c=None):
+    return {"id": r["id"], "kind": r["kind"], "tag": SAVED_TAG.get(r["kind"]), "name": r["name"], "inputs": r["inputs"], "holdings": r["holdings"],
+            "code": r["share_id"], "visibility": r["visibility"],
+            "can_share": bool(c) and SHARE_PERM.get(r["kind"]) in c["perms"],
+            "alerts": r["alerts"], "created_at": r["created_at"].isoformat(), "saved_on": r["saved_on"].isoformat() if r["saved_on"] else None,
+            "changes": max(0, len(r["versions"] or []) - 1),
+            "refreshed_at": r["refreshed_at"].isoformat() if r["refreshed_at"] else None}
+
+
+def _rel_of(r):
+    i = r["inputs"] or {}
+    return i.get("rel") or i.get("reliability") or ["S"]
+
+
+@app.get("/app/api/saved")
+def saved_list(kind: str = "sip", spark: bool = False, c=Depends(customer)):
+    """the customer's saved portfolios of one kind, or kind=all (every kind their applications allow), newest first;
+    spark=1 adds today's return and a small line per portfolio (tracking.spark, cached)"""
+    kinds = [k for k, m in SAVED_KINDS.items() if m in c["modules"]] if kind == "all" else [kind]
+    if kind != "all":
+        _saved_need(c, kind)
+    if not kinds:
+        return []
+    _rate("saved-list", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        rows = conn.execute(f"SELECT {SAVED_COLS} FROM customer_sips WHERE customer_id = %s AND kind = ANY(%s) ORDER BY id DESC",
+                            (c["id"], kinds)).fetchall()
+        out = [_saved_out(r, c) for r in rows]
+        for o, r in zip(out, rows):
+            o["watch"] = len(_watch_syms(r))
+        if spark:
+            for o, r in zip(out, rows):
+                try:
+                    o["track"] = tracking.spark(conn, r)
+                except Exception:                                  # noqa: BLE001 — a card without its line, never a failed list
+                    o["track"] = None
+    return out
+
+
+@app.post("/app/api/saved")
+def saved_add(body: SavedIn, c=Depends(customer)):
+    """save a SIP or a Builder portfolio (up to sip.MAX_SAVED of each); the holdings are kept as plain values"""
+    _saved_need(c, body.kind)
+    _rate("saved", str(c["id"]), 20, 60)
+    name = " ".join(str(body.name or "").split())[:60] or ("My SIP" if body.kind in ("sip", "msip") else "My portfolio")
+    i = body.inputs or {}
+    try:
+        if body.kind == "sip" and "opts" in i:                    # AI ETF SIP Builder (ETFs)
+            a, f, o, y = sip.check_etf(i.get("amount"), i.get("freq"), i.get("opts"), i.get("years", 10))
+            inputs = {"amount": a, "freq": f, "opts": o, "stepup": 0, "years": y, "alloc": {"index": 100 - o["gold"], "stock": 0, "commodity": o["gold"]}}
+        elif body.kind == "sip":                                  # a combined plan from before the split
+            args = sip.check(i.get("amount"), i.get("freq"), i.get("alloc"), i.get("rel", ["S"]), i.get("mix"), i.get("count"),
+                             i.get("stepup", 0), i.get("years", 10))
+            inputs = dict(zip(("amount", "freq", "alloc", "rel", "mix", "count", "stepup", "years"), args))
+        elif body.kind == "msip":                                 # AI Momentum SIP (stocks)
+            a, f, r_, m_, n_, y, o_, sm = sip.check_stock(i.get("amount"), i.get("freq"), i.get("rel", ["S"]), i.get("mix"), i.get("count"),
+                                                          i.get("years", 10), i.get("opts"), i.get("sector_max"), msip_tier(c))
+            inputs = {"amount": a, "freq": f, "rel": r_, "mix": m_, "count": n_, "stepup": 0, "years": y, "opts": o_, "sector_max": sm}
+    except sip.SipPlanError as e:
+        raise HTTPException(403, str(e))
+    except sip.SipError as e:
+        raise HTTPException(422, str(e))
+    if body.kind == "builder":                                    # inside the customer's builder level, like a build
+        t = builder.TIERS[builder_tier(c)]
+        try:
+            amt_, cnt_ = float(i.get("amount") or 0), int(i.get("count") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(422, "That portfolio cannot be saved")
+        if not math.isfinite(amt_) or amt_ < t["min_amount"] or amt_ > (t["max_amount"] or builder.ADMIN_AMOUNT_CEIL) or not 1 <= cnt_ <= t["max_stocks"]:
+            raise HTTPException(403, "That portfolio is outside your access")
+        rel = [r for r in (i.get("reliability") or ["S"]) if r in t["reliability"]] or ["S"]
+        inputs = {"amount": amt_, "count": cnt_, "reliability": rel}
+    elif body.kind == "analyser":                                  # AI Portfolio Analyser: tracked as 1 share of each stock
+        inputs = {"reliability": ["S", "M", "W"]}
+        body.holdings = [{"kind": "stock", "s": h.get("s"), "n": h.get("n"), "cap": h.get("cap"), "sec": h.get("sec"),
+                          "grp": f"{h.get('cap')} cap" if h.get("cap") else None, "qty": 1} for h in body.holdings if isinstance(h, dict)]
+    if not body.holdings:
+        raise HTTPException(422, "Nothing to save")
+    hold = _clean_holdings(body.kind, body.holdings, inputs, c, legacy=body.kind == "sip" and "opts" not in i)
+    with _own(c) as conn:
+        n = conn.execute("SELECT count(*) AS n FROM customer_sips WHERE customer_id = %s AND kind = %s", (c["id"], body.kind)).fetchone()["n"]
+        if n >= sip.MAX_SAVED:
+            raise HTTPException(422, f"You can keep up to {sip.MAX_SAVED} saved {'SIPs' if body.kind == 'sip' else 'portfolios'} — delete one first")
+        today = datetime.now(IST).date()
+        if _day_row():                                            # built on a past day's data: back-tested from that day, then live
+            today = _day_row()["trade_date"]
+            inputs = {**inputs, "as_of": _day_row()["taken_at"].isoformat()}
+        r = conn.execute("INSERT INTO customer_sips (customer_id, kind, name, inputs, holdings, alerts, saved_on, versions) "
+                         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                         (c["id"], body.kind, name, json.dumps(inputs), json.dumps(hold), bool(body.alerts), today,
+                          json.dumps([{"d": today.isoformat(), "holdings": hold}]))).fetchone()
+        out = _saved_out(_saved_row(conn, c, r["id"]), c)
+    return out
+
+
+@app.patch("/app/api/saved/{sid}")
+def saved_patch(sid: int, body: SavedPatch, c=Depends(customer)):
+    """turn alerts on / off, rename"""
+    with _own(c) as conn:
+        r = _saved_row(conn, c, sid)
+        if body.alerts is not None:
+            conn.execute("UPDATE customer_sips SET alerts = %s WHERE id = %s AND customer_id = %s", (body.alerts, sid, c["id"]))
+        if body.name is not None:
+            conn.execute("UPDATE customer_sips SET name = %s WHERE id = %s AND customer_id = %s", (" ".join(body.name.split())[:60] or "My plan", sid, c["id"]))
+        if body.visibility is not None:                          # private / public: going public needs the share permission, going private never does
+            if body.visibility not in ("private", "public"):
+                raise HTTPException(422, "Choose private or public")
+            if body.visibility == "public" and SHARE_PERM.get(r["kind"]) not in c["perms"]:
+                raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+            conn.execute("UPDATE customer_sips SET visibility = %s WHERE id = %s AND customer_id = %s", (body.visibility, sid, c["id"]))
+        return _saved_out(_saved_row(conn, c, sid), c)
+
+
+# ── a public portfolio by its ID (owner 2026-11-07: "no login for this link … replicate the whole page in the share — every data, the
+# chart, how much per month, the step-up"): no session is read or made; the data come only from shared_portfolio() (SECURITY DEFINER —
+# the portal role still cannot read anyone's rows) and the owner is never named. What the owner made public is shown in full: the plan
+# (amount, frequency, holdings) and its tracking. A wrong / private / missing ID gets the same 404; an address may ask 60 times a minute
+# and 600 times an hour (guessing a 16-character ID is out of reach anyway).
+PUB_PLAN_KEYS = ("s", "n", "kind", "grp", "cap", "sec", "role", "sleeve", "u", "units", "every", "amt", "qty", "p")
+
+
+def _public_row(code, request):
+    ip = _ip(request)
+    _rate("public-min", ip, 60, 60)
+    _rate("public-hour", ip, 600, 3600)
+    _rate("public-all", "*", 3000, 60)                           # a flood from many addresses is cut too
+    code = (code or "").strip().upper()
+    d = None
+    if SHARE_CODE.match(code):
+        with pool.connection() as conn:
+            d = conn.execute("SELECT shared_portfolio(%s) AS d", (code,)).fetchone()["d"]
+    if not d:
+        raise HTTPException(404, "This portfolio is private, or the link is not right")
+    d["saved_on"] = date.fromisoformat(d["saved_on"]) if d.get("saved_on") else None
+    return d
+
+
+def _public_headers(response):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+
+
+@app.get("/app/api/public/portfolio/{code}")
+def public_portfolio(code: str, request: Request, response: Response):
+    d = _public_row(code, request)
+    _public_headers(response)
+    try:                                                          # engagement count for the admin (only a number, nothing about the visitor)
+        with pool.connection() as conn:
+            conn.execute("SELECT shared_portfolio_seen(%s)", (d["share_id"],))
+    except Exception:                                             # noqa: BLE001 — a count never breaks the page
+        pass
+    i = d.get("inputs") or {}
+    hs = d.get("holdings") or []
+    kind = d["kind"]
+    base = [(h.get("qty") or 0) * (h.get("p") or 0) if kind == "builder" else (h.get("amt") or h.get("slice") or 0) if kind in ("sip", "msip") else 1 for h in hs]
+    tot = sum(base) or 1
+    plan = [{**{k: h.get(k) for k in PUB_PLAN_KEYS}, "w": round(b / tot * 100, 1)} for h, b in zip(hs, base)]
+    return {"code": d["share_id"], "kind": kind, "tag": SAVED_TAG.get(kind), "name": d["name"],
+            "saved_on": d["saved_on"].isoformat() if d["saved_on"] else None, "created_at": d.get("created_at"),
+            "changes": max(0, len(d.get("versions") or []) - 1),
+            "inputs": {k: i.get(k) for k in ("amount", "freq", "years", "stepup", "rel", "mix", "count", "reliability", "sector_max", "as_of") if k in i}
+                      | ({"opts": {k: (i.get("opts") or {}).get(k) for k in ("gold", "caps", "style")}} if i.get("opts") else {}),
+            "holdings": plan}
+
+
+@app.get("/app/api/public/portfolio/{code}/track")
+def public_portfolio_track(code: str, request: Request, response: Response, sym: str | None = None, stepup: int | None = None):
+    """the same tracking as the owner's page (tracking.track — cached per price day), read only"""
+    if sym is not None and not PF_SYM.match(sym):
+        raise HTTPException(422, "Unknown stock")
+    if stepup is not None and stepup not in sip.STEPUPS:
+        raise HTTPException(422, "Choose a step-up of 0, 5, 10, 15 or 20 %")
+    d = _public_row(code, request)
+    _public_headers(response)
+    with pool.connection() as conn:
+        t = tracking.track(conn, d, sym, stepup)
+    return {"code": d["share_id"], "kind": d["kind"], "name": d["name"], "tag": SAVED_TAG.get(d["kind"]), **t}
+
+
+@app.delete("/app/api/saved/{sid}")
+def saved_delete(sid: int, c=Depends(customer)):
+    with _own(c) as conn:
+        _saved_row(conn, c, sid)
+        conn.execute("DELETE FROM customer_sips WHERE id = %s AND customer_id = %s", (sid, c["id"]))
+    return {"ok": True}
+
+
+@app.get("/app/api/saved/{sid}/check")
+def saved_check(sid: int, c=Depends(customer)):
+    """the momentum check: keep / exit (with the reason) / new (sip.check_holdings) — the order for this instalment"""
+    _rate("saved-check", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        r = _saved_row(conn, c, sid)
+        res = _check(r)
+        conn.execute("UPDATE customer_sips SET refreshed_at = now() WHERE id = %s AND customer_id = %s", (sid, c["id"]))
+    return {"id": sid, "kind": r["kind"], "name": r["name"], "freq": (r["inputs"] or {}).get("freq", "month"), **res}
+
+
+@app.post("/app/api/saved/{sid}/apply")
+def saved_apply(sid: int, c=Depends(customer)):
+    """the portfolio adjuster: exit the flagged holdings and put the suggested replacements in their place"""
+    _rate("saved-check", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        r = _saved_row(conn, c, sid)
+        res = _check(r)
+        hold = [{k: h.get(k) for k in SAVED_KEEP if isinstance(h.get(k), (str, int, float)) or h.get(k) is None}
+                for h in sip.apply_changes(r["holdings"] or [], res)]
+        _new_version(conn, c, r, hold, [(h.get("replaces"), h["s"]) for h in res.get("new") or [] if h.get("replaces")])
+        return {"changed": len(res["exit"]), **_saved_out(_saved_row(conn, c, sid), c)}
+
+
+def _check(r):
+    """the momentum check of one saved portfolio: Analyser portfolios by their colour / direction (monitor), the others
+    by the long-term checks (sip.check_holdings)"""
+    if r["kind"] == "analyser":
+        view = _latest_view(today=True)
+        by = {x["s"]: x for x in view.get("stocks", [])}
+        price = lambda sym: (by.get(sym) or {}).get("p")
+        hold = r["holdings"] or []
+        flags, alts = monitor.portfolio_flags(view, [h["s"] for h in hold])
+        keep = [{**h, "p": price(h["s"]), "amt": price(h["s"])} for h in hold if h["s"] not in flags]
+        exits = [{**h, "why": flags[h["s"]]} for h in hold if h["s"] in flags]
+        new = [{"kind": "stock", "s": a["s"], "n": a.get("n"), "st": a.get("st"), "sec": a.get("sec"), "cap": (by.get(a["s"]) or {}).get("cap"),
+                "grp": f"{(by.get(a['s']) or {}).get('cap')} cap", "qty": 1, "units": 1, "p": price(a["s"]), "amt": price(a["s"]), "replaces": sym}
+               for sym, a in alts.items()]
+        return {"keep": keep, "exit": exits, "new": new, "total": round(sum(h.get("amt") or 0 for h in keep + new), 2)}
+    return sip.check_holdings(_latest_view(today=True), _latest_etf_view(today=True), r["holdings"] or [], _rel_of(r), kind=r["kind"])
+
+
+def _brief(h):
+    return {k: h.get(k) for k in ("s", "n", "kind", "cap", "sec")} if h else None
+
+
+def _new_version(conn, c, r, hold, pairs=()):
+    """a change to a saved portfolio: the new holdings + a dated version (tracking sells / buys at that day's close);
+    a second change on the same day replaces that day's version. Every change also goes into the version's swap log
+    (owner 2026-11-07, round 15: "stop the old one but keep the track of it — what changed — and start tracking the new one"):
+    {d, out, in} per stock that left / came, carried from version to version, so a same-day replacement never loses it.
+    pairs: (old symbol, new symbol) known by the caller; the rest pair up in order."""
+    today = datetime.now(IST).date().isoformat()
+    vers = tracking.versions_of(r)
+    log = list(vers[-1].get("log") or [])
+    oldh, newh = {h["s"]: h for h in r["holdings"] or []}, {h["s"]: h for h in hold}
+    gone, came = [x for x in oldh if x not in newh], [x for x in newh if x not in oldh]
+    pairs = [(a, b) for a, b in pairs if a in gone and b in came]
+    g2, c2 = [x for x in gone if x not in {a for a, _ in pairs}], [x for x in came if x not in {b for _, b in pairs}]
+    n = max(len(g2), len(c2))
+    pairs += [(g2[i] if i < len(g2) else None, c2[i] if i < len(c2) else None) for i in range(n)]
+    log += [{"d": today, "out": _brief(oldh.get(a)), "in": _brief(newh.get(b))} for a, b in pairs]
+    if len(vers) > 1 and vers[-1]["d"] == today:
+        vers = vers[:-1]
+    # round 17: the saved version is always kept, even when the change is made on the day it was saved — the old stock was bought at that
+    # close and sold at the same close, so it keeps its amounts in the swap history (it used to be overwritten and never recorded)
+    vers = vers + [{"d": today, "holdings": hold}]
+    vers[-1]["log"] = log[-200:]
+    conn.execute("UPDATE customer_sips SET holdings = %s, versions = %s, refreshed_at = now(), state = NULL WHERE id = %s AND customer_id = %s",
+                 (json.dumps(hold), json.dumps(vers), r["id"], c["id"]))
+
+
+class HoldingsIn(BaseModel):
+    holdings: list
+
+
+@app.put("/app/api/saved/{sid}/holdings")
+def saved_holdings(sid: int, body: HoldingsIn, c=Depends(customer)):
+    """change a saved portfolio by hand (a Swap on the tracking page) → a new dated version"""
+    _rate("saved", str(c["id"]), 20, 60)
+    if not body.holdings or len(body.holdings) > 1000:
+        raise HTTPException(422, "Nothing to save")
+    with _own(c) as conn:
+        r = _saved_row(conn, c, sid)
+        old = {h["s"]: h for h in r["holdings"] or []}
+        price = {x["s"]: x.get("p") for x in _latest_view(today=True).get("stocks", [])}
+        stocks = {x["s"]: x for x in _latest_view(today=True).get("stocks", [])}
+        hold, used, pairs = [], set(), []
+        for h in body.holdings:
+            if not isinstance(h, dict) or not PF_SYM.match(str(h.get("s") or "")):
+                raise HTTPException(422, "That portfolio cannot be saved")
+            sym, rep_ = h["s"], h.get("replaces")
+            if sym in old and not rep_:                               # kept: the stored holding, whatever the request says
+                if sym in used:
+                    raise HTTPException(422, "That portfolio cannot be saved")
+                used.add(sym); hold.append(old[sym]); continue
+            o = old.get(rep_)
+            ref = stocks.get(sym)
+            if not o or rep_ in used or sym in old or sym in used or not ref or o.get("kind") != "stock":
+                raise HTTPException(422, "A swap can only replace a stock of this portfolio with a stock from today's data")
+            used.update({rep_, sym}); pairs.append((rep_, sym))
+            p = price.get(sym)
+            base = {"kind": "stock", "s": sym, "n": ref.get("n"), "cap": ref.get("cap"), "sec": ref.get("sec"), "grp": f"{ref.get('cap')} cap" if ref.get("cap") else None}
+            if r["kind"] == "analyser":
+                nh = {**base, "qty": 1}
+            elif r["kind"] == "builder":                              # the money of the old holding, in the new one
+                q = max(1, int((o.get("qty") or 0) * (price.get(o["s"]) or o.get("p") or p) // p))
+                nh = {**base, "qty": q, "units": q, "every": 1, "p": p, "amt": round(q * p, 2)}
+            else:
+                sl = max(o.get("slice") or 0, o.get("amt") or 0) or p
+                u = sip._units(sl, p) or (1, 1)
+                nh = {**base, "sleeve": "stock", "slice": sl, "units": u[0], "every": u[1], "p": p, "amt": round(u[0] * p / u[1], 2)}
+            hold.append({k: nh.get(k) for k in SAVED_KEEP if isinstance(nh.get(k), (str, int, float)) or nh.get(k) is None})
+        if not hold or len(hold) > len(old):
+            raise HTTPException(422, "That portfolio cannot be saved")
+        _new_version(conn, c, r, hold, pairs)
+        return _saved_out(_saved_row(conn, c, sid), c)
+
+
+@app.get("/app/api/saved/{sid}/track")
+def saved_track(sid: int, sym: str | None = None, stepup: int | None = None, c=Depends(customer)):
+    """the tracking of one saved portfolio since the day it was saved (tracking.track — cached per price day)"""
+    _rate("saved-track", str(c["id"]), 60, 60)
+    if sym is not None and not PF_SYM.match(sym):
+        raise HTTPException(422, "Unknown stock")
+    if stepup is not None and stepup not in sip.STEPUPS:              # the step-up % chosen on the tracking page
+        raise HTTPException(422, "Choose a step-up of 0, 5, 10, 15 or 20 %")
+    with _own(c) as conn:
+        r = _saved_row(conn, c, sid)
+        t = tracking.track(conn, r, sym, stepup)
+    flags = monitor.regime_flags(_latest_view(today=True), [h["s"] for h in t["holdings"] if h.get("held") and h.get("kind") == "stock"])
+    themes = {h["s"]: sip.etf_status(_latest_etf_view(today=True), h["s"]) for h in t["holdings"] if h.get("held") and h.get("kind") == "etf"}
+    hold = [{**h, "flag": flags.get(h["s"]) or (themes.get(h["s"]) if h.get("kind") == "etf" else None)} for h in t["holdings"]]
+    return {"id": sid, "name": r["name"], "kind": r["kind"], "tag": SAVED_TAG.get(r["kind"]), **t, "holdings": hold}
+
+
+@app.get("/app/api/alternatives")
+def alternatives(s: str, exclude: str = "", c=Depends(need("portfolio", "builder", "msip"))):
+    """the best 3 alternatives for one stock (same industry → sector → market cap; long-term uptrend, High / Medium) and up to 3
+    upgrades (a bigger company in the same industry / sector — round 15)"""
+    _rate("alternatives", str(c["id"]), 60, 60)
+    if not PF_SYM.match(s):
+        raise HTTPException(422, "Unknown stock")
+    skip = {x for x in exclude.split(",") if PF_SYM.match(x)} | {s}
+    view = _latest_view(today=True)
+    cur = next((x for x in view.get("stocks", []) if x["s"] == s), None)
+    return {"s": s, "cur": cur and monitor.size_of(cur), "items": monitor.alternatives(view, s, skip, 3, up=3)}
+
+
+def _watch_syms(r):
+    """the stocks of a saved portfolio that the AI watch flags today (long-term regime turned down)"""
+    syms = [h["s"] for h in r["holdings"] or [] if h.get("kind", "stock") == "stock"]
+    return monitor.regime_flags(_latest_view(today=True), syms) if syms else {}
+
+
+@app.get("/app/api/saved/{sid}/watch")
+def saved_watch(sid: int, c=Depends(customer)):
+    """Hyperplane AI watch of one saved portfolio (owner 2026-11-07, round 15: "the AI watch button on the portfolio overview — the tile
+    shows how many stocks to change; a click shows all the swaps"): each flagged stock with its alternatives and upgrades"""
+    _rate("saved-check", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        r = _saved_row(conn, c, sid)
+    view = _latest_view(today=True)
+    by = {x["s"]: x for x in view.get("stocks", [])}
+    syms = [h["s"] for h in r["holdings"] or []]
+    items = []
+    for s_, w in _watch_syms(r).items():
+        x = by.get(s_) or {}
+        items.append({"s": s_, "n": x.get("n"), "sec": x.get("sec"), "ind": x.get("ind"), "cap": x.get("cap"), "st": monitor.lt_strength(x), "why": w,
+                      **monitor.size_of(x), "alts": monitor.alternatives(view, s_, set(syms), 3, up=3)})
+    return {"id": sid, "items": items, "total": len(syms)}
+
+
+# ── notification centre ──
+class ReadIn(BaseModel):
+    ids: list[int] = []
+    all: bool = False
+
+
+@app.get("/app/api/notifications")
+def notifications(c=Depends(customer)):
+    with _own(c) as conn:
+        rows = conn.execute("SELECT id, kind, ref_id, title, body, created_at, read_at FROM customer_notifications WHERE customer_id = %s "
+                            "ORDER BY id DESC LIMIT 50", (c["id"],)).fetchall()
+    items = [{"id": r["id"], "kind": r["kind"], "ref": r["ref_id"], "title": r["title"], "body": r["body"], "at": r["created_at"].isoformat(),
+              "read": r["read_at"] is not None} for r in rows]
+    return {"items": items, "unread": sum(1 for i in items if not i["read"])}
+
+
+@app.post("/app/api/notifications/read")
+def notifications_read(body: ReadIn, c=Depends(customer)):
+    with _own(c) as conn:
+        if body.all:
+            conn.execute("UPDATE customer_notifications SET read_at = now() WHERE customer_id = %s AND read_at IS NULL", (c["id"],))
+        elif body.ids:
+            conn.execute("UPDATE customer_notifications SET read_at = now() WHERE customer_id = %s AND id = ANY(%s) AND read_at IS NULL",
+                         (c["id"], body.ids[:100]))
+    return {"ok": True}
+
+
+# ── AI Portfolio Analyser: alerts on the customer's list ──
+class AlertsIn(BaseModel):
+    alerts: bool
+
+
+@app.put("/app/api/portfolio/alerts")
+def portfolio_alerts(body: AlertsIn, c=Depends(need("portfolio"))):
+    with _own(c) as conn:
+        conn.execute("INSERT INTO customer_portfolio (customer_id, symbols, updated_at, alerts) VALUES (%s, '{}', now(), %s) "
+                     "ON CONFLICT (customer_id) DO UPDATE SET alerts = EXCLUDED.alerts", (c["id"], body.alerts))
+    return {"alerts": body.alerts}
+
+
+@app.get("/app/api/portfolio/check")
+def portfolio_check(c=Depends(need("portfolio"))):
+    """which stocks of the list need a look now, why, and the better alternative (monitor.portfolio_flags)"""
+    _rate("portfolio", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        r = conn.execute("SELECT symbols, alerts FROM customer_portfolio WHERE customer_id = %s", (c["id"],)).fetchone()
+    syms = list(r["symbols"]) if r else []
+    view = _latest_view()
+    by = {x["s"]: x for x in view.get("stocks", [])}
+    flags = monitor.regime_flags(view, syms)
+    items = []
+    for s, w in flags.items():                                   # each flagged stock with its 3 best alternatives (industry → sector → cap)
+        x = by.get(s) or {}
+        alts = monitor.alternatives(view, s, set(syms), 3, up=3)
+        items.append({"s": s, "n": x.get("n"), "sec": x.get("sec"), "ind": x.get("ind"), "cap": x.get("cap"), "st": monitor.lt_strength(x), "why": w,
+                      **monitor.size_of(x), "alts": alts, "alt": alts[0] if alts else None})
+    return {"alerts": bool(r and r["alerts"]), "items": items, "total": len(syms)}
+
+
 @app.post("/app/api/builder/preview")
 def portfolio_builder_preview(body: PreviewIn, c=Depends(need("builder"))):
     """Live count for the form: how many stocks pass every check today (per market cap) + the sector list."""
+    _need_day(zones=True)
     _rate("builder-preview", str(c["id"]), 120, 60)
     tier = builder_tier(c)
     try:
-        return builder.preview(_latest_view(), body.reliability, body.opts, tier=tier)
+        view = _latest_view()
+        return {**builder.preview(view, body.reliability, body.opts, tier=tier), "as_of": view.get("as_of")}
     except builder.PlanError as e:
         raise HTTPException(403, str(e), headers={"X-Plan": tier})
     except builder.BuildError as e:

@@ -1,10 +1,14 @@
 // Hyperplane customer app — SHELL: sign-in, side menu, top bar, past-days picker, data loading and the lazily loaded
 // applications (micro-frontends in ./apps). It must never import the dashboard code.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
+import { Helpdesk, HelpdeskIcon, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
+import { NotifyCenter, useNotifications } from "./notify.jsx";
 import { QuickGuideButton } from "./quick.jsx";
 import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
-import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, GridIcon, GuideIcon, Icon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, fmtDT, fmtDay, fmtTime, foldText, getMode, useTheme } from "./core.jsx";
+import { APP_SLUG, goPath, routeOf } from "./core.jsx";
+import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, AsOfCtx, BrandBand, GridIcon, GuideIcon, HD_TEMPLATES, Icon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, setApiDay, fmtDT, fmtDay, fmtTime, foldText, getMode, loadChunk, useTheme } from "./core.jsx";
+// loadChunk reloads a page opened before an update once; when this version has run a while, allow that again later
+setTimeout(() => { try { sessionStorage.removeItem("hp_reloaded"); } catch { /* ignore */ } }, 20000);
 
 // WhatsApp country code: every country (dial.js); it follows the Country choice until the user picks a code
 const DIAL_BY = Object.fromEntries(DIAL_CODES);
@@ -97,7 +101,7 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
 
 
 // "More apps": every application on the customer's plan, with search and pins (owner, 2026-10-28)
-function AppsPanel({ apps, pins, maxPins, current, onOpen, onPin, onClose, msg }) {
+function AppsPanel({ apps, pins, maxPins, current, onOpen, onPin, onMove, onClose, msg }) {
   const [q, setQ] = useState("");
   useEffect(() => { const k = e => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
   const ql = foldText(q.trim());
@@ -109,11 +113,14 @@ function AppsPanel({ apps, pins, maxPins, current, onOpen, onPin, onClose, msg }
         <span className="ap-ic"><AppIcon k={a.key}/></span>
         <span className="ap-t"><b>{a.name}</b>{a.description && <span>{a.description}</span>}</span>
       </button>
+      {on && <span className="ap-mv">
+        <button type="button" onClick={() => onMove(a.key, -1)} disabled={pins.indexOf(a.key) === 0} aria-label={`Move ${a.name} up`} title="Move up" data-up={a.key}>↑</button>
+        <button type="button" onClick={() => onMove(a.key, 1)} disabled={pins.indexOf(a.key) === pins.length - 1} aria-label={`Move ${a.name} down`} title="Move down" data-down={a.key}>↓</button></span>}
       <button type="button" className={`ap-pin ${on ? "on" : ""}`} onClick={() => onPin(a.key)} disabled={!on && full} aria-pressed={on}
         aria-label={on ? `Unpin ${a.name}` : `Pin ${a.name}`}
         title={on ? "Unpin from the menu" : full ? `You can pin up to ${maxPins} apps. Unpin one first.` : "Pin to the menu"}><PinIcon on={on}/></button>
     </div>); };
-  const pinned = list.filter(a => pins.includes(a.key)), rest = list.filter(a => !pins.includes(a.key));
+  const pinned = pins.map(k => list.find(a => a.key === k)).filter(Boolean), rest = list.filter(a => !pins.includes(a.key));
   return (
     <>
       <div className="ap-scrim" onClick={onClose} aria-hidden="true"/>
@@ -122,7 +129,7 @@ function AppsPanel({ apps, pins, maxPins, current, onOpen, onPin, onClose, msg }
           <label className="ap-search"><SearchIcon/><input autoFocus placeholder="Search apps" value={q} onChange={e => setQ(e.target.value)} aria-label="Search apps" id="apps-search"/></label>
           <button type="button" className="ap-x" onClick={onClose} aria-label="Close" id="apps-close"><Icon name="x" size={16}/></button>
         </div>
-        <div className="ap-note"><b>{pins.length} of {maxPins}</b> pinned to your menu · pin the apps you use most</div>
+        <div className="ap-note"><b>{pins.length} of {maxPins}</b> pinned to your menu · ↑ ↓ arrange them · the first one opens when you sign in</div>
         {msg && <div className="ap-msg" role="alert">{msg}</div>}
         <div className="ap-list">
           {pinned.length > 0 && <><div className="ap-h">Pinned</div>{pinned.map(row)}</>}
@@ -138,7 +145,7 @@ const NAV_KEY = "qf_nav";
 const getNavMin = () => { try { return localStorage.getItem(NAV_KEY) !== "full"; } catch { return true; } };
 
 function SideNav({ apps, pins, face, view, onFace, onDocs, onHelpdesk, unread, min, setMin, open, onClose, moreOn, onMore }) {
-  const rail = apps.filter(a => pins.includes(a.key));           // catalogue order; at most 6 (max_pins)
+  const rail = pins.map(k => apps.find(a => a.key === k)).filter(Boolean);   // the customer's own order; at most 6 (max_pins)
   const item = (key, label, icon, on, onClick, badge) => (
     <button key={key} type="button" className={`sn-it ${on ? "on" : ""}`} onClick={onClick} aria-current={on ? "page" : undefined}
       aria-label={label} title={label} id={`nav-${key}`}>
@@ -158,15 +165,12 @@ function SideNav({ apps, pins, face, view, onFace, onDocs, onHelpdesk, unread, m
             title={min ? "Open the menu" : "Close the menu"} id="nav-collapse">{min ? <MenuIcon/> : <CollapseIcon/>}</button>
         </div>
         <div className="sn-sec">Applications</div>
-        <div className="sn-list">
+        {/* owner 2026-11-06: only the pinned apps (at most 6), scrolling on a short screen; Docs and Helpdesk live in the
+            top bar (? guide, 🔔 inbox) and the account menu */}
+        <div className="sn-list sn-apps">
           {rail.map(a => item(a.key, a.name, <AppIcon k={a.key}/>, view === "tower" && face === a.key, () => onFace(a.key)))}
           {!apps.length && <div className="sn-none">No applications on your plan yet</div>}
           {apps.length > 0 && !rail.length && <div className="sn-none">Pin apps from More apps</div>}
-        </div>
-        <div className="sn-sec">Support</div>
-        <div className="sn-list">
-          {item("docs", "Docs", <GuideIcon/>, view === "guide", onDocs)}
-          {item("helpdesk", "Helpdesk", <HelpdeskIcon size={18}/>, view === "helpdesk", onHelpdesk, unread)}
         </div>
         {apps.length > 0 && <div className="sn-list sn-more">{item("more", "More apps", <GridIcon/>, moreOn, onMore)}</div>}
       </nav>
@@ -216,7 +220,7 @@ function takeResetToken() {
 }
 
 function AuthScreen({ onIn, notice, resetToken = null, onResetDone }) {
-  const [mode, setMode] = useState(resetToken ? "reset" : "login");       // login · register · forgot · reset
+  const [mode, setMode] = useState(resetToken ? "reset" : new URLSearchParams(window.location.search).has("signup") ? "register" : "login");       // login · register · forgot · reset
   const [f, setF] = useState({ name:"", email:"", phone:"", ccName:"India", ccSet:false, country:"India", state:"", city:"", password:"", confirm:"", accept:false });
   const [msg, setMsg] = useState(notice || ""); const [ok, setOk] = useState(""); const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(false);
@@ -342,9 +346,10 @@ function AuthScreen({ onIn, notice, resetToken = null, onResetDone }) {
   );
 }
 
-// ─── past days (only when the admin allows it): ONE scheduled collection — a date, then Day open or Day end ───
+// ─── past data (permission research:history, round 16): ONE scheduled collection — a date, then Day open or Day end ───
 const PARTS = [["open", "Day open"], ["end", "Day end"]];
-function DayPicker({ days, sel, asOf, onPick, onOpen }) {
+const ZONE_APPS = ["builder", "sip", "msip"], ETF_APPS = ["etf", "sip"];
+function DayPicker({ days, sel, asOf, onPick, onOpen, face }) {
   const [open, setOpen] = useState(false); const ref = useRef(null);
   const byDay = useMemo(() => Object.fromEntries(days.map(x => [x.d, x])), [days]);
   const min = days[0].d, max = days[days.length - 1].d;
@@ -361,6 +366,8 @@ function DayPicker({ days, sel, asOf, onPick, onOpen }) {
         <div className="dp-pop" role="dialog" aria-label="View a past day">
           <div className="dp-t">View a past day</div>
           <input className="dp-in" type="date" value={d || ""} min={min} max={max} onChange={e => setD(e.target.value)}/>
+          {day && ((ZONE_APPS.includes(face) && day.zones === false) || (ETF_APPS.includes(face) && day.etf === false)) &&
+            <div className="dp-none" id="dp-limit">{ZONE_APPS.includes(face) && day.zones === false ? "This day was collected before the zone view was stored — this application cannot use it. AI Mode, Deep Research and the Analyser can." : "No ETF data is stored for this day."}</div>}
           {!day ? <div className="dp-none">No data for {d ? fmtDay(d) : "this day"} — the market may have been closed. Pick another date.</div>
             : <div className="sg dp-parts">{PARTS.map(([k, l]) => (
                 <button key={k} type="button" disabled={!day[k]} className={sel && sel.date === d && sel.part === k ? "on" : ""}
@@ -380,14 +387,18 @@ function DayPicker({ days, sel, asOf, onPick, onOpen }) {
 // opened application stays alive in the background, so switching apps keeps the customer exactly where they left
 // (inputs, results, filters, scroll position).
 const APP_MODULES = {
-  research: lazy(() => import("./apps/research.jsx")),
-  simple: lazy(() => import("./apps/simple.jsx")),
-  portfolio: lazy(() => import("./apps/portfolio.jsx")),
-  builder: lazy(() => import("./apps/builder.jsx")),
+  research: lazy(() => loadChunk(() => import("./apps/research.jsx"))),
+  simple: lazy(() => loadChunk(() => import("./apps/simple.jsx"))),
+  portfolio: lazy(() => loadChunk(() => import("./apps/portfolio.jsx"))),
+  builder: lazy(() => loadChunk(() => import("./apps/builder.jsx"))),
+  etf: lazy(() => loadChunk(() => import("./apps/etf.jsx"))),                     // ETF analyser: its own data (/app/api/etf)
+  sip: lazy(() => loadChunk(() => import("./apps/sip.jsx"))),                     // AI ETF SIP Builder (ETFs, reliable)
+  msip: lazy(() => loadChunk(() => import("./apps/msip.jsx"))),                   // AI Momentum SIP (stocks, risk)
 };
-const Guide = lazy(() => import("./guide.jsx"));
+const Guide = lazy(() => loadChunk(() => import("./guide.jsx")));
 // stock detail view (customer admin): its own chunk, downloaded only by someone with a detail permission who opens it
-const StockDetail = lazy(() => import("./apps/detail.jsx"));
+const StockDetail = lazy(() => loadChunk(() => import("./apps/detail.jsx")));
+const SharedView = lazy(() => loadChunk(() => import("./saved.jsx").then(m => ({ default: m.SharedView }))));   // /app/portfolio/<ID> of someone else
 const DATA_APPS = ["research", "simple", "portfolio"];         // the builder works on the server: no stock data needed
 const Waiting = ({ text = "Loading…" }) => <div className="card empty">{text}</div>;
 
@@ -398,17 +409,28 @@ function Home({ me, onOut, reloadMe }) {
   const [mode, setModeState] = useState(getMode);
   const setMode = m => { setModeState(m); try { localStorage.setItem(MODE_KEY, m); } catch { /* storage blocked */ } };
   const data = useMemo(() => rawData && applyMode(rawData, mode), [rawData, mode]);
-  const [view, setView] = useState("tower"); const [hdReq, setHdReq] = useState(null);
-  const [faceRaw, setFaceRaw] = useState(() => { try { return localStorage.getItem("qf_face") || "research"; } catch { return "research"; } });
-  // only an application the customer's roles allow; otherwise their first one (null = none on their plan)
-  const face = allowed.includes(faceRaw) ? faceRaw : allowed[0] || null;
+  // the address decides what opens (/app/<app-name>, /app/portfolio/<ID>, /app/docs, /app/helpdesk); without one, the app of this tab, else the first pin
+  const route0 = useMemo(() => routeOf(), []);
+  const [view, setView] = useState(route0.view || "tower"); const [hdReq, setHdReq] = useState(null);
+  const [faceRaw, setFaceRaw] = useState(() => route0.app || (() => { try { return sessionStorage.getItem("qf_face"); } catch { return null; } })());
+  const [shared, setShared] = useState(null);                     // the ID of a public portfolio of someone else, shown as a page
   const [navMin, setNavMinRaw] = useState(getNavMin); const [navOpen, setNavOpen] = useState(false);
   // pinned applications (rail shows at most max_pins; everything is under "More apps"); null = never chose → first 6
-  const maxPins = me.max_pins || 6;
+  const maxPins = me.max_pins || 8;
   const [pinsRaw, setPinsRaw] = useState(me.pins ?? null);
   useEffect(() => { setPinsRaw(me.pins ?? null); }, [me]);
-  const pins = (pinsRaw ?? allowed.slice(0, maxPins)).filter(k => allowed.includes(k)).slice(0, maxPins);
+  const pins = (pinsRaw ?? allowed.slice(0, maxPins)).filter(k => allowed.includes(k)).slice(0, maxPins);   // default order: AI Mode, Deep Research, …
+  // the open application: one the customer's roles allow; at sign-in the first pinned app (the landing page), else the first one
+  const face = allowed.includes(faceRaw) ? faceRaw : pins[0] || allowed[0] || null;
   const [moreOpen, setMoreOpen] = useState(false); const [pinMsg, setPinMsg] = useState("");
+  const savePins = (next, prev) => api("/app/api/pins", { method: "PUT", json: { pins: next } })
+    .catch(e => { setPinsRaw(prev); setPinMsg(`Could not save: ${e.message}`); if (e.noAccess) reloadMe(); else if (e.status === 401) onOut(e.message); });
+  const movePin = (k, d) => {
+    const i = pins.indexOf(k), j = i + d;
+    if (i < 0 || j < 0 || j >= pins.length) return;
+    const next = [...pins]; [next[i], next[j]] = [next[j], next[i]];
+    const prev = pinsRaw; setPinsRaw(next); setPinMsg(""); savePins(next, prev);
+  };
   const togglePin = k => {
     const next = pins.includes(k) ? pins.filter(x => x !== k) : [...pins, k];
     if (next.length > maxPins) { setPinMsg(`You can pin up to ${maxPins} apps. Unpin one first.`); return; }
@@ -421,12 +443,14 @@ function Home({ me, onOut, reloadMe }) {
   const scrollAt = useRef({});
   const here_ = view === "tower" ? face : view;
   const leave = () => { scrollAt.current[here_] = window.scrollY; };
-  const setFace = f => { leave(); setFaceRaw(f); setView("tower"); setNavOpen(false); try { localStorage.setItem("qf_face", f); } catch { /* storage blocked */ } };
-  const goView = v => { leave(); setView(v); setNavOpen(false); };
+  const setFace = (f, push = true) => { leave(); setFaceRaw(f); setView("tower"); setShared(null); setNavOpen(false); try { sessionStorage.setItem("qf_face", f); } catch { /* storage blocked */ }
+    if (push) goPath(`/app/${APP_SLUG[f] || ""}`); };
+  const goView = v => { leave(); setView(v); setShared(null); setNavOpen(false); goPath(v === "guide" ? "/app/docs" : v === "helpdesk" ? "/app/helpdesk" : `/app/${APP_SLUG[face] || ""}`); };
   useEffect(() => { const y = scrollAt.current[here_] || 0; requestAnimationFrame(() => window.scrollTo(0, y)); }, [here_]);
   const [simpleSym, setSimpleSym] = useState(null);
   // AI Portfolio: the customer's stock list, saved to their account (no quantities)
   const [pf, setPfRaw] = useState(null); const [pfStatus, setPfStatus] = useState("");
+  const [pfSent, setPfSent] = useState(0);                       // the builder sent stocks: the Analyser shows its analysis
   const pfTimer = useRef(null);
   useEffect(() => { if (face === "portfolio" && pf == null) api("/app/api/portfolio").then(r => setPfRaw(r.symbols || [])).catch(e => { if (e.status === 401) onOut(e.message); else setPfRaw([]); }); }, [face]);
   const setPf = list => {
@@ -441,11 +465,50 @@ function Home({ me, onOut, reloadMe }) {
     const cur = how === "replace" ? [] : (await api("/app/api/portfolio")).symbols ?? [];
     const next = [...new Set([...cur, ...syms])];
     await api("/app/api/portfolio", { method: "PUT", json: { symbols: next } });
-    setPfRaw(next);
+    setPfRaw(next); setPfSent(n => n + 1);
   };
+  const [appAsOf, setAppAsOf] = useState({});
+  const reportAsOf = useCallback((k, v) => setAppAsOf(o => o[k] === v ? o : { ...o, [k]: v }), []);
   const hdApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401 || e.status === 403) onOut(e.message); throw e; }), []);
   const unread = useHelpdeskUnread(hdApi, "/app/api/helpdesk");
-  const openHelpdesk = id => { goView("helpdesk"); setHdReq({ id, n: Date.now() }); };
+  const openHelpdesk = (id, tpl) => { goView("helpdesk"); setHdReq({ id, tpl, n: Date.now() }); };
+  // notification centre (notify.jsx): Hyperplane AI alerts + helpdesk replies; an alert opens its application on the right
+  // saved plan (sessionStorage hp_open_<app> for a module not loaded yet, the hp-open event for one already open)
+  const notes = useNotifications(onOut);
+  const openFrom = (k, ref, push = true) => {
+    try { sessionStorage.setItem(`hp_open_${k}`, JSON.stringify({ ref })); } catch { /* storage blocked */ }
+    setFace(k, push); window.scrollTo(0, 0);
+    setTimeout(() => window.dispatchEvent(new CustomEvent("hp-open", { detail: { app: k, ref } })), 60);
+  };
+  // /app/portfolio/<ID>: the customer's own portfolio opens in its application; someone else's public one opens read only
+  // /app/<app-name>/portfolio/<ID>: one of the customer's own saved portfolios; anything else goes to the public page of that ID
+  const openCode = r => {
+    const pub = () => window.location.assign(`/app/portfolio/${encodeURIComponent(r.code)}`);
+    if (!r.app || !allowed.includes(r.app)) { pub(); return; }
+    api("/app/api/saved?kind=all").then(list => {
+      const mine = (list || []).find(x => x.code === r.code);
+      if (mine) { setShared(null); openFrom(r.app, mine.id, false); } else pub();
+    }).catch(e => { if (e.status === 401) onOut(e.message); else pub(); });
+  };
+  // the browser's Back / Forward and links inside the app: follow the address
+  useEffect(() => {
+    const follow = () => {
+      const r = routeOf();
+      if (r.public) { window.location.reload(); return; }                       // the public page is its own page
+      if (r.code) { openCode(r); return; }
+      setShared(null);
+      if (r.view) { setView(r.view); return; }
+      if (r.app && allowed.includes(r.app)) { setFaceRaw(r.app); setView("tower"); try { sessionStorage.setItem("qf_face", r.app); } catch { /* storage blocked */ } }
+    };
+    window.addEventListener("popstate", follow);
+    return () => window.removeEventListener("popstate", follow);
+  }, [allowed.join(), shared]);
+  // first paint: an ID in the address opens it; otherwise the address names the application on screen
+  useEffect(() => {
+    if (route0.code) openCode(route0);
+    else if (!route0.view && face) goPath(`/app/${APP_SLUG[face] || ""}`, true);
+    if (window.location.search) try { window.history.replaceState(null, "", window.location.pathname); } catch { /* ignore */ }   // ?signup used up
+  }, []);
   // Activity log: which application is open (once per visit) and a minute heartbeat while the page is visible
   const track = useCallback((module, kind) => module && api("/app/api/activity", { method: "POST", json: { module, kind } })
     .catch(e => { if (e.noAccess) reloadMe(); else if (e.status === 401) onOut(e.message); }), []);
@@ -467,10 +530,14 @@ function Home({ me, onOut, reloadMe }) {
   const wantsData = DATA_APPS.some(k => allowed.includes(k)) && view === "tower" && DATA_APPS.includes(face);
   const [dataOn, setDataOn] = useState(false);
   useEffect(() => { if (wantsData) setDataOn(true); }, [wantsData]);
-  // past days: offered only when the admin has switched it on; sel = { date, part } or null for the latest published data
-  const [hist, setHist] = useState(null); const [sel, setSel] = useState(null);
+  // past data (round 16): the permission research:history (Customer Admin) — a day picker in EVERY application; sel = { date, part }
+  // or null for the latest published data. The day goes with every request (core.setApiDay), so the server answers with that day.
+  const canPast = (me.perms || []).includes("research:history");
+  const [hist, setHist] = useState(null); const [sel, setSelRaw] = useState(null);
+  const setSel = v => { setApiDay(v); setSelRaw(v); };
   const loadHist = () => api("/app/api/history").then(setHist).catch(() => setHist(null));
-  useEffect(() => { if (dataOn) loadHist(); }, [dataOn]);
+  useEffect(() => { if (canPast) loadHist(); else { setHist(null); setSel(null); } }, [canPast]);
+  const dayKey = sel ? `${sel.date}.${sel.part}` : "latest";
   useEffect(() => {
     if (!dataOn) return;
     setData(null); setErr("");
@@ -493,27 +560,36 @@ function Home({ me, onOut, reloadMe }) {
   } : null, [perms.join(), sel]);
   const app = k => {
     if (k === "research") return <APP_MODULES.research data={data} err={err} sel={sel} mode={mode} setMode={setMode}/>;
-    if (k === "builder") return <APP_MODULES.builder apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut}/>;
+    // the applications with their own server data start again on that day when the day changes (key)
+    if (k === "etf") return <APP_MODULES.etf key={dayKey} onOut={onOut}/>;
+    if (k === "sip") return <APP_MODULES.sip key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
+    if (k === "msip") return <APP_MODULES.msip key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
+    if (k === "builder") return <APP_MODULES.builder key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
     if (!data) return <Waiting text={err || "Loading…"}/>;
     if (k === "simple") return <APP_MODULES.simple data={data} mode={mode} setMode={setMode} sym={simpleSym} setSym={setSimpleSym}/>;
-    if (k === "portfolio") return pf != null ? <APP_MODULES.portfolio data={data} symbols={pf} setSymbols={setPf} status={pfStatus} me={me}/> : <Waiting/>;
+    if (k === "portfolio") return pf != null ? <APP_MODULES.portfolio data={data} symbols={pf} setSymbols={setPf} status={pfStatus} me={me} sent={pfSent} onOut={onOut}/> : <Waiting/>;
     return null;
   };
 
   const curApp = apps.find(a => a.key === face);
+  useEffect(() => {                                               // the browser tab says where the customer is
+    const n = view === "helpdesk" ? "Helpdesk" : view === "guide" ? "Docs" : shared ? "Shared portfolio" : curApp ? curApp.name : "";
+    document.title = n ? `${n} · Hyperplane` : "Hyperplane";
+  }, [view, face, shared, curApp && curApp.name]);
   const here = view === "helpdesk" ? { icon: <HelpdeskIcon size={18}/>, name: "Helpdesk", sub: "Your questions and our answers" }
     : view === "guide" ? { icon: <GuideIcon/>, name: "Docs", sub: "How to use Hyperplane · golden rules" }
     : curApp ? { icon: <AppIcon k={curApp.key}/>, name: curApp.name, sub: curApp.description } : { icon: null, name: "Hyperplane", sub: "" };
   const showsData = view === "tower" && DATA_APPS.includes(face);
+  const ownAsOf = view === "tower" && !showsData && face ? appAsOf[face] : null;     // apps with their own data (ETF, SIP, Builder)
   return (
-    <DetailCtx.Provider value={detailCtx}>
+    <DetailCtx.Provider value={detailCtx}><AsOfCtx.Provider value={reportAsOf}>
     <div className={`shell ${navMin ? "nav-min" : ""}`}>
       <SideNav apps={apps} pins={pins} face={face} view={view} onFace={k => { setMoreOpen(false); setFace(k); }}
         onDocs={() => { setMoreOpen(false); goView("guide"); }} onHelpdesk={() => { setMoreOpen(false); openHelpdesk(null); }}
         unread={unread.total} min={navMin} setMin={setNavMin} open={navOpen} onClose={() => { setNavOpen(false); setMoreOpen(false); }}
         moreOn={moreOpen || (view === "tower" && !!face && !pins.includes(face))} onMore={() => { setPinMsg(""); setMoreOpen(v => !v); }}/>
       {moreOpen && <AppsPanel apps={apps} pins={pins} maxPins={maxPins} current={view === "tower" ? face : null} msg={pinMsg}
-        onOpen={k => { setMoreOpen(false); setFace(k); }} onPin={togglePin} onClose={() => setMoreOpen(false)}/>}
+        onOpen={k => { setMoreOpen(false); setFace(k); }} onPin={togglePin} onMove={movePin} onClose={() => setMoreOpen(false)}/>}
       <div className="shell-main">
     <div className="page">
       <header className="top">
@@ -522,13 +598,14 @@ function Home({ me, onOut, reloadMe }) {
           {here.icon && <span className="th-ic">{here.icon}</span>}
           <div className="th-t"><b>{here.name}</b>{here.sub && <span className="th-sub">{here.sub}</span>}</div>
         </div>
-        {showsData && (hist && hist.enabled && hist.days.length
-          ? <DayPicker days={hist.days} sel={sel} asOf={data && data.as_of} onPick={setSel} onOpen={loadHist}/>
-          : <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : err ? "" : "Loading…"}</div>)}
+        {view === "tower" && face && hist && hist.enabled && hist.days.length
+          ? <DayPicker days={hist.days} sel={sel} asOf={showsData ? data && data.as_of : ownAsOf || (sel && (hist.days.find(x => x.d === sel.date) || {})[sel.part])} onPick={setSel} onOpen={loadHist} face={face}/>
+          : <>{showsData && <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : err ? "" : "Loading…"}</div>}
+            {ownAsOf && <div className="asof" id="top-asof">DATA AS OF <b>{fmtDT(ownAsOf)}</b></div>}</>}
         <QuickGuideButton onDocs={() => goView("guide")}/>
-        <InboxBell unread={unread} onOpen={openHelpdesk}/>
+        <NotifyCenter notes={notes} hd={unread} apps={apps} onHelpdesk={openHelpdesk} onOpen={openFrom}/>
         <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => goView("guide")}
-          onSignOut={async () => { await api("/app/api/logout", { method:"POST" }).catch(() => {}); onOut(); }}/>
+          onSignOut={async () => { try { sessionStorage.removeItem("qf_face"); } catch { /* storage blocked */ } await api("/app/api/logout", { method:"POST" }).catch(() => {}); goPath("/app/", true); onOut(); }}/>
       </header>
 
       {view === "tower" && !hasApps && (
@@ -540,9 +617,11 @@ function Home({ me, onOut, reloadMe }) {
         </div>
       )}
       {view === "guide" && <Suspense fallback={<Waiting/>}><Guide disclaimer={DISCLAIMER} apps={allowed}/></Suspense>}
-      {view === "helpdesk" && <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh}/>}
+      {view === "helpdesk" && <><BrandBand product="Helpdesk" title="Helpdesk" accent="we reply here" id="hd-band" sub="Ask anything; our replies show up here and on the bell."/>
+        <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh} templates={HD_TEMPLATES}/></>}
+      {shared && view === "tower" && <Suspense fallback={<Waiting/>}><SharedView code={shared} page onClose={() => setFace(face)}/></Suspense>}
       {[...opened].filter(k => allowed.includes(k)).map(k => (
-        <div key={k} className="app-pane" data-app={k} hidden={!(view === "tower" && face === k)}>
+        <div key={k} className="app-pane" data-app={k} hidden={!(view === "tower" && face === k && !shared)}>
           <Suspense fallback={<Waiting/>}>{app(k)}</Suspense>
         </div>))}
 
@@ -551,7 +630,7 @@ function Home({ me, onOut, reloadMe }) {
       </div>
       {detail && <Suspense fallback={null}><StockDetail req={detail} onClose={() => setDetail(null)} onOut={onOut}/></Suspense>}
     </div>
-    </DetailCtx.Provider>
+    </AsOfCtx.Provider></DetailCtx.Provider>
   );
 }
 
@@ -560,6 +639,9 @@ export function App() {
   const [resetToken, setResetToken] = useState(takeResetToken);              // opened from a "Forgot password" email
   const load = () => api("/app/api/me").then(setMe).catch(e => { setMe(null); if (e.status === 403) setNotice(e.message); });
   useEffect(() => { load(); }, []);
+  // "signed in on this browser" for the open shared page (round 15: "if already logged in, don't show sign up / log in"): only a hint —
+  // it grants nothing; the public page never asks the server who is signed in
+  useEffect(() => { if (me === undefined) return; try { me ? localStorage.setItem("hp_signed", "1") : localStorage.removeItem("hp_signed"); } catch { /* storage blocked */ } }, [me]);
   // a reset link pasted into a tab that already shows the app changes only the #part: no reload, so listen for it
   useEffect(() => {
     const f = () => { const t = takeResetToken(); if (t) setResetToken(t); };

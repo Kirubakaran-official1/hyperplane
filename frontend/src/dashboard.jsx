@@ -1,33 +1,60 @@
 import React from "react";
 import * as XLSX from "xlsx";
+import { EtfSection, EtfSnapCtx } from "./etf.jsx";
 const { useState, useEffect, useCallback, useMemo, useRef } = React;
 
 const APP_NAME = "Hyperplane";
 
-const BIAS_COLOR = {
+// Colour tables come in a dark and a light set (owner 2026-11-07: "the admin must be properly visible in the white theme").
+// The Dashboard sets LIGHT on every render, so each table below hands out the set of the theme in use.
+let LIGHT = true;
+const themed = (dark, light) => new Proxy({}, { get: (_, k) => (LIGHT ? light : dark)[k], has: (_, k) => k in dark, ownKeys: () => Reflect.ownKeys(dark),
+  getOwnPropertyDescriptor: (_, k) => ({ enumerable: true, configurable: true, value: (LIGHT ? light : dark)[k] }) });
+const BIAS_COLOR = themed({
   LONG:         { bg:"#0f2d1a", text:"#4ade80", border:"#166534" },
   SHORT:        { bg:"#2d0f0f", text:"#f87171", border:"#7f1d1d" },
   MIXED:        { bg:"#2d1f0a", text:"#fbbf24", border:"#78350f" },
   RETRACEMENT:  { bg:"#1a0f2d", text:"#c084fc", border:"#581c87" },
   NEUTRAL:      { bg:"#1a1a1a", text:"#9ca3af", border:"#374151" },
-};
+}, {
+  LONG:         { bg:"#e7f6ee", text:"#0a7a4d", border:"#a7dcc0" },
+  SHORT:        { bg:"#fdecec", text:"#c42121", border:"#f3b4b4" },
+  MIXED:        { bg:"#fdf3e3", text:"#a2560a", border:"#efcf9c" },
+  RETRACEMENT:  { bg:"#f1ebfd", text:"#6d32d6", border:"#d3c1f6" },
+  NEUTRAL:      { bg:"#f0f2f5", text:"#4b5563", border:"#d1d5db" },
+});
 
-const STRENGTH_COLOR = {
+const STRENGTH_COLOR = themed({
   "Very Strong": { text:"#00e5ff", bg:"rgba(0,229,255,.12)",  border:"rgba(0,229,255,.4)"  },
   "Strong":      { text:"#4ade80", bg:"rgba(74,222,128,.12)", border:"rgba(74,222,128,.4)" },
   "Neutral":     { text:"#fbbf24", bg:"rgba(251,191,36,.12)", border:"rgba(251,191,36,.4)" },
   "Weak":        { text:"#ff9466", bg:"rgba(255,148,102,.12)",border:"rgba(255,148,102,.4)"},
   "Very Weak":   { text:"#f87171", bg:"rgba(248,113,113,.12)",border:"rgba(248,113,113,.4)"},
-};
+}, {
+  "Very Strong": { text:"#0e7490", bg:"rgba(14,116,144,.09)", border:"rgba(14,116,144,.35)" },
+  "Strong":      { text:"#0a7a4d", bg:"rgba(10,122,77,.09)",  border:"rgba(10,122,77,.35)" },
+  "Neutral":     { text:"#a2560a", bg:"rgba(162,86,10,.09)",  border:"rgba(162,86,10,.35)" },
+  "Weak":        { text:"#c2410c", bg:"rgba(194,65,12,.09)",  border:"rgba(194,65,12,.35)" },
+  "Very Weak":   { text:"#c42121", bg:"rgba(196,33,33,.09)",  border:"rgba(196,33,33,.35)" },
+});
 
-const SECTOR_PALETTE = [
+const SECTOR_PALETTE_DARK = [
   "#00e5ff","#ff6c35","#4ade80","#f87171","#fbbf24","#c084fc","#38bdf8","#fb7185",
   "#a3e635","#fb923c","#2dd4bf","#e879f9","#facc15","#60a5fa","#f472b6","#84cc16",
   "#22d3ee","#f97316","#a78bfa","#34d399","#eab308","#fda4af","#93c5fd","#d946ef",
   "#4ade80","#f87171",
 ];
+// the same hues, deep enough to read on white
+const SECTOR_PALETTE_LIGHT = [
+  "#0e7490","#c2410c","#15803d","#b91c1c","#a16207","#7e22ce","#0369a1","#be123c",
+  "#4d7c0f","#c2410c","#0f766e","#a21caf","#a16207","#1d4ed8","#be185d","#4d7c0f",
+  "#0e7490","#c2410c","#6d28d9","#047857","#a16207","#be123c","#1d4ed8","#a21caf",
+  "#15803d","#b91c1c",
+];
+const SECTOR_PALETTE = themed(SECTOR_PALETTE_DARK, SECTOR_PALETTE_LIGHT);
 
-const MCAP_COLOR = { Largecap:"#00e5ff", Midcap:"#fbbf24", Smallcap:"#ff6c35", Microcap:"#a259ff" };
+const MCAP_COLOR = themed({ Largecap:"#00e5ff", Midcap:"#fbbf24", Smallcap:"#ff6c35", Microcap:"#a259ff" },
+                          { Largecap:"#0e7490", Midcap:"#a16207", Smallcap:"#c2410c", Microcap:"#7e22ce" });
 
 const ALL_COLS = [
   "Symbol","Sector","Industry","Signal_Name","Signal_Category","Signal_Type","Trading_Bias",
@@ -91,7 +118,8 @@ const CSS = `
     color-scheme: light;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{background:#060b14;min-height:100vh;overflow-x:clip}
+  html,body{background:#f3f6fb;min-height:100vh;overflow-x:clip}
+  html.hp-dark,html.hp-dark body{background:#060b14}
   .app-shell{min-height:100vh;background:var(--bg);color:var(--t1);font-family:var(--sans);transition:background .2s,color .2s}
   #root{min-height:100vh}
   ::-webkit-scrollbar{width:4px;height:4px}
@@ -241,7 +269,7 @@ function hashStr(s) {
 }
 function sectorColor(sector) {
   if (!sector) return "var(--t3)";
-  return SECTOR_PALETTE[hashStr(sector) % SECTOR_PALETTE.length];
+  return SECTOR_PALETTE[hashStr(sector) % SECTOR_PALETTE_DARK.length];
 }
 function parseMcapBreakdown(s) {
   return str(s).split(",").map(x=>x.trim()).filter(Boolean).map(pair=>{
@@ -853,8 +881,6 @@ const TABS = [
   { id:"tower",    label:"🏛 Control Tower" },
   { id:"sector",   label:"🏭 Sector & Industry" },
   { id:"flat",     label:"🎛 Slicer" },
-  { id:"opp",      label:"🎯 Opportunities" },
-  { id:"horizon",  label:"⏱ Horizon" },
   { id:"summary",  label:"📋 Signals" },
   { id:"master",   label:"🗂 Master List" },
 ];
@@ -904,6 +930,8 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
   const showTab = (!db && !extra && extraTabs.length) ? null : tab;
 
   const syms = db ? new Set(db.flat.map(r=>r.Symbol)) : new Set();
+  LIGHT = theme !== "dark";
+  useEffect(() => { document.documentElement.classList.toggle("hp-dark", theme === "dark"); }, [theme]);
 
   return (
     <>
@@ -956,7 +984,7 @@ export function Dashboard({ rawVersions, theme, setTheme, headerCenter=null, hea
 
         <StockReportHost db={db}>
           {!db && !extra && (emptyState || null)}
-          {db && tab==="tower"   && <ControlTowerCombined versions={versions} health={health} navOpen={navOpen} setNavOpen={setNavOpen} onFilterCount={setCtFilters} tech={tech} />}
+          {db && tab==="tower"   && <EtfSnapCtx.Provider value={(rawVersions[rawVersions.length-1]||{}).id || null}><ControlTowerCombined versions={versions} health={health} navOpen={navOpen} setNavOpen={setNavOpen} onFilterCount={setCtFilters} tech={tech} /></EtfSnapCtx.Provider>}
           {db && tab==="sector"  && <SectorIndustryTab db={db} />}
           {db && tab==="flat"    && <FlatSlicer     db={db} />}
           {db && tab==="opp"     && <Opportunities  db={db} />}
@@ -4291,7 +4319,7 @@ const CT_NAV = [
   { group:"Trade ideas", items:[
     ["ct-opps","🔮","Opportunities"], ["ct-returns","💰","Return expectations"] ]},
   { group:"More", items:[
-    ["ct-quant","🧪","Technical Quant algos"], ["ct-watch","📌","Watchlist builder"] ]},
+    ["ct-etf","📀","ETF analyser"], ["ct-quant","🧪","Technical Quant algos"], ["ct-watch","📌","Watchlist builder"] ]},
 ];
 const CAP_OPTS = [["all","All stocks"],["n500","Nifty 500"],["large","Large 100"],["mid","Mid 150"],["small","Small 250"]];
 
@@ -4704,6 +4732,7 @@ function ControlTowerCombined({ versions, health=null, navOpen=false, setNavOpen
             <OpportunitiesSection db={dbP} model={modelP} open={setOpenSym} lockDir={lockLS}/>
             <Anchor id="ct-returns"/>
             <ReturnExpectationsSection db={dbP} open={setOpenSym} lockDir={lock}/>
+            <EtfSection/>
             {techOn && <TechQuantSection db={dbP} tech={tech}/>}
           </>}/>
         <div style={{padding:"0 22px 24px"}}>

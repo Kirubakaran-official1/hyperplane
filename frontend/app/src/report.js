@@ -294,6 +294,60 @@ export function downloadReport(m) {
     font(10, "bold", C.ink); text(title, M, y + 4); y += 7;
     font(9, "normal", C.sub); ls.forEach(l => { text(l, M, y + 1); y += lh(9); }); y += 2.6;
   });
+  // ── 7. suggested swaps (owner 2026-11-06: "add the suggestion of the swap in the report at the bottom") ────────
+  // the same list as the Hyperplane AI watch: only a stock whose long-term regime turned down, with up to three
+  // better stocks — the same industry first, then the same sector, then the same market cap
+  if (m.swaps) {
+    newPage();
+    y = heading(y, "Suggested swaps", m.swaps.length
+      ? `${m.swaps.length} stock${m.swaps.length === 1 ? "" : "s"} whose long-term regime turned down, each with better stocks from the same sector.`
+      : "Hyperplane AI watch on the latest data.");
+    if (!m.swaps.length) {
+      doc.setFillColor(BG.good); doc.setDrawColor(mix(BG.good, C.good, 0.35)); doc.setLineWidth(0.3); doc.roundedRect(M, y, W - 2 * M, 18, 2.5, 2.5, "FD");
+      font(11, "bold", C.good); text("All clear: no swap needed", M + 6, y + 7.5);
+      font(9, "normal", C.ink); text("Every stock's long-term regime is still up. Hyperplane AI checks again after every update.", M + 6, y + 13.2);
+      y += 24;
+    }
+    const SAME = { "same industry": "Same sector & industry", "same sector": "Same sector", "same market cap": "Same market cap" };
+    const half = (W - 2 * M - 22) / 2, fx = M + 6, tx0 = M + 6 + half + 14;
+    m.swaps.forEach(it => {
+      const alts = it.alts || (it.alt ? [it.alt] : []), best = alts[0], more = alts.slice(1);
+      const h = 30 + (more.length ? 10 : 0);
+      ensure(h + 4);
+      doc.setFillColor("#FFFFFF"); doc.setDrawColor(C.line); doc.setLineWidth(0.3); doc.roundedRect(M, y, W - 2 * M, h, 2.5, 2.5, "FD");
+      doc.setFillColor(C.bad); doc.rect(M, y + 2.5, 1.4, h - 5, "F");
+      font(6.8, "bold", C.mute); doc.setCharSpace(0.5); text("REGIME TURNED DOWN", fx, y + 6); text("BETTER STOCK", tx0, y + 6); doc.setCharSpace(0);
+      font(12, "bold", C.ink); text(it.s, fx, y + 12.5);
+      let bx = fx + doc.getTextWidth(t(it.s)) + 3; badge(bx, y + 8.2, "Regime down", "bad", 5.8);
+      font(8, "normal", C.sub); let nm = t(it.n || ""); while (doc.getTextWidth(nm) > half && nm.length > 4) nm = nm.slice(0, -2); text(nm, fx, y + 18);
+      font(7.5, "normal", C.mute); text(`${it.sec || "-"}  ›  ${it.ind || "-"}`, fx, y + 22.5);
+      if (it.st != null) { font(8, "bold", C[toneOf(it.st)]); text(`Strength ${sgn(it.st)}`, fx, y + 27); }
+      font(16, "bold", C.indigo); text("›", M + 6 + half + 4, y + 17);
+      if (best) {
+        font(12, "bold", C.ink); text(best.s, tx0, y + 12.5);
+        let cx = tx0 + doc.getTextWidth(t(best.s)) + 3;
+        if (SAME[best.why]) cx += badge(cx, y + 8.2, SAME[best.why], best.why === "same market cap" ? "side" : "good", 5.8) + 2;
+        font(8, "normal", C.sub); let bn = t(best.n || ""); while (doc.getTextWidth(bn) > half && bn.length > 4) bn = bn.slice(0, -2); text(bn, tx0, y + 18);
+        font(7.5, "normal", C.mute); text(`${best.sec || "-"}  ›  ${best.ind || "-"}`, tx0, y + 22.5);
+        font(8, "bold", C[toneOf(best.st)]); text(`Strength ${sgn(best.st)}`, tx0, y + 27);
+        if (best.rel) { const sw = doc.getTextWidth(t(`Strength ${sgn(best.st)}`)); font(8, "normal", C.sub); text(`·  ${{ S: "High", M: "Medium", W: "Low" }[best.rel] || ""} reliability`, tx0 + sw + 2, y + 27); }
+      } else {
+        font(10, "bold", C.sub); text("No better stock today", tx0, y + 13); font(8, "normal", C.mute); text("We look again after every update.", tx0, y + 18.5);
+      }
+      if (more.length) {
+        doc.setDrawColor(C.line); doc.setLineDashPattern([0.8, 0.8], 0); doc.line(M + 6, y + 31, W - M - 6, y + 31); doc.setLineDashPattern([], 0);
+        font(7.5, "bold", C.sub); text("Other options:", M + 6, y + 36);
+        let ox = M + 6 + doc.getTextWidth("Other options:") + 3;
+        more.forEach(a => { ox += chip(ox, y + 32.4, `${a.s}  ${sgn(a.st)}  ·  ${a.sec || ""}`, toneOf(a.st), 5.6) + 2; });
+      }
+      y += h + 4;
+    });
+    font(8, "normal", C.sub);
+    wrap("A swap is suggested only when a stock's long-term regime turns down, never for an ordinary pullback. Check the better stock in the app before you act.", W - 2 * M)
+      .forEach(l => { ensure(6); text(l, M, y + 1); y += lh(8); });
+    y += 4;
+  }
+
   ensure(28); y += 1;
   font(9, "normal"); const disc = wrap("For education only. This report describes the trend of each stock using Hyperplane's own quant algorithms. It is not investment advice and not a recommendation to buy or sell any security. Please do your own research or consult a SEBI-registered adviser before investing.", W - 2 * M - 12);
   const dh = disc.length * lh(9) + 13;

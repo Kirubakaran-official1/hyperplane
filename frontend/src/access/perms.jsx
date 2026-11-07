@@ -3,13 +3,13 @@
 // use it, how many direct grants. A row opens a drawer: edit it, give it to many roles at once, see who has it and why.
 import React, { useEffect, useMemo, useState } from "react";
 import { Badge, Empty, LockIcon, Switch, btn, input, plural } from "./shared.jsx";
-import { AppHead, Chips, Drawer, Pager, PermName, ReviewDialog, SearchBox, useDebounced } from "./ui.jsx";
+import { Chips, Drawer, GroupHead, Pager, PermName, ReviewDialog, SearchBox, useDebounced, useFold } from "./ui.jsx";
 
 const fold = t => String(t || "").toLowerCase();
 
 export function PermissionsTab({ acc, api, notify, reload, go, link }) {
   const [q, setQ] = useState(""); const [f, setF] = useState("all");
-  const [open, setOpen] = useState(null); const [closed, setClosed] = useState(() => new Set());
+  const [open, setOpen] = useState(null);
   const [appEdit, setAppEdit] = useState(null); const [toggle, setToggle] = useState(null); const [busy, setBusy] = useState(false);
   useEffect(() => { if (link && link.perm) setOpen(link.perm); }, [link && link.n]);
   const perms = acc.permissions, mods = acc.modules;
@@ -23,7 +23,7 @@ export function PermissionsTab({ acc, api, notify, reload, go, link }) {
   const chips = [["all", "All", n("all")], ["owner", "Owner-level", n("owner")], ["off", "Switched off", n("off")], ["unused", "Not given to anyone", n("unused")],
     ...(n("retired") ? [["retired", "Retired", n("retired")]] : [])];
   const groups = mods.map(m => ({ m, list: shown.filter(p => p.module === m.key) })).filter(g => g.list.length);
-  const flip = k => setClosed(s => { const x = new Set(s); x.has(k) ? x.delete(k) : x.add(k); return x; });
+  const gf = useFold("hp_ax_fold_perms", groups.map(g => g.m.key));
   const saveToggle = async () => {
     setBusy(true);
     try { await api(`/api/admin/access/permissions/${encodeURIComponent(toggle.p.key)}`, { method: "PATCH", json: { enabled: toggle.on } }); await reload();
@@ -41,7 +41,8 @@ export function PermissionsTab({ acc, api, notify, reload, go, link }) {
         <SearchBox value={q} onChange={setQ} placeholder="Search permissions, keys, applications" id="pm-search"/>
         <Chips items={chips} value={f} onChange={setF} id="pm-filter"/>
         <span style={{ flex: 1 }}/>
-        <span className="am-mut">{plural(shown.length, "permission")} · new ones appear here when a feature ships</span>
+        <span className="am-mut">{plural(shown.length, "permission")} in {plural(groups.length, "application")}</span>
+        {gf.button("pm-foldall")}
       </div>
       <div className="am-tw ax-tw">
         <table className="am-t ax-t" id="pm-table">
@@ -49,18 +50,18 @@ export function PermissionsTab({ acc, api, notify, reload, go, link }) {
           {groups.map(({ m, list }) => (
             <tbody key={m.key} data-app={m.key}>
               <tr className="ax-grp"><td colSpan={6}>
-                <button type="button" className="ax-fold" onClick={() => flip(m.key)} aria-expanded={!closed.has(m.key)}>{closed.has(m.key) ? "▸" : "▾"}</button>
                 {appEdit && appEdit.key === m.key ? (
-                  <span className="ax-appedit">
+                  <span className="ax-appedit" style={{ padding: "10px 14px" }}>
                     <input value={appEdit.name} onChange={e => setAppEdit(a => ({ ...a, name: e.target.value }))} style={input} maxLength={60} aria-label="Application name" id="pm-app-name"/>
                     <input value={appEdit.description} onChange={e => setAppEdit(a => ({ ...a, description: e.target.value }))} style={{ ...input, flex: 1 }} maxLength={200} aria-label="Application description"/>
                     <button style={btn(true)} disabled={busy || appEdit.name.trim().length < 2} onClick={saveApp} id="pm-app-save">Save</button>
                     <button style={btn()} onClick={() => setAppEdit(null)}>Cancel</button></span>
-                ) : <AppHead m={m} n={list.length} right={<>{!m.enabled && <Badge color="var(--short)">off for everyone</Badge>}
-                    <button type="button" className="am-link ax-edit" onClick={() => setAppEdit({ key: m.key, name: m.name, description: m.description })}>Rename</button>
-                    {m.description && <span className="am-mut ax-appd">{m.description}</span>}</>}/>}
+                ) : <GroupHead m={m} open={gf.isOpen(m.key)} onFlip={() => gf.flip(m.key)} sub={m.description}
+                    count={`${list.filter(p => p.enabled).length} of ${plural(list.length, "permission")} on`}
+                    right={<>{!m.enabled && <Badge color="var(--short)">off for everyone</Badge>}
+                      <button type="button" style={btn()} onClick={() => setAppEdit({ key: m.key, name: m.name, description: m.description })}>Rename</button></>}/>}
               </td></tr>
-              {!closed.has(m.key) && list.map(p => (
+              {gf.isOpen(m.key) && list.map(p => (
                 <tr key={p.key} className={`ax-row ${p.retired ? "dim" : ""}`} data-perm={p.key} onClick={() => setOpen(p.key)} tabIndex={0}
                   onKeyDown={e => { if (e.key === "Enter") setOpen(p.key); }}>
                   <td><PermName p={p}/>{p.grp && <span className="am-chip sm ax-grpchip">{p.grp}</span>}<div className="am-mut ax-desc">{p.description}</div></td>
