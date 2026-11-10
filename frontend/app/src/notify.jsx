@@ -25,7 +25,7 @@ addCss("notify", `
 .nc-it small{display:block;font-size:12px;line-height:16px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nc-it em{font-style:normal;font-size:11px;color:var(--t3);white-space:nowrap}
 .nc-empty{padding:16px 14px;font-size:13px;color:var(--t3)}
-.nc-it .ap{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:var(--s3);color:var(--t2);font:700 9.5px/16px var(--sans);letter-spacing:.04em;vertical-align:1px}
+.nc-it .nc-ap{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:var(--s3);color:var(--t2);font:700 9.5px/16px var(--sans);letter-spacing:.04em;vertical-align:1px}
 .nc-all{display:block;width:100%;padding:10px 14px;border:0;background:var(--s1);color:var(--acc);font:600 12.5px var(--sans);cursor:pointer;text-align:center}
 `);
 
@@ -74,7 +74,7 @@ export function NotifyCenter({ notes, hd, onInbox }) {
           <div className="nc-body">
             {rows.length ? rows.map(r => (
               <button key={r.id} type="button" className={`nc-it ${r.un ? "un" : "rd"}`} onClick={() => go(r.id)} data-note={r.id}>
-                <i/><span><b><span className="ap">{CODE[r.app] || "HP"}</span>{r.t}</b><small>{r.s}</small></span><em>{ago(r.at)}</em></button>))
+                <i/><span><b><span className="nc-ap">{CODE[r.app] || "HP"}</span>{r.t}</b><small>{r.s}</small></span><em>{ago(r.at)}</em></button>))
               : <div className="nc-empty"><AiSpark/> Nothing new. Alerts, updates and helpdesk replies land here.</div>}
           </div>
           <button type="button" className="nc-all" onClick={() => go(null)} id="nc-open-inbox">Open inbox →</button>
