@@ -7,6 +7,7 @@ import {
   InfoTip, classifySignal, TF_WEIGHT, AlgoEditor, prebuiltAlgos, exprText,
 } from "./dashboard.jsx";
 import { Helpdesk, HelpdeskIcon, InboxBell, useHelpdeskUnread } from "../shared/helpdesk.jsx";
+import { Community, useCommunityUnread } from "../shared/community.jsx";
 import { AccessTab } from "./access.jsx";
 import { PortfoliosTab } from "./portfolios.jsx";
 import { AdoptionTab } from "./adoption.jsx";
@@ -733,7 +734,7 @@ const EMPTY_CUST = { name: "", email: "", phone: "", country: "India", state: ""
 // Customer table → Excel download / copy for pasting into Excel (owner, 2026-10-18). Exports exactly the rows on screen
 // (status filter + search applied; "All" = every customer).
 const CUST_EXPORT = [
-  ["Name", c => c.name], ["Email", c => c.email], ["WhatsApp", c => c.phone || ""], ["City", c => c.city || ""], ["State", c => c.state || ""],
+  ["Name", c => c.name], ["Email", c => c.email], ["Mobile", c => c.phone || ""], ["City", c => c.city || ""], ["State", c => c.state || ""],
   ["Country", c => c.country || ""], ["Plan (roles)", c => (c.role_names || []).join(", ")], ["Status", (c, today) => c.status === "approved" ? (c.expires_on && c.expires_on < today ? "expired" : "active") : c.status],
   ["Access until", c => c.expires_on || ""], ["Joined", c => c.created_at ? fmtDT(c.created_at) : ""], ["Approved on", c => c.approved_at ? fmtDT(c.approved_at) : ""],
   ["Last login", c => c.last_login ? fmtDT(c.last_login) : ""], ["Logins", c => c.login_count ?? 0],
@@ -754,6 +755,48 @@ async function copyCustomers(rows, today) {
   document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
 }
 
+// ─── Announcements (round 19): one message to every customer, or to one role — an "Update" in each customer's Unified Inbox ───
+function Announcements({ roles, notify }) {
+  const [list, setList] = useState(null); const [t, setT] = useState(""); const [x, setX] = useState(""); const [role, setRole] = useState("");
+  const [busy, setBusy] = useState(false); const [ask, setAsk] = useState(false);
+  const load = useCallback(() => api("/api/admin/announce").then(setList).catch(e => notify(e.message, "err")), []);
+  useEffect(() => { load(); }, [load]);
+  const who = role ? `customers with the role "${(roles.find(r => String(r.id) === role) || {}).name}"` : "every approved customer";
+  const send = async () => {
+    setBusy(true);
+    try { const r = await api("/api/admin/announce", { method: "POST", json: { title: t, text: x, role_id: role ? +role : null } }); notify(`Sent to ${r.sent} customer${r.sent === 1 ? "" : "s"}`); setT(""); setX(""); setAsk(false); load(); }
+    catch (e) { notify(e.message, "err"); } finally { setBusy(false); }
+  };
+  const withdraw = async b => { try { await api(`/api/admin/announce/${b}`, { method: "DELETE" }); notify("Withdrawn from every inbox"); load(); } catch (e) { notify(e.message, "err"); } };
+  return (
+    <FocusCard icon="📣" title="Announcements" style={{ marginBottom: 12 }}
+      sub="A message from Hyperplane to every approved customer, or to one role. It lands under Updates → Hyperplane updates in each customer's inbox and on the bell. Plain text only.">
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 760 }} id="ann-form">
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input value={t} onChange={e => setT(e.target.value.slice(0, 120))} placeholder="Title (e.g. New: the Hyperplane Community)" aria-label="Title" id="ann-title" style={{ ...input, flex: "1 1 320px", fontSize: 13, padding: "7px 9px" }}/>
+          <select value={role} onChange={e => setRole(e.target.value)} aria-label="Send to" id="ann-role" style={{ ...input, fontSize: 12.5, padding: "6px 8px" }}>
+            <option value="">All approved customers</option>{roles.map(r => <option key={r.id} value={r.id}>Role: {r.name}</option>)}</select>
+        </div>
+        <textarea value={x} onChange={e => setX(e.target.value.slice(0, 4000))} rows={4} placeholder="Message" aria-label="Message" id="ann-text" style={{ ...input, fontSize: 13, padding: "8px 9px", resize: "vertical", fontFamily: "inherit" }}/>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {ask ? <><span style={{ fontSize: 12, color: "var(--t2)" }}>Send to {who}?</span>
+              <button type="button" style={btn(true)} onClick={send} disabled={busy} id="ann-confirm">{busy ? "Sending…" : "Yes, send"}</button>
+              <button type="button" style={btn()} onClick={() => setAsk(false)}>Cancel</button></>
+            : <button type="button" style={btn(true)} onClick={() => setAsk(true)} disabled={t.trim().length < 3 || x.trim().length < 3} id="ann-send">Send announcement</button>}
+          <span style={{ fontSize: 11, color: "var(--t3)" }}>{x.length}/4000</span>
+        </div>
+      </div>
+      {list && list.length > 0 && <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }} id="ann-list">
+        {list.map(a => (
+          <div key={a.batch} style={{ display: "flex", gap: 10, alignItems: "center", padding: "7px 10px", border: "1px solid var(--b1)", borderRadius: 8, fontSize: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}><b style={{ color: "var(--t1)" }}>{a.title}</b>
+              <div style={{ color: "var(--t3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fmtDT(a.at)} · sent to {a.sent} · seen by {a.seen} · {a.text}</div></div>
+            <button type="button" style={btn()} onClick={() => withdraw(a.batch)} title="Remove it from every inbox">Withdraw</button>
+          </div>))}
+      </div>}
+    </FocusCard>);
+}
+
 function CustomersTab({ snaps, notify }) {
   const [list, setList] = useState(null);
   const [pub, setPub] = useState(null);
@@ -764,11 +807,11 @@ function CustomersTab({ snaps, notify }) {
   const [pwFor, setPwFor] = useState(null); const [pw, setPw] = useState("");
   const [confirmDel, setConfirmDel] = useState(null);
   const [signup, setSignup] = useState(null);
-  const [hist, setHist] = useState(null);
+  const [hist, setHist] = useState(null); const [roles, setRoles] = useState([]);
   const load = useCallback(async () => {
     const [l, p, m, h, a] = await Promise.all([api("/api/admin/customers"), api("/api/admin/publish"), api("/api/admin/signup-mode"), api("/api/admin/customer-history"), api("/api/admin/access")]);
     const roleName = Object.fromEntries(a.roles.map(r => [r.id, r.name]));
-    setList(l.map(c => ({ ...c, role_names: (c.roles || []).map(id => roleName[id]).filter(Boolean) }))); setPub(p); setSignup(m); setHist(h);
+    setList(l.map(c => ({ ...c, role_names: (c.roles || []).map(id => roleName[id]).filter(Boolean) }))); setPub(p); setSignup(m); setHist(h); setRoles(a.roles);
   }, []);
   useEffect(() => { load().catch(e => notify(e.message, "err")); }, [load]);
   const act = async (fn, okMsg) => { try { await fn(); if (okMsg) notify(okMsg); await load(); } catch (e) { notify(e.message, "err"); } };
@@ -849,6 +892,8 @@ function CustomersTab({ snaps, notify }) {
         </span>
       </FocusCard>
 
+      <Announcements roles={roles} notify={notify}/>
+
       <FocusCard icon="🚪" title="New sign-ups" style={{ marginBottom: 12 }}
         sub="Every new account must first confirm its email (a one-time link). Then: nothing looks fake and automatic is on → it opens and the customer is emailed; otherwise it waits for you and you get a Telegram message with the reasons. Throw-away mail services and impossible phone numbers are refused at sign-up.">
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -882,7 +927,7 @@ function CustomersTab({ snaps, notify }) {
         </div>
         {adding && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", padding: 10, border: "1px dashed var(--b2)", borderRadius: 8, marginBottom: 10 }}>
-            {[["name", "Name", 150], ["email", "Email", 190], ["phone", "WhatsApp no.", 120], ["country", "Country", 110], ["state", "State", 120], ["city", "City", 110], ["password", "Password (8+)", 130]].map(([k, l, w]) => (
+            {[["name", "Name", 150], ["email", "Email", 190], ["phone", "Mobile no.", 120], ["country", "Country", 110], ["state", "State", 120], ["city", "City", 110], ["password", "Password (8+)", 130]].map(([k, l, w]) => (
               <input key={k} placeholder={l} type={k === "password" ? "password" : "text"} value={nc[k]} onChange={e => setNc(c => ({ ...c, [k]: e.target.value }))} style={{ ...input, width: w }} />
             ))}
             <select value={nc.status} onChange={e => setNc(c => ({ ...c, status: e.target.value }))} style={input}><option value="approved">active</option><option value="pending">pending</option></select>
@@ -900,7 +945,7 @@ function CustomersTab({ snaps, notify }) {
                 return (
                   <tr key={c.id} style={{ borderBottom: "1px solid var(--b1)" }}>
                     <td style={TD}><b>{c.name}</b>{c.signup_ip && <div style={{ fontSize: 9.5, color: "var(--t3)" }}>signed up from {c.signup_ip}</div>}</td>
-                    <td style={TD}>{c.email}{c.phone && <div style={{ fontSize: 10.5, color: "var(--t3)" }} title="WhatsApp number (community invite)">WhatsApp {c.phone}</div>}</td>
+                    <td style={TD}>{c.email}{c.phone && <div style={{ fontSize: 10.5, color: "var(--t3)" }} title="Mobile number">Mobile {c.phone}</div>}</td>
                     <td style={TD}>{[c.city, c.state].filter(Boolean).join(", ")}<div style={{ fontSize: 10.5, color: "var(--t3)" }}>{c.country}</div></td>
                     <td style={{ ...TD, color: CUST_STATUS_C[c.status], fontWeight: 700 }}>{c.status === "approved" ? (expired ? "expired" : "active") : c.status}{locked && <div style={{ fontSize: 9.5, color: "var(--short)" }}>locked (wrong passwords)</div>}
                       {c.status === "pending" && <div style={{ fontSize: 9.5, fontWeight: 600, color: c.email_verified_at ? "var(--long)" : "var(--mixed)" }} title={c.email_verified_at ? "The customer opened the confirmation link" : "Waiting for the customer to open the link in the email"}>{c.email_verified_at ? "✓ email confirmed" : "✉ email not confirmed"}</div>}
@@ -991,6 +1036,7 @@ export default function Root() {
   const notify = (text, kind = "ok") => { setToast({ text, kind }); setTimeout(() => setToast(null), 4500); };
   onUnauthorized = () => setUser(null);
   const unread = useHelpdeskUnread(api, "/api/helpdesk", !!user);
+  const cmUnread = useCommunityUnread(api, "/api/admin/community", !!(user && user.admin));      // Community (round 19): new customer posts
   const [tabReq, setTabReq] = useState(null); const [hdReq, setHdReq] = useState(null);
   const openHelpdesk = id => { setTabReq({ id: "helpdesk", n: Date.now() }); setHdReq({ id, n: Date.now() }); };
 
@@ -1091,6 +1137,7 @@ export default function Root() {
   const extraTabs = [
     { id: "compare", label: "⏱ Compare", render: ({ health, db }) => <CompareTab snaps={snaps} health={health} db={db} /> },
     { id: "helpdesk", label: <span style={{ display: "inline-flex", alignItems: "center", gap: 6, verticalAlign: "middle" }}><HelpdeskIcon size={14} />Helpdesk{unread.total ? <span style={{ minWidth: 17, height: 17, padding: "0 5px", borderRadius: 9, background: "#ff4454", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "17px", textAlign: "center" }}>{unread.total}</span> : null}</span>, render: () => <div style={{ padding: "18px 22px" }}><Helpdesk api={api} base="/api/helpdesk" staff={user.admin} openReq={hdReq} onChanged={unread.refresh} /></div> },
+    ...(user.admin ? [{ id: "community", label: <span style={{ display: "inline-flex", alignItems: "center", gap: 6, verticalAlign: "middle" }}>💬 Community{cmUnread.n ? <span style={{ minWidth: 17, height: 17, padding: "0 5px", borderRadius: 9, background: "#ff4454", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "17px", textAlign: "center" }}>{cmUnread.n > 99 ? "99+" : cmUnread.n}</span> : null}</span>, render: () => <div style={{ padding: "18px 22px" }}><Community api={api} base="/api/admin/community" staff onChanged={cmUnread.refresh} height="calc(100vh - 150px)" /></div> }] : []),
     ...(user.admin ? [{ id: "admin", label: "⚙ Admin", render: () => <AdminArea snaps={snaps} reloadSnaps={() => reloadSnaps()} notify={notify} sync={sync} onSync={onSync} onSaved={loadViewCfg} /> }] : []),
   ];
   const empty = (

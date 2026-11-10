@@ -59,6 +59,8 @@ async function shrink(file) {
   throw new Error("too big");
 }
 
+export const shrinkImage = shrink;   // the Community uses the same image clean-up (round 19)
+
 // contenteditable -> blocks
 function toBlocks(root) {
   const out = []; let buf = "";
@@ -329,6 +331,8 @@ function Thread({ api, base, id, staff, onChanged, onBack, onNew }) {
     </div>
   );
 }
+
+export const HdThread = Thread;   // the conversation alone (the Unified Inbox shows it beside a query, round 19)
 
 // ─── the whole helpdesk page: inbox on the left, compose / conversation on the right ───
 export function Helpdesk({ api, base, staff = false, openReq = null, onChanged = () => {}, templates = [] }) {

@@ -216,6 +216,9 @@ CREATE OR REPLACE FUNCTION portal_history_enabled() RETURNS boolean
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
     AS $$ SELECT COALESCE((SELECT value = 'true'::jsonb FROM portal_config WHERE key = 'history'), false) $$;
 REVOKE ALL ON FUNCTION portal_history_enabled() FROM PUBLIC;
+-- round 19: the WhatsApp community link was dropped (owner 2026-11-08: "don't want WhatsApp as of now")
+DROP FUNCTION IF EXISTS portal_community();
+DELETE FROM portal_config WHERE key = 'community';
 -- AI ETF SIP Builder (owner, 2026-11-06): a customer's saved SIPs (inputs + the holdings when saved), private to them
 CREATE TABLE IF NOT EXISTS customer_sips (
     id           BIGSERIAL PRIMARY KEY,
@@ -299,6 +302,162 @@ CREATE TABLE IF NOT EXISTS customer_notifications (
     read_at      TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS customer_notifications_customer ON customer_notifications (customer_id, created_at DESC);
+-- Unified inbox (round 19, inbox.py): each notification is an inbox item of one application, to act on (action) or to know (info)
+ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS app TEXT;
+ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS type TEXT;
+ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ;
+ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS done_note TEXT;
+ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS items_done JSONB NOT NULL DEFAULT '{}'::jsonb;
+UPDATE customer_notifications SET
+    app  = CASE kind WHEN 'analyser' THEN 'portfolio' WHEN 'announce' THEN 'hyperplane' ELSE kind END,
+    type = CASE WHEN body ? 'items' OR body ? 'order' THEN 'action' ELSE 'info' END,
+    status = CASE WHEN created_at < now() - interval '45 days' THEN 'done' ELSE status END,
+    done_at = CASE WHEN created_at < now() - interval '45 days' THEN now() END,
+    done_note = CASE WHEN created_at < now() - interval '45 days' THEN 'Older alert — closed when the inbox started' END
+  WHERE app IS NULL;
+-- Hyperplane Community (round 19, community.py): one group chat for every customer + the owner. Customers see each other's NAME only.
+CREATE TABLE IF NOT EXISTS cm_messages (
+    id            BIGSERIAL PRIMARY KEY,
+    author_kind   TEXT        NOT NULL CHECK (author_kind IN ('customer', 'admin')),
+    customer_id   BIGINT      REFERENCES customers(id) ON DELETE SET NULL,
+    author_name   TEXT        NOT NULL,
+    admin_user    TEXT,                                   -- the admin login that posted (admin side only)
+    body          JSONB       NOT NULL,                   -- [{"t":"text","v":…}, {"t":"img","id":…}] — never HTML
+    reply_to      BIGINT      REFERENCES cm_messages(id) ON DELETE SET NULL,
+    thread_id     BIGINT      REFERENCES cm_messages(id) ON DELETE CASCADE,
+    reply_count   INT         NOT NULL DEFAULT 0,
+    last_reply_at TIMESTAMPTZ,
+    pinned_at     TIMESTAMPTZ,
+    pinned_by     TEXT,
+    deleted_at    TIMESTAMPTZ,
+    deleted_by    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cm_messages_room ON cm_messages (id) WHERE thread_id IS NULL;
+CREATE INDEX IF NOT EXISTS cm_messages_thread ON cm_messages (thread_id, id) WHERE thread_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS cm_messages_author ON cm_messages (customer_id, created_at);
+CREATE TABLE IF NOT EXISTS cm_images (
+    id          BIGSERIAL PRIMARY KEY,
+    message_id  BIGINT      REFERENCES cm_messages(id) ON DELETE CASCADE,
+    uploader    TEXT        NOT NULL,                     -- c:<customer id> | a
+    mime        TEXT        NOT NULL,
+    data        BYTEA       NOT NULL,
+    size        INT         NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS cm_images_uploader ON cm_images (uploader, created_at);
+CREATE TABLE IF NOT EXISTS cm_reactions (
+    message_id  BIGINT      NOT NULL REFERENCES cm_messages(id) ON DELETE CASCADE,
+    who         TEXT        NOT NULL,                     -- c:<customer id> | a
+    emoji       TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (message_id, who, emoji)
+);
+CREATE TABLE IF NOT EXISTS cm_reports (
+    id           BIGSERIAL PRIMARY KEY,
+    message_id   BIGINT      NOT NULL REFERENCES cm_messages(id) ON DELETE CASCADE,
+    customer_id  BIGINT      NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    reason       TEXT,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at  TIMESTAMPTZ,
+    resolved_by  TEXT,
+    UNIQUE (message_id, customer_id)
+);
+CREATE TABLE IF NOT EXISTS cm_members (
+    customer_id   BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+    last_read_id  BIGINT      NOT NULL DEFAULT 0,
+    muted_until   TIMESTAMPTZ,                            -- set by the admin only (no grant to the customer service)
+    mute_reason   TEXT,
+    rules_ok_at   TIMESTAMPTZ,
+    thread_reads  JSONB       NOT NULL DEFAULT '{}'::jsonb
+);
+-- the reply count of a thread head, kept by the database (customers cannot write it)
+CREATE OR REPLACE FUNCTION cm_thread_count() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF NEW.thread_id IS NOT NULL THEN
+        UPDATE cm_messages h SET reply_count = x.n, last_reply_at = x.last
+          FROM (SELECT count(*) AS n, max(created_at) AS last FROM cm_messages r WHERE r.thread_id = NEW.thread_id AND r.deleted_at IS NULL) x
+         WHERE h.id = NEW.thread_id;
+    END IF;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS cm_thread_count ON cm_messages;
+CREATE TRIGGER cm_thread_count AFTER INSERT OR UPDATE OF deleted_at ON cm_messages FOR EACH ROW EXECUTE FUNCTION cm_thread_count();
+-- may this customer post? (approved and not muted) — used by the insert policy, so the database itself refuses a muted customer
+CREATE OR REPLACE FUNCTION cm_can_post(cid BIGINT) RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$ SELECT EXISTS (SELECT 1 FROM customers WHERE id = cid AND status = 'approved')
+             AND NOT EXISTS (SELECT 1 FROM cm_members WHERE customer_id = cid AND muted_until > now()) $$;
+REVOKE ALL ON FUNCTION cm_can_post(BIGINT) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION portal_member_count() RETURNS bigint
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$ SELECT count(*) FROM customers WHERE status = 'approved' $$;
+REVOKE ALL ON FUNCTION portal_member_count() FROM PUBLIC;
+-- Round 19b: member tags (the owner's labels shown beside a name in the Community — created and given in the admin app only),
+-- favourites (a person's own starred messages) and @mentions (a mention lands in the mentioned customer's Inbox under Updates)
+CREATE TABLE IF NOT EXISTS cm_tags (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT        NOT NULL UNIQUE,
+    color       TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS cm_member_tags (
+    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    tag_id       INT    NOT NULL REFERENCES cm_tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (customer_id, tag_id)
+);
+CREATE TABLE IF NOT EXISTS cm_favs (
+    who         TEXT        NOT NULL,                     -- c:<customer id> | a
+    message_id  BIGINT      NOT NULL REFERENCES cm_messages(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (who, message_id)
+);
+CREATE INDEX IF NOT EXISTS cm_messages_mentions ON cm_messages USING gin (body jsonb_path_ops);
+-- Round 19d (owner 2026-11-11: "remove the groups"): the Teams-style groups of round 19c are dropped
+DROP TABLE IF EXISTS cm_group_members;
+DROP TABLE IF EXISTS cm_groups;
+-- the Community admins = approved customers holding the role "Customer Admin" (Admin → Access manager): the only people a member can
+-- @mention, shown with the Admin badge. The customer service reads them only through this function (it cannot read roles).
+CREATE OR REPLACE FUNCTION cm_admins() RETURNS TABLE (customer_id BIGINT, name TEXT)
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$ SELECT DISTINCT c.id, c.name FROM customers c JOIN customer_roles cr ON cr.customer_id = c.id JOIN roles r ON r.id = cr.role_id
+          WHERE lower(r.name) = 'customer admin' AND c.status = 'approved' $$;
+REVOKE ALL ON FUNCTION cm_admins() FROM PUBLIC;
+-- date search: room messages by time (a range scan, however old the day)
+CREATE INDEX IF NOT EXISTS cm_messages_room_day ON cm_messages (created_at) WHERE thread_id IS NULL;
+-- a mention notifies the mentioned customer (written by the database from the stored message, so it cannot be faked)
+CREATE OR REPLACE FUNCTION cm_notify_mentions() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE target BIGINT; snip TEXT; author TEXT;
+BEGIN
+    author := CASE WHEN NEW.author_kind = 'admin' THEN 'Hyperplane' ELSE NEW.author_name END;
+    SELECT left(string_agg(CASE WHEN b->>'t' = 'text' THEN b->>'v' WHEN b->>'t' = 'at' THEN '@' || (b->>'n') ELSE '' END, ''), 200)
+      INTO snip FROM jsonb_array_elements(NEW.body) b;
+    FOR target IN SELECT DISTINCT (b->>'cid')::bigint FROM jsonb_array_elements(NEW.body) b WHERE b->>'t' = 'at' AND b ? 'cid' LOOP
+        IF target IS DISTINCT FROM NEW.customer_id AND EXISTS (SELECT 1 FROM customers WHERE id = target AND status = 'approved') THEN
+            INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body, app, type)
+            VALUES (target, 'mention', NEW.id, author || ' mentioned you in the Community',
+                    jsonb_build_object('mid', NEW.id, 'thread', NEW.thread_id, 'by', author, 'admin', NEW.author_kind = 'admin', 'text', coalesce(snip, '')),
+                    'community', 'info');
+        END IF;
+    END LOOP;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS cm_notify_mentions ON cm_messages;
+CREATE TRIGGER cm_notify_mentions AFTER INSERT ON cm_messages FOR EACH ROW EXECUTE FUNCTION cm_notify_mentions();
+-- a removed message takes its mention notifications with it
+CREATE OR REPLACE FUNCTION cm_unnotify() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        DELETE FROM customer_notifications WHERE kind = 'mention' AND ref_id = NEW.id;
+    END IF;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS cm_unnotify ON cm_messages;
+CREATE TRIGGER cm_unnotify AFTER UPDATE OF deleted_at ON cm_messages FOR EACH ROW EXECUTE FUNCTION cm_unnotify();
 -- AI Portfolio Analyser: the customer's list of stocks (symbols only — no quantities, no prices)
 CREATE TABLE IF NOT EXISTS customer_portfolio (
     customer_id  BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
@@ -596,7 +755,7 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION shared_portfolio_seen(TEXT) TO {}").format(role))
     c.execute(sql.SQL("GRANT SELECT ON price_hist, price_adj TO {}").format(role))     # market prices for tracking
     # notification centre: read, mark read, delete own rows (the worker writes them)
-    c.execute(sql.SQL("GRANT SELECT, UPDATE (read_at), DELETE ON customer_notifications TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT, UPDATE (read_at, status, done_at, done_note, items_done), DELETE ON customer_notifications TO {}").format(role))
     c.execute("ALTER TABLE customer_notifications ENABLE ROW LEVEL SECURITY")
     c.execute("DROP POLICY IF EXISTS portal_own ON customer_notifications")
     c.execute(sql.SQL("CREATE POLICY portal_own ON customer_notifications TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
@@ -650,6 +809,46 @@ def _setup_portal_role(c):
         "GRANT USAGE ON SEQUENCE hd_tickets_id_seq, hd_messages_id_seq, hd_images_id_seq TO {}",
     ):
         c.execute(sql.SQL(stmt).format(role))
+    # Community (round 19): everybody reads the room; a customer writes only as themself, deletes only their own messages,
+    # reacts / reports / keeps read marks only as themself; mutes, pins and reply counts are not theirs to write
+    for stmt in (
+        "GRANT SELECT ON cm_messages, cm_images, cm_reactions TO {}",
+        "GRANT INSERT (author_kind, customer_id, author_name, body, reply_to, thread_id), UPDATE (deleted_at, deleted_by) ON cm_messages TO {}",
+        "GRANT INSERT (uploader, mime, data, size), UPDATE (message_id) ON cm_images TO {}",
+        "GRANT INSERT (message_id, who, emoji), DELETE ON cm_reactions TO {}",
+        "GRANT SELECT, INSERT (message_id, customer_id, reason) ON cm_reports TO {}",
+        "GRANT SELECT, INSERT (customer_id, last_read_id), UPDATE (last_read_id, rules_ok_at, thread_reads) ON cm_members TO {}",
+        "GRANT USAGE ON SEQUENCE cm_messages_id_seq, cm_images_id_seq, cm_reports_id_seq TO {}",
+        "GRANT EXECUTE ON FUNCTION cm_can_post(BIGINT), portal_member_count() TO {}",
+        "GRANT SELECT ON cm_tags, cm_member_tags TO {}",
+        "GRANT SELECT, INSERT (who, message_id), DELETE ON cm_favs TO {}",
+        "GRANT EXECUTE ON FUNCTION cm_admins() TO {}",
+    ):
+        c.execute(sql.SQL(stmt).format(role))
+    me = "current_setting('hp.cid', true)"
+    cm_policies = (
+        ("cm_messages", "cm_read", "SELECT", "USING (true)"),
+        ("cm_messages", "cm_post", "INSERT", f"WITH CHECK (author_kind = 'customer' AND customer_id::text = {me} AND cm_can_post(customer_id))"),
+        ("cm_messages", "cm_own", "UPDATE", f"USING (customer_id::text = {me}) WITH CHECK (customer_id::text = {me})"),
+        ("cm_images", "cm_read", "SELECT", "USING (true)"),
+        ("cm_images", "cm_post", "INSERT", f"WITH CHECK (uploader = 'c:' || {me})"),
+        ("cm_images", "cm_own", "UPDATE", f"USING (uploader = 'c:' || {me}) WITH CHECK (uploader = 'c:' || {me})"),
+        ("cm_reactions", "cm_read", "SELECT", "USING (true)"),
+        ("cm_reactions", "cm_post", "INSERT", f"WITH CHECK (who = 'c:' || {me})"),
+        ("cm_reactions", "cm_own", "DELETE", f"USING (who = 'c:' || {me})"),
+        ("cm_reports", "cm_read", "SELECT", f"USING (customer_id::text = {me})"),
+        ("cm_reports", "cm_post", "INSERT", f"WITH CHECK (customer_id::text = {me})"),
+        ("cm_members", "cm_read", "SELECT", f"USING (customer_id::text = {me})"),
+        ("cm_members", "cm_post", "INSERT", f"WITH CHECK (customer_id::text = {me})"),
+        ("cm_members", "cm_own", "UPDATE", f"USING (customer_id::text = {me}) WITH CHECK (customer_id::text = {me})"),
+        ("cm_favs", "cm_read", "SELECT", f"USING (who = 'c:' || {me})"),
+        ("cm_favs", "cm_post", "INSERT", f"WITH CHECK (who = 'c:' || {me})"),
+        ("cm_favs", "cm_own", "DELETE", f"USING (who = 'c:' || {me})"),
+    )
+    for table, name, cmd, rule in cm_policies:
+        c.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        c.execute(f"DROP POLICY IF EXISTS {name} ON {table}")
+        c.execute(sql.SQL(f"CREATE POLICY {name} ON {table} FOR {cmd} TO {{}} {rule}").format(role))
     own = "(owner_kind = 'customer' AND owner_id = current_setting('hp.cid', true))"
     in_own = "EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = ticket_id)"        # hd_tickets' own policy applies here
     policies = {

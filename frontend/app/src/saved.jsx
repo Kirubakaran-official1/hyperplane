@@ -211,7 +211,9 @@ addCss("saved", `
 .aw-chips span.bad{border-color:var(--short);color:var(--short);background:var(--shortd)}.aw-chips span.ok{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--b1))}
 @keyframes awTick{from{opacity:0;transform:translateY(4px) scale(.95)}to{opacity:1;transform:none}}
 .aw-it{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;border:1px solid var(--b1);background:var(--s1);animation:awTick .35s both}
-.aw-ih{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.aw-ih .sym{font:800 15px var(--sans);color:var(--t1)}.aw-ih small{color:var(--t3);font-size:12px}
+.aw-ih{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:10px 14px;border-radius:10px;background:var(--s2);box-shadow:inset 3px 0 0 var(--short)}
+.aw-ih .aw-l{font:600 11px var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--t3)}.aw-ih .sym{font:800 16px var(--sans);color:var(--t1)}
+.aw-ih small{color:var(--t2);font-size:12.5px}.aw-ih .aw-k{margin-left:auto;display:flex;gap:14px;font-size:12px;color:var(--t3)}.aw-ih .aw-k b{color:var(--t1);font-feature-settings:"tnum"}
 .aw-clear{display:flex;align-items:center;gap:10px;padding:16px;border-radius:12px;background:var(--longd);color:var(--long);font:600 14px var(--sans)}
 @media (prefers-reduced-motion:reduce){.aw-orb,.aw-orb::after,.aw-chips span,.aw-it{animation:none}}
 /* round 16: price + company size on both sides of a swap */
@@ -771,7 +773,11 @@ function AiWatch({ list, onClose, onChanged, onOpen }) {
       <div className="aw-chips" style={{ justifyContent: "flex-start", maxWidth: "none" }}>{stocksOf(cur[p.id]).map(h => <span key={h.s} className={bad.has(h.s) && !done[`${p.id}:${h.s}`] ? "bad" : "ok"}>{h.s}</span>)}</div>
       {!r.items.length ? (!all && <div className="aw-clear" id="aw-clear"><Icon name="check" size={16}/> All clear — every stock's long-term regime is still up. Nothing to change.</div>)
         : r.items.map((x, i) => <div key={x.s} className="aw-it" style={{ animationDelay: `${i * 80}ms` }} data-flag={x.s}>
-          {(done[`${p.id}:${x.s}`] || !x.alts.length) && <div className="aw-ih"><span className="sym">{x.s}</span><span className="hp-flag">Regime down</span><small>{x.n} · {x.sec}</small></div>}
+          {/* round 19g (owner: "I can't see against which stock the swap is"): every block names the stock it replaces, always */}
+          <div className="aw-ih" data-replacing={x.s}><span className="aw-l">{done[`${p.id}:${x.s}`] ? "Swapped" : "Replace"}</span><span className="sym">{x.s}</span><span className="hp-flag">Regime down</span>
+            <small>{[x.n, [x.sec, x.ind].filter(Boolean).join(" › ")].filter(Boolean).join(" · ")}</small>
+            <span className="aw-k">{x.p != null && <span>Price <b>₹{(+x.p).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></span>}
+              {x.cap && <span>Size <b>{x.cap} cap</b></span>}{x.st != null && <span>Strength <b>{x.st > 0 ? "+" : ""}{Math.round(x.st)}</b></span>}</span></div>
           {done[`${p.id}:${x.s}`] ? <div className="svp-ok"><Icon name="check" size={14}/> Swapped to {done[`${p.id}:${x.s}`]} — tracking continues with it from today.</div>
             : !x.alts.length ? <div className="svp-note">No better stock in its industry, sector or market cap today.</div>
             : <SwapOptions items={x.alts} busy={busy} kind={p.kind} from={x.cap} cur={x} onPick={a => pick(p.id, x.s, a)} {...amountOf(cur[p.id], x)}/>}

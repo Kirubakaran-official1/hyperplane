@@ -64,6 +64,31 @@ Collected from his feedback; apply them to every screen you add or touch, and ch
 9. **Every list / table can be filtered**, bars that show shares filter the table below them, big numbers are readable (₹ lakh / crore words).
 10. **Mobile first-class**: no sideways scroll at 400 px, the same content reachable; dark theme is a full theme, not an afterthought.
 
+### 2b. Every new application must connect to the shared pieces (owner 2026-11-11: "if any new application comes, it needs to obey inbox, rbac and so on")
+A new customer application is not finished until each line below is done and tested:
+1. **RBAC:**
+   - an `app_modules` row (key, name, sort);
+   - its `<key>:view` permission plus any extra actions in `app_permissions`, with `restricted` set for owner-level ones;
+   - a once-only migration in `permissions.py` that grants it to the right roles. The **Customer Admin** role always gets every application and every restricted permission.
+   - Every route is guarded server-side with `need("<key>")` / `need_perm(...)`, and `route_guards.py` must report 0 routes without an access check on both services.
+2. **Shell:**
+   - `APP_MODULES` + `APP_SLUG` (`/app/<slug>`), an `AppIcon`, and the pin order;
+   - `BrandBand` + `.hp-actbar` (§2a);
+   - activity tracking (`track(module, ...)`) and adoption actions;
+   - Docs (`guide.jsx`) and a Helpdesk template where it helps.
+3. **Inbox:** anything the app wants the customer to act on or know about is a `customer_notifications` row with:
+   - `app` = its key, `type` = `action` (a portfolio / stock change to make) or `info`;
+   - a `kind` in `inbox.APP_OF_KIND`;
+   - its code and colour in `inbox.jsx` `META` / `ORDER` and `notify.jsx` `CODE`.
+   - Actions must settle themselves (`inbox.settle`) when the customer does the thing anywhere in the app.
+   - Saved portfolios go through `SAVED_KINDS` → tracking → `monitor.run_alerts` (daily checks) → Inbox.
+4. **Community / people:** never send another customer's email, phone, id or city to a customer — names only (`community._out`, `people`).
+5. **Security:**
+   - `SafeModel` bodies, limits enforced by the server ("even with Postman or Burp");
+   - RLS + column grants for any new table the customer service touches (`db._setup_portal_role`);
+   - per-account / per-IP rate limits.
+6. **Tests:** API + browser suite in the scratchpad (`run_all.sh`), including access (403 without the permission), Inbox items, phone width and dark mode. Add the suite to the list in CLAUDE.md.
+
 ---
 
 ## 3. Repository layout
@@ -454,9 +479,9 @@ Price_Health, Failed_NR, Zone_Retest, Technicals (+ Zone_History, Candles — Ca
   strong group = "Watch — stock still building". Customer bubble charts say Uptrend / Downtrend (no bullish/bearish).
 - Customer sign-in page (2026-10-05): hero = "Protect your capital with the right quant information" + 4 points (stay away
   from traps, trade with the tide, five timeframes one answer, less noise) + "not investment advice" line — worded as
-  help, never a promise (SEBI). Sign-up phone field = "WhatsApp number" with an invite to the Hyperplane community note
-  (number never shared); Admin → Customers shows it as "WhatsApp …".
-  WhatsApp field = searchable country-code picker (`DialSelect`, all 247 codes in `frontend/app/src/dial.js`, Popular
+  help, never a promise (SEBI). Sign-up phone field = "Mobile number" (round 19: every WhatsApp wording and the community-invite note were
+  removed — owner: "don't want WhatsApp as of now"); Admin → Customers shows it as "Mobile …".
+  Mobile field = searchable country-code picker (`DialSelect`, all 247 codes in `frontend/app/src/dial.js`, Popular
   first, search by name or code, Enter picks; follows Country until picked by hand) + digits-only number, no placeholder;
   India 10 digits starting 6–9, others 5–13; stored as "+91 9876543210"; portal.py checks the same (`PHONE_RE`, `IN_MOBILE_RE`). Phones: hero shows only brand + headline + intro.
 - Customer navigation + theme (2026-10-03): NO tab buttons in the top bar. Control Tower is the landing page; the logo
@@ -575,7 +600,7 @@ run dirs > 7 days, jobs > 120 days. `SCAN_OFFLINE_DIR` env = recalculate from a 
 - Admin → 👥 Customers → "Customer accounts": "📋 Copy table (N)" (tab-separated with headings → paste into Excel /
   Google Sheets) and "⬇ Download Excel (N)" (`Hyperplane-customers-<date>.xlsx`, sheet "Customers", via the xlsx package
   already in the admin bundle). Both export exactly the rows on screen (status pill + search); columns: Name, Email,
-  WhatsApp, City, State, Country, Status (active / expired / pending / blocked), Access until, Joined, Approved on, Last
+  Mobile, City, State, Country, Status (active / expired / pending / blocked), Access until, Joined, Approved on, Last
   login, Logins, Locked until, Signed up from IP, Notes (`CUST_EXPORT` in server.jsx). Owner, 2026-10-18.
 
 - Customer app theme: LIGHT is the default (owner, 2026-10-20); dark only when the customer picked it (`qf_theme` =
@@ -1931,7 +1956,7 @@ address (cookies are per address). Keep the DuckDNS updater running a few months
 - **Owner messages:** table `owner_alerts`, sent by the worker's mail thread (`mailer.deliver_alerts`) through the Telegram bot in config.ini. Nothing is sent when Telegram isn't set up, and the bot token is never logged.
 - **Rights:** the customer service has no right to read or write `signup_verifications`, `owner_alerts` or `email_verified_at`. It only calls three SECURITY DEFINER functions (`portal_signup_start / resend`, `portal_verify_email`).
 - **Existing customers:** approved accounts were backfilled as verified, so nothing changes for them. `customers.email_verified_at` and `review_flags` are shown in Admin → Customers (✓ email confirmed / ✉ not confirmed, ⚠ reasons).
-- **Not possible without a paid provider:** a phone one-time code (SMS / WhatsApp). The number is checked for shape only.
+- **Not possible without a paid provider:** a phone one-time code (SMS). The number is checked for shape only.
 - **Tests:** `signup_screen_test` (41 checks). It stops the real mail worker, uses a local test inbox, and restarts the worker and restores the auto-approve setting at the end. `auto_test.py`, `phone_test.py` and `dial_test.py` are old exploratory scripts for the instant sign-up and are no longer meaningful.
 
 ### Round 17c — validation (owner 2026-11-07: "auto-approve stays the default; Gmail only, no corporate ids; no numbers in the name; all proper validation; no SQL injection; check the sign-in and sign-up pages")
@@ -2024,3 +2049,270 @@ address (cookies are per address). Keep the DuckDNS updater running a few months
   - `sudo apt-get clean`
   - Postgres `VACUUM (ANALYZE)`
 - **NEVER** `docker system prune --volumes`, `docker volume rm` or `docker compose down -v`. They delete the database and the data cache.
+
+### Round 19 — WhatsApp removed · Unified Inbox · Hyperplane Community (owner 2026-11-08 / 09)
+
+**WhatsApp removed** ("don't want WhatsApp as of now"):
+- Every WhatsApp trace is gone:
+  - the community-link code (`portal_community()`, `/api/admin/community` link, `/me.community`);
+  - the sign-up invite note;
+  - the "WhatsApp number" wording.
+- The field is now **"Mobile number"** and is still collected and checked the same way.
+- The schema drops the function and the `portal_config` key.
+- **Never build an unofficial WhatsApp bulk sender.** The number gets banned. The official Business API is paid.
+
+**Unified Inbox** (`frontend/app/src/inbox.jsx`, `/app/inbox`; backend `inbox.py` + `portal.py /app/api/inbox*`):
+- Modelled on the owner's sample (an enterprise approvals inbox). It has three panes:
+  - **Left:**
+    - tabs **Action needed · Updates · Done**;
+    - search;
+    - **Filter & Group** (by application / portfolio / none, filter by app);
+    - date chips (Today, 7d, 30d, 60d, Custom);
+    - collapsible groups per application with a coloured code badge: PA, PB, ES, MS, HP (Hyperplane updates), HD (Helpdesk).
+  - **Middle:**
+    - a type chip (PORTFOLIO CHANGE / SIP ORDER / ANNOUNCEMENT / HELPDESK QUERY), the reference, the status pill and a fact strip;
+    - an **Overview** tab with a stock table and **Swap**, which opens the round-18c `SwapPanel` in a pop-up and calls `PUT …/holdings` with `replaces`;
+    - an **Activity** tab with a timeline.
+  - **Right:**
+    - **Status flow:** Raised → Seen → Stocks settled → Done.
+    - For a helpdesk item, the conversation instead (`HdThread`, exported from `shared/helpdesk.jsx`).
+- **Data:** `customer_notifications` gains these columns:
+  - `app` (portfolio | builder | sip | msip | hyperplane);
+  - `type` (action | info);
+  - `status` (open | done), `done_at`, `done_note`;
+  - `items_done` (`{symbol: {how: swapped|removed|recovered, in, d}}`).
+- **Backfill:** `app` comes from the kind. An item with `items` or `order` is an action. Rows older than 45 days are closed.
+- **Customer service grant:** UPDATE only on `read_at, status, done_at, done_note, items_done`.
+- **Items settle by themselves** (`inbox.settle`):
+  - `portal._new_version`: a swap or removal settles that stock. This covers every swap place.
+  - `PUT /app/api/portfolio`: a stock taken off the Analyser list.
+  - `monitor.run_alerts`: a flag that cleared counts as "recovered — no change needed".
+  - When every stock is settled, the item closes. A new SIP order closes the previous open order (`inbox.close_orders`).
+- **Customer actions:** Mark done (with an optional note, ≤ 200 characters, hidden characters stripped) and Reopen.
+- **Helpdesk tickets** are merged in at read time from `hd_tickets`, never copied:
+  - open with an unread reply → action;
+  - open otherwise → info;
+  - closed → done.
+- **Announcements** (Admin → Customers → 📣):
+  - `POST /api/admin/announce` sends a message to every approved customer, or to one role, as `kind='announce'`, `app='hyperplane'`, `type='info'`, with a batch id.
+  - There is a list with sent and seen counts, and **Withdraw** (`DELETE …/{batch}`).
+- **Bell (`notify.jsx`):** now a small preview.
+  - The count is unread items plus unread helpdesk replies, capped at "99+".
+  - The latest 6 are listed, and each opens the inbox on that item.
+  - **Open inbox →** opens the full page. The old Detail modal is gone.
+- **Layout gotcha:** the inbox is wrapped in `.ib-wrap { container-type: inline-size }`. A container query cannot style the container itself, so `.ib` must not be the container.
+
+**Hyperplane Community** (`frontend/shared/community.jsx`, used by both apps; backend `community.py`):
+- One group chat for every approved customer and the owner. The customer app has it at `/app/community` (chat icon in the top bar). The admin app has a 💬 Community tab with Chat / Reports / Muted.
+- **Privacy rule (owner):** customers see a person's **name only**.
+  - `_out` never sends email, phone, customer id or city to a customer, only `name`, `mine`, `admin` and `hue` (a salted-hash colour).
+  - The admin side adds `email` and `customer_id` for moderation.
+  - Search matches message text only.
+- **Messages:**
+  - helpdesk-style blocks: text ≤ 2 000 characters and ≤ 4 images (bytes checked, browser-shrunk ≤ 1.2 MB, BYTEA, served with a sandbox CSP);
+  - `reply_to` is a quote;
+  - `thread_id` puts the message in a thread panel on the right; the reply count is kept by the `cm_thread_count` trigger;
+  - reactions from a fixed set (👍 ❤️ 😂 😮 🙏 🔥);
+  - delete your own message. A removed thread head stays as "Message removed";
+  - report (not your own, not the admin's);
+  - day separators, a "New messages" line, grouping by author within 5 minutes, "↓ N new", older pages, a lightbox, and search.
+- **Links:** clickable only in admin posts. In customer posts they stay plain text (anti-scam).
+- **Rules card:** shown on first visit (name only, no tips or selling, no phone numbers). Posting is refused until it is accepted.
+- **Admin side:**
+  - posts as **"Hyperplane · Admin"** (verified badge, accent tint);
+  - pins to the top bar;
+  - can delete any message;
+  - can pause a customer's posting for 1 h, 24 h, 7 d or "until lifted" (`9999-12-31`, because psycopg cannot read `infinity`);
+  - a reports queue: Delete / Pause 24 h / Keep;
+  - a Muted list with Lift.
+- **Badge:** `useCommunityUnread` polls every 30 s.
+  - The count covers new room messages plus new replies in threads you took part in, capped at "99+".
+  - `admin: true` turns the badge accent-coloured with a shield (`#cm-btn[data-admin=1]`).
+  - A new member starts "caught up": the `cm_members` row is created with `last_read_id = max(id)`.
+- **Security (database-enforced):**
+  - `cm_*` tables use per-command RLS policies:
+    - everybody reads;
+    - a customer inserts only as themself, and only while `cm_can_post(cid)` is true (approved and not muted);
+    - updates only `deleted_at` of their own messages;
+    - reactions, reports and members rows are their own only.
+  - Mutes and pins are not writable by the customer service, and a muted customer is refused by the database even through a script.
+  - Limits:
+    - per IP 120 per minute (helpdesk limiter);
+    - 10 posts per minute and 300 per day;
+    - 30 images per day;
+    - 60 reactions per minute;
+    - 600 posts per minute across everyone;
+    - Caddy and the services allow 8 MB for `/app/api/community*` and `/api/admin/community*`.
+- **Realtime:** polling, no sockets. The room every 4 s (`?after=`). Every 16 s, the state of the visible ids (`POST …/refresh`). A thread every 4 s.
+- **`route_guards`:** `/app/api/community` requires `cm_customer`.
+
+**Tests:**
+- `inbox_test` (40 checks): API plus browser, including Swap from the inbox, the bell, phone width and dark mode.
+- `community_test` (70 checks):
+  - privacy, images, quote and thread, unread with the admin mark, RLS (delete, post-as-someone-else, muted, lift-mute denied), reports, pin, search, 429;
+  - browser: 99+ badge, admin mark, rules, links, reaction, thread, image, report, pinned bar, phone, dark mode and the admin tab.
+- `signup_validation_test`: a NUL byte is refused earlier by `SafeModel` (generic 422). The test accepts that.
+
+### Round 19b — Community redesign, member tags, @mentions, favourites · Inbox renamed and simplified (owner 2026-11-09)
+Owner's words: "tag people near the name like Admin — created and given in my admin app"; "the conversation UI is too old school — my
+messages right and others left like WhatsApp"; "mark a chat as favourite and a favourites view with its threads"; "anyone can tag
+anybody"; "keep the name Inbox; Action = any portfolio swap / stock change from any application; Updates = when anyone tags you in the
+chat; Done = all completed; remove Today / 7d — show all".
+
+**Community UI** (`frontend/shared/community.jsx`, rewritten):
+- **Bubbles** like WhatsApp:
+  - mine on the right (accent tint), others on the left with an avatar and the name in the person's colour plus their tags;
+  - grouped within 5 minutes;
+  - the time (and ★ / 📌) inside the bubble;
+  - the quote inside the bubble;
+  - reactions under it, and a "N replies" pill.
+- **Wallpaper and controls:**
+  - a dotted wallpaper, sticky day pills, a "New messages" pill;
+  - a round send button and a pill input;
+  - hover tools: react · reply · thread · ☆ · ⋯.
+- **Left menu:**
+  - views: Community chat · Favourites · Mentions · Pinned;
+  - admin only: Member tags · Reports · Paused members.
+  - Under 980 px container width the menu becomes a chip row.
+- Class names are prefixed. Use `cm-first`, not `top`: the global `.top` (the shell header style) drew lines across rows.
+
+**Member tags (admin only):**
+- Tables: `cm_tags` (name, colour from `TAG_COLORS`) and `cm_member_tags`.
+- Admin routes:
+  - `GET/POST/PUT/DELETE /api/admin/community/tags[/{id}]`;
+  - `GET /api/admin/community/people?q=` (approved customers with email and tag ids);
+  - `PUT …/people/{cid}/tags`.
+- The admin page **Member tags** lets you create a tag, recolour it, delete it, and give it per person with toggle chips. A message's ⋯ menu has "Tags for {name}".
+- Every message carries the author's `tags: [{n, c}]`. The customer service may only SELECT the two tables.
+
+**@mentions (anyone):**
+- **Picker:** `GET /app/api/community/people?q=` offers members who have posted, plus Hyperplane. It sends names only, keyed by an opaque `handle(cid)` (a salted hash). You can't mention yourself.
+- **Body blocks:** the client sends `{"t":"at","k":handle}`. The server stores `{"t":"at","cid","n"}`, or `{"t":"at","adm":true}` for Hyperplane. The page gets `{t:"at", n, me, adm}`, never the id. Limit: 10 per message.
+- **Notifications:** the database trigger `cm_notify_mentions` turns a stored mention into a `customer_notifications` row: `kind='mention'`, `app='community'`, `type='info'`, body `{mid, thread, by, admin, text}`. `cm_unnotify` removes it when the message is removed.
+- **Mentions view:** `?view=mentions` (`body @> [{"t":"at","cid":…}]`, GIN index).
+
+**Favourites:**
+- `cm_favs` (who, message) is per person, with RLS on own rows. Toggle with `PUT …/{mid}/fav`; list with `?view=fav`.
+- A thread reply in a list view shows "In a thread · Open the thread". `listing.counts` gives fav, mentions and pinned for the menu.
+
+**Limits:** the Community has its own per-IP limit, `community.guard_ip`: 600 a minute. The page polls every 4 s, and people in one office share an address, so the helpdesk's 120 was too low.
+
+**Inbox:**
+- The title is just "Inbox".
+- Tabs are **Action** (portfolio swaps and stock changes from any application), **Updates** (Community mentions, announcements, Helpdesk queries — helpdesk is always `info` now) and **Done**.
+- The date chips are removed; everything is listed.
+- A mention item has the chip MENTION, From / Where / Sent, and **Open in the Community**. That marks it done and opens the Community on the thread, or on the Mentions view with the message highlighted.
+
+**Tests:** `community_test` has 104 checks: tags, mentions, inbox handoff, favourites, RLS on stars, and bubble sides. `inbox_test` is updated.
+
+### Round 19c — Groups (REMOVED in round 19d — kept here as history): Teams-style tags anyone can make (owner 2026-11-09: "anyone can tag anyone from the chat — groups like Teams, by name")
+- **What it is:** anyone in the Community makes a **named group** of people from the chat (e.g. "Swing traders"). Typing `@` + the group name in a message reaches everyone in it: each member gets an Inbox → Updates item titled "X mentioned @Group" (body `group`), and it is in their Mentions view.
+- **Who can do what:**
+  - the maker, or the admin, can rename or delete a group and change its people;
+  - a member can leave;
+  - anyone can mention any group.
+  - The admin's member badges (round 19b) are a separate feature and stay.
+- **Data:**
+  - `cm_groups` (case-insensitive unique name, `created_by_kind` / `created_by`).
+  - `cm_group_members`: group, customer and the shown name.
+  - The `cm_notify_mentions` trigger expands `{"t":"at","gid"}` to the members. A person is notified once, never the writer, and only approved customers.
+  - RLS:
+    - everyone reads;
+    - only the maker inserts, updates and deletes the group and adds members;
+    - a member deletes their own membership.
+- **API:**
+  - customers: `GET/POST /app/api/community/groups`, `PUT/DELETE …/groups/{id}`, `POST …/groups/{id}/leave`;
+  - admin: the same under `/api/admin/community/groups`.
+  - The @ picker (`people`) also offers groups as `{k:"g:<id>", n, group:true, size}`.
+- **Limits:** 2–30 characters, no `@`; up to 100 people a group; 10 groups per person; 300 in total; 30 changes per hour. Only people who have posted can be added, by their opaque handle; "Include me" adds yourself.
+- **Mentions:** the view and its count use `body @> ANY([my name pattern, each of my groups' patterns])`.
+- **UI:**
+  - a left-menu **Groups** view: New group (name, search people from the chat, chips, Include me), and group cards with Mention / Edit / Leave / Delete;
+  - a group mention in a message shows bold `@Group`, highlighted for its members.
+- **Tests:** `community_test` has 122 checks, including groups: maker-only edit and delete, the RLS insert, picker, Inbox for each member but not the writer, leave and the admin edit.
+
+
+### Round 19d — Groups removed · mentions only for Customer Admins · date search · Inbox rows and filters (owner 2026-11-11)
+Owner's words:
+- "Remove that group — not going to create any groups now."
+- "Users can only tag the admins — those tagged as Customer Admin in the admin application — anyone can pick them; show the name with the Admin tag; the tagged people must be notified under the Inbox."
+- "Give a date search in the chat — if the user picks a date two years back it should show fast — proper indexing by date; don't search by message."
+- "Inbox: bring the name outside like the Helpdesk list, and an application-wise filter."
+
+**Groups dropped:**
+- Removed: `cm_groups` / `cm_group_members` (`DROP TABLE` in the schema), the group routes, `GroupsPane` and the group branches of the trigger and picker.
+- Old Inbox items from group mentions stay as history.
+
+**Community admins = approved customers holding the role "Customer Admin"** (Admin → Access manager, matched by role name, case-insensitive). The database function `cm_admins()` (SECURITY DEFINER, granted to the customer service, which cannot read roles) returns them.
+- The @ picker (`community.people`) offers only them, names only, by an opaque handle. It never offers yourself.
+- `post.resolve` accepts only their handles. When the role is taken away, the mention is refused (422).
+- Their messages carry `role_admin: true`, so the page shows the **Admin** badge beside the name (the same badge as Hyperplane's own posts).
+- A mention notifies them through the trigger: Inbox → **Updates** → Community, "X mentioned you in the Community".
+- The ⋯ menu's "Mention …" is offered only on their messages.
+
+**Date search replaces message search** (the `q` parameter and the search box are gone):
+- `GET …/community?day=YYYY-MM-DD` returns:
+  - that day in Indian time, or the next day with messages (`asked` vs `day`);
+  - up to 500 messages;
+  - `prev` / `next` = the nearest earlier / later days with messages.
+- Every query is a range on the partial index **`cm_messages_room_day` (created_at) WHERE thread_id IS NULL**, so any age reads as fast as today. The test checks the plan uses it.
+- `listing` returns `first_day` (the picker's minimum).
+- **UI:** a date picker in the chat header opens a day bar: date · ‹ Earlier day · Later day › · Back to the latest. Writing waits for the latest view.
+
+**Inbox:**
+- **Rows** follow the Helpdesk list layout:
+  - the title with its age;
+  - **who it's from** in bold · the summary (`fromOf`: Hyperplane AI watch / Hyperplane AI / Hyperplane / Helpdesk / the person who mentioned you);
+  - #ref · app code · status · date.
+- **The filters stay on screen** (the Filter & Group pop-over is gone):
+  - an **Applications** select listing each application with its count in the open tab, to see which application's portfolio needs the change;
+  - a **group-by** select: By application / By portfolio / No grouping.
+- **Class-name gotcha:** the global `.ap` (the More apps panel) leaked into a row span, so the code is now `.ib-ap`.
+
+**Tests:**
+- `community_test`: 115 checks, including admin-only mentions, role removal, the badge, date search (two years back, empty day → next, bad date, index plan, UI day bar).
+- `inbox_test`: the selects, the application filter and the bold "from" name.
+
+### Round 19e — date search is a From → To range (owner 2026-11-11: "I want a proper date picker, from — to")
+- **Server:** `GET …/community?dfrom=YYYY-MM-DD&dto=YYYY-MM-DD[&cursor=]` (`community.by_range`), replacing round 19d's `?day=`.
+  - Returns the room between the two days, Indian time, both included, oldest first, 300 at a time.
+  - The cursor is `"<created_at>|<id>"` and the first page carries the `total`.
+  - `dto < dfrom` returns 422, as does a bad date.
+  - It still reads only the partial index `cm_messages_room_day`, so the age of the range doesn't matter.
+- **UI:** a "Search by date" button in the chat header opens a pop-over:
+  - quick choices: Today, Yesterday, Last 7 days, Last 30 days, This month;
+  - **From** and **To** date fields (between the first Community day and today; "To" left empty means one day);
+  - Clear / Show messages.
+  - The bar shows the range and its message count, with Change dates and Back to the latest. **Load more** is used for big ranges, and writing waits for the latest view.
+- **Tests:** `community_test` has 119 checks, including a busy day of 310 messages paged 300 + 10 with nothing repeated, and the picker and presets in the browser.
+- **Note (2026-11-11):** the owner removed AI Momentum SIP (`msip:view`) from the default **Customer** role in Access manager. `rbac_api_test` and `tamper_test` still expect every customer to have it, so they fail until the role or the tests change.
+
+### Round 19f — date-picker overlap, stale menu numbers (owner 2026-11-11)
+- **Picker overlap:** `research.css.js` has a global `.fl{…height:16px}`. Once Deep Research had been opened, it squashed the picker's From / To row, so the hint lay over the boxes.
+  - The picker now uses only `cm-dp-*` class names; the hint is a wrapping `<p class="cm-dp-hint">`.
+  - The test opens Deep Research first and checks the geometry.
+  - **Rule (again):** every new class is prefixed per module. The shell and the apps have global short names: `.top`, `.ap`, `.fl`, `.lbl`.
+- **Stale menu numbers:** Favourites / Mentions / Pinned / Reports were counted only when the page loaded.
+  - The customer and admin `…/community/refresh` now also return `counts`, `pinned` (and `reports` for the admin), re-read every 16 s.
+  - Opening a view sets its number from what it actually shows.
+  - What the owner saw was the automated suite's own pinned / reported messages: the suites run against the local database and delete their data at the end. Expect test rows to appear briefly while a suite runs.
+
+### Round 19g — calendar date picker · AI watch names the stock being replaced (owner 2026-11-11)
+- **"A date picker, not the type one":** `RangeCal` in `shared/community.jsx` replaces the typed From / To date inputs.
+  - A month grid (Monday first) with ‹ › and month / year selects (only months between the Community's first day and today).
+  - Click the first day, then the last; hovering previews the range. The ends are filled, the days between are tinted, today is in bold, and days outside the range are disabled.
+  - A From / To summary sits under the grid. The quick choices stay.
+  - Test hooks: `#cm-cal`, `[data-day=YYYY-MM-DD]`, `#cm-cal-m`, `#cm-cal-y`, `#cm-cal-prev`, `#cm-cal-next`, `#cm-dp-sum`.
+- **"I can't see against which stock the swap is" (Hyperplane AI watch pop-up, `saved.jsx` AiWatch):**
+  - Round 18 showed the per-stock header only after a swap, and round 18c removed SwapPanel's Replacing card, so no stock was named.
+  - Every block now starts with a header strip (`[data-replacing=SYM]`, red left bar): REPLACE / SWAPPED · symbol · Regime down · name · sector › industry · price · size · strength.
+  - `sections_test` checks every block has it.
+
+### Round 19h — Analyser card "Better alternative" uses the sectioned panel (owner 2026-11-11: "handle the better alternative properly — it was one straight list")
+- `apps/portfolio.jsx` `BetterAlt`: the button on a regime-down card opens a centred pop-up. It is rendered into `document.body` with `createPortal`, so the card's animations cannot clip it.
+- The pop-up holds the shared `SwapPanel`, headed "Replace SYM →" with name · sector › industry.
+- Swap replaces the stock in the list and closes. Escape and the backdrop close too.
+- Hooks: `#pf-alt-SYM`, `#pf-altmod`. `sections_test` checks the four sections, the header and Escape.
+- **ETF "Best in segment" (same day, "not working properly while clicking"):**
+  - Probed with real mouse clicks at 1700, 1280 and 1024 px; nothing covers the button.
+  - It toggles 302 ETFs ↔ 66 markets, including with the Up filter (29 → 11) and a search ("gold": 25 → 1), and a row still opens its card. No fault was reproduced locally; waiting for the owner's exact steps.

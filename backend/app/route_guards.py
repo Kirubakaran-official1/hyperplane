@@ -25,6 +25,7 @@ REQUIRED = [("/api/admin", {"admin_user"}),
             ("/api/helpdesk", {"hd_actor"}),
             ("/api/", {"current_user", "admin_user"}),
             ("/app/api/helpdesk", {"hd_customer"}),
+            ("/app/api/community", {"cm_customer"}),        # the Community (round 19): signed-in, approved customer
             ("/app/api/", {"customer"})]
 
 

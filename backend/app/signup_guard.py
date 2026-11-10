@@ -9,7 +9,7 @@ What a new sign-up goes through (portal.py /app/api/register → mailer.py funct
   3. opening the link: if nothing looks fake and Admin has "Approve automatically" on, the account is approved and the customer is
      told by email; otherwise it waits and the owner gets a Telegram message with the reasons (screen() flags) to approve or block
   4. the admin's own Approve also emails the customer
-No outside service is needed. A phone one-time code would need a paid SMS / WhatsApp provider; the number is checked for shape only.
+No outside service is needed. A phone one-time code would need a paid SMS provider; the number is checked for shape only.
 """
 import re
 
@@ -54,7 +54,7 @@ def refuse(email, phone):
         return "Please use your own permanent email address — temporary mail services are not accepted."
     n = national_number(phone)
     if n and (len(set(n)) == 1 or _sequential(n)):
-        return "Please enter your real WhatsApp number."
+        return "Please enter your real mobile number."
     return None
 
 
@@ -203,7 +203,7 @@ def validate_signup(d, countries, in_states):
     email = clean(d.get("email"), "email", 254, label="email address").lower()
     if (e := gmail_error(email)):
         raise Invalid(e, "email")
-    phone = clean(d.get("phone"), "phone", 20, label="WhatsApp number")
+    phone = clean(d.get("phone"), "phone", 20, label="Mobile number")
     country = clean(d.get("country"), "country", 60, label="country")
     if country not in countries:
         raise Invalid("Please choose your country from the list.", "country")

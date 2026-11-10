@@ -214,6 +214,10 @@ export const CSS = `
 .pf-alti{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;border-radius:8px;border:1px solid var(--b1);background:var(--s2)}
 .pf-alti b{color:var(--long)}.pf-alti small{color:var(--t3);flex:1 1 140px}.pf-alti .pf-swap{margin-left:auto}
 .pf-altx{align-self:flex-start;border:0;background:none;color:var(--acc);font:600 12px var(--sans);cursor:pointer;padding:0}
+.pf-altov{position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(2,6,23,.55)}
+.pf-altmod{width:min(1120px,100%);max-height:88vh;overflow-y:auto;background:var(--bg);border:1px solid var(--b2);border-radius:14px;padding:18px 20px 20px;display:flex;flex-direction:column;gap:12px;box-shadow:0 30px 80px rgba(0,0,0,.35);text-align:left;font-size:14px}
+.pf-alth{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--b1)}.pf-alth h3{margin:4px 0 2px;font:700 18px var(--sans);color:var(--t1)}.pf-alth small{font-size:12.5px;color:var(--t2)}
+.pf-altc{flex:none;width:32px;height:32px;border-radius:8px;border:1px solid var(--b1);background:var(--s1);color:var(--t2);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .pf-saved-msg{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;margin-bottom:12px;font-size:13px;border-color:var(--acc);background:var(--adim)}
 .pf .hp-actbar .px-search{width:340px}
 /* round 17: amounts under both stocks, and every option in a drop-down under its row with its own Swap */

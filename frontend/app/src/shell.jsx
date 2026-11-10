@@ -2,6 +2,7 @@
 // applications (micro-frontends in ./apps). It must never import the dashboard code.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Helpdesk, HelpdeskIcon, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
+import { Community, CommunityButton, CommunityIcon, useCommunityUnread } from "../../shared/community.jsx";
 import { NotifyCenter, useNotifications } from "./notify.jsx";
 import { QuickGuideButton } from "./quick.jsx";
 import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
@@ -11,11 +12,11 @@ import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, AsOfCtx, BrandBand
 // loadChunk reloads a page opened before an update once; when this version has run a while, allow that again later
 setTimeout(() => { try { sessionStorage.removeItem("hp_reloaded"); } catch { /* ignore */ } }, 20000);
 
-// WhatsApp country code: every country (dial.js); it follows the Country choice until the user picks a code
+// Mobile number country code: every country (dial.js); it follows the Country choice until the user picks a code
 const DIAL_BY = Object.fromEntries(DIAL_CODES);
 // India: 10 digits starting 6-9; elsewhere 5-13 digits (E.164 allows 15 digits including the country code)
-const phoneError = (code, num) => code === "91" ? (/^[6-9]\d{9}$/.test(num) ? "" : "Enter your 10-digit WhatsApp number (it starts with 6, 7, 8 or 9)")
-  : (/^\d{5,13}$/.test(num) ? "" : "Enter your WhatsApp number without the country code (digits only)");
+const phoneError = (code, num) => code === "91" ? (/^[6-9]\d{9}$/.test(num) ? "" : "Enter your 10-digit mobile number (it starts with 6, 7, 8 or 9)")
+  : (/^\d{5,13}$/.test(num) ? "" : "Enter your mobile number without the country code (digits only)");
 function DialSelect({ value, onChange }) {
   const [open, setOpen] = useState(false); const [q, setQ] = useState(""); const ref = useRef(null);
   useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
@@ -391,15 +392,13 @@ function AuthScreen({ onIn, notice, resetToken = null, onResetDone, verifyToken 
             {Field("Full name", <input id="f-name" value={f.name} onChange={typed("name", lettersOnly, "Letters only — numbers and symbols aren't allowed in the name.")} onBlur={blur("name")} maxLength={60} autoComplete="name" autoFocus
               aria-invalid={err("name") ? "true" : undefined} autoCapitalize="words" spellCheck={false}/>, "name")}
             <label className={`field ${err("phone") ? "bad" : ""}`} htmlFor="f-phone">
-              <span className="wa-l"><svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path fill="#25d366" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm5.6 14.1c-.2.7-1.4 1.3-2 1.4-.5.1-1.2.1-1.9-.1-.4-.1-1-.3-1.7-.6-3-1.3-4.9-4.3-5-4.5-.2-.2-1.2-1.6-1.2-3s.7-2.2 1-2.5c.3-.3.6-.3.8-.3h.6c.2 0 .4 0 .7.5l1 2.3c.1.2.1.4 0 .6l-.4.6-.5.5c-.2.2-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.3 2.4 1.5.3.1.5.1.7-.1l1-1.2c.2-.3.4-.2.7-.1l2.2 1c.3.2.5.2.6.4.1.1.1.8-.2 1.5z"/></svg>WhatsApp number</span>
+              <span className="wa-l">Mobile number</span>
               <div className="wa-in">
                 <DialSelect value={f.ccName} onChange={n => setF(p => ({ ...p, ccName:n, ccSet:true, phone:p.phone.slice(0, DIAL_BY[n] === "91" ? 10 : 13) }))}/>
                 <input id="f-phone" value={f.phone} onChange={e => { const v = e.target.value.replace(/\D/g, ""); setSrv(o => ({ ...o, phone:"" })); setF(p => ({ ...p, phone:v.slice(0, DIAL_BY[p.ccName] === "91" ? 10 : 13) })); }} onBlur={blur("phone")}
-                  inputMode="numeric" autoComplete="tel-national" maxLength={DIAL_BY[f.ccName] === "91" ? 10 : 13} aria-label="WhatsApp number" aria-invalid={err("phone") ? "true" : undefined}/>
+                  inputMode="numeric" autoComplete="tel-national" maxLength={DIAL_BY[f.ccName] === "91" ? 10 : 13} aria-label="Mobile number" aria-invalid={err("phone") ? "true" : undefined}/>
               </div>
               {err("phone") ? <span className="fe" role="alert" id="fe-phone">{err("phone")}{f.phone && DIAL_BY[f.ccName] === "91" && f.phone.length < 10 ? ` (${f.phone.length}/10 digits)` : ""}</span> : null}
-              <span className="wa-note">Use your <b>WhatsApp</b> number — we'll invite you to the <b>Hyperplane community</b>: a healthy, disciplined
-                circle that learns to trade with the trend and protect capital. Your number is never shared or sold.</span>
             </label>
             <div className="grid2">
               {Field("Country", <select id="f-country" value={f.country} onChange={e => { const c = e.target.value; setSrv(o => ({ ...o, country:"" })); setF(p => ({ ...p, country:c, state:"", ...(!p.ccSet && DIAL_BY[c] ? { ccName:c } : {}) })); }} onBlur={blur("country")}>{COUNTRIES.map(c => <option key={c}>{c}</option>)}</select>, "country")}
@@ -490,6 +489,7 @@ const APP_MODULES = {
   msip: lazy(() => loadChunk(() => import("./apps/msip.jsx"))),                   // AI Momentum SIP (stocks, risk)
 };
 const Guide = lazy(() => loadChunk(() => import("./guide.jsx")));
+const Inbox = lazy(() => loadChunk(() => import("./inbox.jsx")));            // the Unified Inbox (round 19)
 // stock detail view (customer admin): its own chunk, downloaded only by someone with a detail permission who opens it
 const StockDetail = lazy(() => loadChunk(() => import("./apps/detail.jsx")));
 const SharedView = lazy(() => loadChunk(() => import("./saved.jsx").then(m => ({ default: m.SharedView }))));   // /app/portfolio/<ID> of someone else
@@ -539,7 +539,7 @@ function Home({ me, onOut, reloadMe }) {
   const leave = () => { scrollAt.current[here_] = window.scrollY; };
   const setFace = (f, push = true) => { leave(); setFaceRaw(f); setView("tower"); setShared(null); setNavOpen(false); try { sessionStorage.setItem("qf_face", f); } catch { /* storage blocked */ }
     if (push) goPath(`/app/${APP_SLUG[f] || ""}`); };
-  const goView = v => { leave(); setView(v); setShared(null); setNavOpen(false); goPath(v === "guide" ? "/app/docs" : v === "helpdesk" ? "/app/helpdesk" : `/app/${APP_SLUG[face] || ""}`); };
+  const goView = v => { leave(); setView(v); setShared(null); setNavOpen(false); goPath(v === "guide" ? "/app/docs" : v === "helpdesk" ? "/app/helpdesk" : v === "inbox" ? "/app/inbox" : v === "community" ? "/app/community" : `/app/${APP_SLUG[face] || ""}`); };
   useEffect(() => { const y = scrollAt.current[here_] || 0; requestAnimationFrame(() => window.scrollTo(0, y)); }, [here_]);
   const [simpleSym, setSimpleSym] = useState(null);
   // AI Portfolio: the customer's stock list, saved to their account (no quantities)
@@ -569,6 +569,12 @@ function Home({ me, onOut, reloadMe }) {
   // notification centre (notify.jsx): Hyperplane AI alerts + helpdesk replies; an alert opens its application on the right
   // saved plan (sessionStorage hp_open_<app> for a module not loaded yet, the hp-open event for one already open)
   const notes = useNotifications(onOut);
+  // Hyperplane Community (round 19): every customer; the badge shows new messages (99+ at most) and marks the ones from Hyperplane
+  const cmApi = useCallback((p, o) => api(p, o).catch(e => { if (e.status === 401) onOut(e.message); throw e; }), []);
+  const cm = useCommunityUnread(cmApi, "/app/api/community");
+  const [cmReq, setCmReq] = useState(null);                         // opened from an Inbox mention: that message
+  const [ibReq, setIbReq] = useState(null);
+  const openInbox = id => { goView("inbox"); setIbReq({ id, n: Date.now() }); };
   const openFrom = (k, ref, push = true) => {
     try { sessionStorage.setItem(`hp_open_${k}`, JSON.stringify({ ref })); } catch { /* storage blocked */ }
     setFace(k, push); window.scrollTo(0, 0);
@@ -667,10 +673,12 @@ function Home({ me, onOut, reloadMe }) {
 
   const curApp = apps.find(a => a.key === face);
   useEffect(() => {                                               // the browser tab says where the customer is
-    const n = view === "helpdesk" ? "Helpdesk" : view === "guide" ? "Docs" : shared ? "Shared portfolio" : curApp ? curApp.name : "";
+    const n = view === "community" ? "Community" : view === "inbox" ? "Inbox" : view === "helpdesk" ? "Helpdesk" : view === "guide" ? "Docs" : shared ? "Shared portfolio" : curApp ? curApp.name : "";
     document.title = n ? `${n} · Hyperplane` : "Hyperplane";
   }, [view, face, shared, curApp && curApp.name]);
-  const here = view === "helpdesk" ? { icon: <HelpdeskIcon size={18}/>, name: "Helpdesk", sub: "Your questions and our answers" }
+  const here = view === "community" ? { icon: <CommunityIcon/>, name: "Community", sub: "Learn and discuss with every Hyperplane member" }
+    : view === "inbox" ? { icon: <Icon name="bell" size={18}/>, name: "Inbox", sub: "What to act on, updates and what is done — by application" }
+    : view === "helpdesk" ? { icon: <HelpdeskIcon size={18}/>, name: "Helpdesk", sub: "Your questions and our answers" }
     : view === "guide" ? { icon: <GuideIcon/>, name: "Docs", sub: "How to use Hyperplane · golden rules" }
     : curApp ? { icon: <AppIcon k={curApp.key}/>, name: curApp.name, sub: curApp.description } : { icon: null, name: "Hyperplane", sub: "" };
   const showsData = view === "tower" && DATA_APPS.includes(face);
@@ -697,7 +705,8 @@ function Home({ me, onOut, reloadMe }) {
           : <>{showsData && <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : err ? "" : "Loading…"}</div>}
             {ownAsOf && <div className="asof" id="top-asof">DATA AS OF <b>{fmtDT(ownAsOf)}</b></div>}</>}
         <QuickGuideButton onDocs={() => goView("guide")}/>
-        <NotifyCenter notes={notes} hd={unread} apps={apps} onHelpdesk={openHelpdesk} onOpen={openFrom}/>
+        <CommunityButton unread={cm} onOpen={() => goView("community")} active={view === "community"}/>
+        <NotifyCenter notes={notes} hd={unread} onInbox={openInbox}/>
         <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => goView("guide")}
           onSignOut={async () => { try { sessionStorage.removeItem("qf_face"); } catch { /* storage blocked */ } await api("/app/api/logout", { method:"POST" }).catch(() => {}); goPath("/app/", true); onOut(); }}/>
       </header>
@@ -710,6 +719,11 @@ function Home({ me, onOut, reloadMe }) {
           <button type="button" className="primary" onClick={() => openHelpdesk(null)}>Open Helpdesk</button>
         </div>
       )}
+      {view === "community" && <Community api={cmApi} base="/app/api/community" onChanged={cm.refresh} openReq={cmReq} height="calc(100vh - 92px)"/>}
+      {view === "inbox" && <BrandBand product="Inbox" title="Inbox" id="ib-band" sub="Action — portfolio changes to make · Updates — mentions, announcements, helpdesk · Done — everything completed."/>}
+      {view === "inbox" && <Suspense fallback={<Waiting/>}><Inbox apps={apps} openReq={ibReq} onOpen={(k, r) => openFrom(k, r)} onHelpdesk={id => openHelpdesk(id)}
+        onCommunity={(mid, thread) => { goView("community"); setCmReq({ mid, thread, n: Date.now() }); }}
+        onChanged={() => { notes.refresh(); unread.refresh && unread.refresh(); }} onOut={onOut}/></Suspense>}
       {view === "guide" && <Suspense fallback={<Waiting/>}><Guide disclaimer={DISCLAIMER} apps={allowed}/></Suspense>}
       {view === "helpdesk" && <><BrandBand product="Helpdesk" title="Helpdesk" accent="we reply here" id="hd-band" sub="Ask anything; our replies show up here and on the bell."/>
         <Helpdesk api={hdApi} base="/app/api/helpdesk" openReq={hdReq} onChanged={unread.refresh} templates={HD_TEMPLATES}/></>}

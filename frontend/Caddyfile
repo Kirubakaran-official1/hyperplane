@@ -31,9 +31,19 @@
 		request_body /api/helpdesk/* {
 			max_size 8MB
 		}
+		request_body /api/admin/community* {
+			max_size 8MB
+		}
 		reverse_proxy api:8000
 	}
 	handle /app/api/helpdesk/* {
+		request_body {
+			max_size 8MB
+		}
+		reverse_proxy portal:8100
+	}
+	# Community messages (round 19): text + up to 4 images, the same 8 MB cap as the helpdesk
+	handle /app/api/community* {
 		request_body {
 			max_size 8MB
 		}

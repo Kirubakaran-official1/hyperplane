@@ -1,6 +1,7 @@
 // AI Portfolio Analyser — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AiSpark, BrandBand, Icon, addCss, api, loadChunk, trackAction, useToast } from "../core.jsx";
+import { createPortal } from "react-dom";
 import { SwapPanel } from "../swap-ui.jsx";
 import { G_ZONES, Info, RELIABILITY, RG_INFO, StockLink, StockSearch, TrendGauge, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
 import { LT_TF, PF_CAT, PF_CATS, PF_MIN_YEARS, PF_ORDER, StrengthTiles, analyseHolding, portfolioSummary, zDir } from "./portfolio-engine.jsx";
@@ -10,20 +11,28 @@ import { MyPortfolios, SaveBar, SavedNote } from "../saved.jsx";
 
 addCss("portfolio", CSS);
 
-// "Better alternative" (owner 2026-11-06: "give swap as an option, then show the best alternative of that stock")
+// "Better alternative" (owner 2026-11-06: "give swap as an option, then show the best alternative of that stock"; round 19h, 2026-11-11:
+// "handle the better alternative properly — it was one straight list"): the button opens the shared SwapPanel (swap-ui.jsx) in a centred
+// pop-up — Same industry · Same sector / Better alternative · Upgrade as tables, details on click — headed by the stock it replaces.
 function BetterAlt({ sym, symbols, onSwap }) {
-  const [st, setSt] = useState(null);                 // null · "busy" · items[] · error text
+  const [st, setSt] = useState(null);                 // null (closed) · "busy" · { items, cur } · error text
   const find = () => { setSt("busy"); api(`/app/api/alternatives?s=${encodeURIComponent(sym)}&exclude=${encodeURIComponent(symbols.join(","))}`)
-    .then(r => setSt(r.items)).catch(e => setSt(e.message)); };
+    .then(r => setSt({ items: r.items, cur: { s: sym, ...(r.cur || {}) } })).catch(e => setSt(e.message)); };
+  useEffect(() => { if (!st) return undefined; const k = e => e.key === "Escape" && setSt(null); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [!!st]);
+  const cur = st && st.cur;
   return (
     <div className="pf-alt" data-alt={sym}>
-      {st == null ? <button type="button" className="px-btn pf-altb" onClick={find}><AiSpark/> Better alternative</button>
-        : st === "busy" ? <span className="dim">Finding the best alternatives…</span>
-        : typeof st === "string" ? <span className="pf-miss">{st}</span>
-        : !st.length ? <span className="dim">No better stock in its sector or market cap today. <button type="button" className="pf-altx" onClick={() => setSt(null)}>Close</button></span>
-        : <><div className="pf-altl">{st.map(a => <div key={a.s} className="pf-alti"><b>{a.s}</b><small>{a.sec} · strength {a.st > 0 ? "+" : ""}{signed(a.st)} · {a.why}</small>
-            <button type="button" className="px-btn pf-swap" onClick={() => onSwap(sym, a.s)} title={`Replace ${sym} with ${a.s} in your list`}>Swap</button></div>)}</div>
-            <button type="button" className="pf-altx" onClick={() => setSt(null)}>Close</button></>}
+      <button type="button" className="px-btn pf-altb" onClick={find} id={`pf-alt-${sym}`}><AiSpark/> Better alternative</button>
+      {st && createPortal(<div className="pf-altov" onClick={() => setSt(null)}><div className="pf-altmod" role="dialog" aria-label={`Better alternative to ${sym}`} id="pf-altmod" onClick={e => e.stopPropagation()}>
+        <div className="pf-alth"><div style={{ minWidth: 0 }}><div className="px-eyebrow"><AiSpark/> Hyperplane AI · Better alternative</div>
+          <h3>Replace {sym} <span className="hp-arrow">→</span></h3>
+          {cur && <small>{[cur.n, [cur.sec, cur.ind].filter(Boolean).join(" › ")].filter(Boolean).join(" · ")}</small>}</div>
+          <button type="button" className="pf-altc" onClick={() => setSt(null)} aria-label="Close"><Icon name="x" size={16}/></button></div>
+        {st === "busy" ? <div className="dim">Finding the best alternatives…</div>
+          : typeof st === "string" ? <div className="pf-miss">{st}</div>
+          : !st.items.length ? <div className="dim">No better stock in its industry, sector or size today.</div>
+          : <SwapPanel items={st.items} cur={st.cur} onPick={a => { onSwap(sym, a.s); setSt(null); }} idp={`pfa-${sym}`}/>}
+      </div></div>, document.body)}
     </div>);
 }
 

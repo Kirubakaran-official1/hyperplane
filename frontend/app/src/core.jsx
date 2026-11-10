@@ -364,6 +364,8 @@ export const routeOf = (p = window.location.pathname) => {
   if (SLUG_APP[seg[0]] && seg[1] === "portfolio" && seg[2]) return { app: SLUG_APP[seg[0]], code: decodeURIComponent(seg[2]).toUpperCase() };
   if (seg[0] === "docs") return { view: "guide" };
   if (seg[0] === "helpdesk") return { view: "helpdesk" };
+  if (seg[0] === "inbox") return { view: "inbox" };
+  if (seg[0] === "community") return { view: "community" };
   return { app: SLUG_APP[seg[0]] || null };
 };
 export const portfolioUrl = code => `${window.location.origin}/app/portfolio/${code}`;

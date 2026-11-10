@@ -22,10 +22,11 @@ from collections import OrderedDict, defaultdict, deque
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import Field
@@ -40,6 +41,8 @@ from . import signup_guard
 from . import sip
 from . import tracking
 from . import helpdesk as hd
+from . import inbox
+from . import community as cm
 from .detail import DETAIL_DAYS
 from .security import DUMMY_HASH, hash_password, verify_password
 
@@ -159,7 +162,7 @@ async def _bad_request(request: Request, exc: RequestValidationError):
 @app.middleware("http")
 async def _headers(request: Request, call_next):
     # body-size cap (Caddy also caps it): helpdesk messages may carry images, everything else is tiny
-    limit = 8_500_000 if request.url.path.startswith("/app/api/helpdesk") else 64_000
+    limit = 8_500_000 if request.url.path.startswith(("/app/api/helpdesk", "/app/api/community")) else 64_000
     try:
         too_big = int(request.headers.get("content-length") or 0) > limit
     except ValueError:
@@ -279,13 +282,13 @@ def register(body: RegisterIn, request: Request, response: Response):
         raise HTTPException(422, str(e), headers={"X-Field": e.field})
     email, name, phone, country, state, city = v["email"], v["name"], v["phone"], v["country"], v["state"], v["city"]
     if not PHONE_RE.match(phone) or (phone.startswith("+91 ") and not IN_MOBILE_RE.match(phone)):
-        raise HTTPException(422, "Please enter a valid WhatsApp number — choose the country code and type the number (10 digits for India)",
+        raise HTTPException(422, "Please enter a valid mobile number — choose the country code and type the number (10 digits for India)",
                             headers={"X-Field": "phone"})
     if not body.accept:
         raise HTTPException(422, "Please accept the terms to continue", headers={"X-Field": "accept"})
     why = signup_guard.refuse(email, phone)                   # round 17: throw-away mail / impossible numbers are refused at once
     if why:
-        raise HTTPException(422, why, headers={"X-Field": "phone" if "WhatsApp" in why else "email"})
+        raise HTTPException(422, why, headers={"X-Field": "phone" if "mobile" in why else "email"})
     flags = signup_guard.screen(name, email, phone)           # …look-alike-fake ones wait for the owner after the email is confirmed
     with pool.connection() as c:
         # always PENDING at insert (db trigger no longer approves): the account opens when its email is confirmed (mailer.py)
@@ -777,6 +780,12 @@ def portfolio_put(body: PortfolioIn, request: Request, c=Depends(need("portfolio
     if len(syms) > PF_MAX:
         raise HTTPException(422, f"A portfolio can hold up to {PF_MAX} stocks")
     with _own(c) as conn:
+        old = conn.execute("SELECT symbols FROM customer_portfolio WHERE customer_id = %s", (c["id"],)).fetchone()
+        gone = [s for s in (old["symbols"] if old else []) if s not in seen]
+        came = [s for s in syms if s not in set(old["symbols"] if old else [])]
+        if gone:                                                    # inbox: a flagged stock taken off the list is settled
+            inbox.settle(conn, c["id"], "portfolio", None,
+                         {s: ({"how": "swapped", "in": came[0]} if len(gone) == 1 and len(came) == 1 else {"how": "removed"}) for s in gone})
         conn.execute("INSERT INTO customer_portfolio (customer_id, symbols, updated_at) VALUES (%s, %s, now()) "
                      "ON CONFLICT (customer_id) DO UPDATE SET symbols = EXCLUDED.symbols, updated_at = now()", (c["id"], syms))
         if syms:
@@ -1307,6 +1316,8 @@ def _new_version(conn, c, r, hold, pairs=()):
     vers[-1]["log"] = log[-200:]
     conn.execute("UPDATE customer_sips SET holdings = %s, versions = %s, refreshed_at = now(), state = NULL WHERE id = %s AND customer_id = %s",
                  (json.dumps(hold), json.dumps(vers), r["id"], c["id"]))
+    # inbox (round 19): the stocks that left settle the open "stocks to change" items of this portfolio
+    inbox.settle(conn, c["id"], r["kind"], r["id"], {a: ({"how": "swapped", "in": b} if b else {"how": "removed"}) for a, b in pairs if a})
 
 
 class HoldingsIn(SafeModel):
@@ -1419,11 +1430,66 @@ class ReadIn(SafeModel):
 @app.get("/app/api/notifications")
 def notifications(c=Depends(customer)):
     with _own(c) as conn:
-        rows = conn.execute("SELECT id, kind, ref_id, title, body, created_at, read_at FROM customer_notifications WHERE customer_id = %s "
-                            "ORDER BY id DESC LIMIT 50", (c["id"],)).fetchall()
+        rows = conn.execute("SELECT id, kind, ref_id, title, body, created_at, read_at, app, type, status FROM customer_notifications "
+                            "WHERE customer_id = %s ORDER BY id DESC LIMIT 50", (c["id"],)).fetchall()
     items = [{"id": r["id"], "kind": r["kind"], "ref": r["ref_id"], "title": r["title"], "body": r["body"], "at": r["created_at"].isoformat(),
-              "read": r["read_at"] is not None} for r in rows]
+              "read": r["read_at"] is not None, "app": r["app"], "type": r["type"], "status": r["status"]} for r in rows]
     return {"items": items, "unread": sum(1 for i in items if not i["read"])}
+
+
+# ── Unified inbox (round 19, inbox.py): every notification + the helpdesk tickets, for the three-pane inbox page ──
+def _inbox_note(r):
+    return {"id": f"n{r['id']}", "nid": r["id"], "src": {"announce": "announce", "mention": "mention"}.get(r["kind"], "alert"), "kind": r["kind"],
+            "app": r["app"] or inbox.app_of(r["kind"]), "type": r["type"] or "info", "status": r["status"], "title": r["title"],
+            "body": r["body"], "ref": r["ref_id"], "at": r["created_at"].isoformat(), "read": r["read_at"] is not None,
+            "read_at": r["read_at"] and r["read_at"].isoformat(), "done_at": r["done_at"] and r["done_at"].isoformat(),
+            "done_note": r["done_note"], "items_done": r["items_done"] or {}}
+
+
+@app.get("/app/api/inbox")
+def inbox_list(c=Depends(customer)):
+    _rate("inbox", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        rows = conn.execute("SELECT id, kind, ref_id, title, body, created_at, read_at, app, type, status, done_at, done_note, items_done "
+                            "FROM customer_notifications WHERE customer_id = %s ORDER BY id DESC LIMIT 500", (c["id"],)).fetchall()
+    a = {"kind": "customer", "id": str(c["id"]), "name": c["name"], "staff": False}
+    with _hd(a) as conn:
+        tk = hd.list_tickets(conn, a, "all", 200)["tickets"]
+    tickets = [{"id": f"h{t['id']}", "hid": t["id"], "src": "helpdesk", "kind": "helpdesk", "app": "helpdesk",
+                "type": "info", "status": "done" if t["status"] == "closed" else "open",
+                "title": t["subject"], "body": {"severity": t["severity"], "messages": t["messages"], "snippet": t["snippet"], "unread": t["unread"]},
+                "at": t["updated_at"], "created": t["created_at"], "read": not t["unread"], "done_at": t["closed_at"],
+                "done_note": "Query closed" if t["status"] == "closed" else None, "items_done": {}} for t in tk]
+    return {"items": [_inbox_note(r) for r in rows] + tickets}
+
+
+class DoneIn(SafeModel):
+    note: str = Field("", max_length=200)
+
+
+@app.post("/app/api/inbox/{nid}/done")
+def inbox_done(nid: int, body: DoneIn, c=Depends(customer)):
+    _rate("inbox-w", str(c["id"]), 60, 60)
+    note = " ".join(hd.CTRL.sub("", body.note).split())[:200] or "Marked done by you"
+    with _own(c) as conn:
+        r = conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = %s, read_at = COALESCE(read_at, now()) "
+                         "WHERE id = %s AND customer_id = %s RETURNING id, kind, ref_id, title, body, created_at, read_at, app, type, status, "
+                         "done_at, done_note, items_done", (note, nid, c["id"])).fetchone()
+    if not r:
+        raise HTTPException(404, "Not found")
+    return _inbox_note(r)
+
+
+@app.post("/app/api/inbox/{nid}/reopen")
+def inbox_reopen(nid: int, c=Depends(customer)):
+    _rate("inbox-w", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        r = conn.execute("UPDATE customer_notifications SET status = 'open', done_at = NULL, done_note = NULL WHERE id = %s AND customer_id = %s "
+                         "RETURNING id, kind, ref_id, title, body, created_at, read_at, app, type, status, done_at, done_note, items_done",
+                         (nid, c["id"])).fetchone()
+    if not r:
+        raise HTTPException(404, "Not found")
+    return _inbox_note(r)
 
 
 @app.post("/app/api/notifications/read")
@@ -1554,3 +1620,119 @@ def hd_unread(a=Depends(hd_customer)):
 def hd_image(iid: int, a=Depends(hd_customer)):
     with _hd(a) as c:
         return hd.image(c, a, iid)
+
+
+# ─────────────────────────────── Hyperplane Community (round 19, community.py) ───────────────────────────────
+def cm_customer(request: Request):
+    cm.guard_ip(_ip(request))                     # per IP, before the session check and before any database work
+    c = _session(request)
+    return {"kind": "customer", "cid": c["id"], "name": c["name"], "staff": False}
+
+
+@contextmanager
+def _cm(actor):
+    """one transaction with row-level security switched to this customer (see db._setup_portal_role)"""
+    with pool.connection() as c:
+        c.execute("SELECT set_config('hp.cid', %s, true)", (str(actor["cid"]),))
+        yield c
+
+
+class CmPostIn(SafeModel):
+    body: list
+    reply_to: int | None = None
+    thread: int | None = None
+
+
+class CmIdsIn(SafeModel):
+    ids: list[int] = []
+
+
+class CmReactIn(SafeModel):
+    emoji: str = Field(..., max_length=8)
+
+
+class CmReportIn(SafeModel):
+    reason: str = Field("", max_length=300)
+
+
+class CmReadIn(SafeModel):
+    last_id: int
+    thread: int | None = None
+
+
+@app.get("/app/api/community")
+def cm_list(after: int | None = None, before: int | None = None, thread: int | None = None, dfrom: str | None = None, dto: str | None = None,
+            cursor: str | None = Query(None, max_length=60), view: str | None = None, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.listing(c, a, after, before, thread, dfrom, view, dto, cursor)
+
+
+@app.get("/app/api/community/people")
+def cm_people(q: str = "", a=Depends(cm_customer)):
+    """the @mention picker: the Community admins (Customer Admin role) — names only, never an email, phone or id"""
+    _rate("cm-people", str(a["cid"]), 120, 60)
+    with _cm(a) as c:
+        return cm.people(c, a, q)
+
+
+@app.put("/app/api/community/{mid}/fav")
+def cm_fav(mid: int, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.fav(c, a, mid)
+
+
+@app.post("/app/api/community/refresh")
+def cm_refresh(body: CmIdsIn, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.refresh(c, a, body.ids, with_counts=True)
+
+
+@app.post("/app/api/community")
+def cm_post(body: CmPostIn, a=Depends(cm_customer)):
+    try:
+        with _cm(a) as c:
+            return cm.post(c, a, body.body, body.reply_to, body.thread)
+    except psycopg.errors.InsufficientPrivilege:             # the database refused it (muted / not approved) even if the checks above missed it
+        raise HTTPException(403, "You can read the Community, but posting is paused for your account for now")
+
+
+@app.delete("/app/api/community/{mid}")
+def cm_delete(mid: int, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.remove(c, a, mid)
+
+
+@app.put("/app/api/community/{mid}/react")
+def cm_react(mid: int, body: CmReactIn, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.react(c, a, mid, body.emoji)
+
+
+@app.post("/app/api/community/{mid}/report")
+def cm_report(mid: int, body: CmReportIn, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.report(c, a, mid, body.reason)
+
+
+@app.post("/app/api/community/read")
+def cm_read(body: CmReadIn, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.read(c, a, body.last_id, body.thread)
+
+
+@app.get("/app/api/community/unread")
+def cm_unread(a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.unread(c, a)
+
+
+@app.post("/app/api/community/rules")
+def cm_rules(a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.rules_ok(c, a)
+
+
+@app.get("/app/api/community/images/{iid}")
+def cm_image(iid: int, a=Depends(cm_customer)):
+    with _cm(a) as c:
+        return cm.image(c, a, iid)

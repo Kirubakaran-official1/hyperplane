@@ -23,13 +23,13 @@ import re
 import shutil
 import time as _time
 from collections import defaultdict, deque
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import access_admin
 from . import adoption
@@ -37,6 +37,7 @@ from . import activity as act
 from . import config
 from . import etf
 from . import helpdesk as hd
+from . import community
 from . import mailer
 from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
                  init_db, pool, put_settings, set_auto_approve, set_history_enabled, set_meta, get_history_changed)
@@ -447,6 +448,281 @@ def _check_pw(pw):
 
 class SignupModeIn(BaseModel):
     auto_approve: bool
+
+
+# ── Announcements (round 19): the owner's message to every customer, or to one role — an "Update" in each customer's inbox ──
+class AnnounceIn(BaseModel):
+    title: str = Field(..., max_length=120)
+    text: str = Field(..., max_length=4000)
+    role_id: int | None = None
+
+
+ANN_CTRL = hd.CTRL                       # the helpdesk's control / hidden-character filter
+
+
+@app.post("/api/admin/announce")
+def announce(body: AnnounceIn, user=Depends(admin_user)):
+    title = " ".join(ANN_CTRL.sub("", body.title).split())
+    text = ANN_CTRL.sub("", body.text).strip()
+    if len(title) < 3 or len(text) < 3:
+        raise HTTPException(422, "Write a title and a message (at least 3 characters each)")
+    batch = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    with pool.connection() as c:
+        who = ("SELECT c.id FROM customers c WHERE c.status = 'approved'" if body.role_id is None else
+               "SELECT c.id FROM customers c JOIN customer_roles cr ON cr.customer_id = c.id WHERE c.status = 'approved' AND cr.role_id = %(r)s")
+        n = c.execute(f"INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body, app, type) "
+                      f"SELECT x.id, 'announce', NULL, %(t)s, %(b)s, 'hyperplane', 'info' FROM ({who}) x",
+                      {"t": title, "b": json.dumps({"text": text, "batch": batch, "by": "Hyperplane"}), "r": body.role_id}).rowcount
+    return {"sent": n, "batch": batch}
+
+
+@app.get("/api/admin/announce")
+def announcements(user=Depends(admin_user)):
+    with pool.connection() as c:
+        rows = c.execute("SELECT body->>'batch' AS batch, min(title) AS title, min(body->>'text') AS text, min(created_at) AS at, count(*) AS sent, "
+                         "count(read_at) AS seen FROM customer_notifications WHERE kind = 'announce' GROUP BY body->>'batch' "
+                         "ORDER BY min(created_at) DESC LIMIT 50").fetchall()
+    return [{**r, "at": r["at"].isoformat()} for r in rows]
+
+
+@app.delete("/api/admin/announce/{batch}")
+def announce_delete(batch: str, user=Depends(admin_user)):
+    if not re.fullmatch(r"\d{20}", batch):
+        raise HTTPException(422, "Unknown announcement")
+    with pool.connection() as c:
+        n = c.execute("DELETE FROM customer_notifications WHERE kind = 'announce' AND body->>'batch' = %s", (batch,)).rowcount
+    return {"deleted": n}
+
+
+# ─────────────────────────────── Hyperplane Community — the admin side (round 19, community.py) ───────────────────────────────
+def cm_admin(request: Request, u=Depends(admin_user)):
+    community.guard_ip(request.client.host if request.client else "?")
+    return {"kind": "admin", "cid": None, "name": u["name"], "staff": True}
+
+
+class CmPostIn(BaseModel):
+    body: list
+    reply_to: int | None = None
+    thread: int | None = None
+
+
+class CmIdsIn(BaseModel):
+    ids: list[int] = []
+
+
+class CmReactIn(BaseModel):
+    emoji: str = Field(..., max_length=8)
+
+
+class CmPinIn(BaseModel):
+    on: bool = True
+
+
+class CmMuteIn(BaseModel):
+    customer_id: int
+    hours: int | None = None            # None = until lifted · 0 = lift now
+    reason: str = Field("", max_length=200)
+
+
+@app.get("/api/admin/community")
+def adm_cm_list(after: int | None = None, before: int | None = None, thread: int | None = None, dfrom: str | None = None, dto: str | None = None,
+                cursor: str | None = Query(None, max_length=60), view: str | None = None, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        out = community.listing(c, a, after, before, thread, dfrom, view, dto, cursor)
+        out["reports"] = c.execute("SELECT count(*) AS n FROM cm_reports WHERE resolved_at IS NULL").fetchone()["n"]
+        return out
+
+
+@app.post("/api/admin/community/refresh")
+def adm_cm_refresh(body: CmIdsIn, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        out = community.refresh(c, a, body.ids, with_counts=True)
+        out["reports"] = c.execute("SELECT count(*) AS n FROM cm_reports WHERE resolved_at IS NULL").fetchone()["n"]
+        return out
+
+
+@app.post("/api/admin/community")
+def adm_cm_post(body: CmPostIn, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        return community.post(c, a, body.body, body.reply_to, body.thread)
+
+
+@app.delete("/api/admin/community/{mid}")
+def adm_cm_delete(mid: int, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        return community.remove(c, a, mid)
+
+
+@app.put("/api/admin/community/{mid}/react")
+def adm_cm_react(mid: int, body: CmReactIn, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        return community.react(c, a, mid, body.emoji)
+
+
+@app.put("/api/admin/community/{mid}/pin")
+def adm_cm_pin(mid: int, body: CmPinIn, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        n = c.execute("UPDATE cm_messages SET pinned_at = CASE WHEN %s THEN now() END, pinned_by = CASE WHEN %s THEN %s END "
+                      "WHERE id = %s AND thread_id IS NULL AND deleted_at IS NULL", (body.on, body.on, a["name"], mid)).rowcount
+        if not n:
+            raise HTTPException(404, "Only a message in the room can be pinned")
+        return community.refresh(c, a, [mid])["items"][0]
+
+
+@app.get("/api/admin/community/unread")
+def adm_cm_unread(a=Depends(cm_admin)):
+    with pool.connection() as c:
+        out = community.unread(c, a, get_meta("cm_admin_read", 0))
+        out["reports"] = c.execute("SELECT count(*) AS n FROM cm_reports WHERE resolved_at IS NULL").fetchone()["n"]
+        return out
+
+
+@app.post("/api/admin/community/read")
+def adm_cm_read(body: CmIdsIn, a=Depends(cm_admin)):
+    if body.ids:
+        set_meta("cm_admin_read", max(int(get_meta("cm_admin_read", 0) or 0), max(body.ids)))
+    return {"ok": True}
+
+
+@app.get("/api/admin/community/reports")
+def adm_cm_reports(a=Depends(cm_admin)):
+    with pool.connection() as c:
+        rows = c.execute("SELECT r.id, r.message_id, r.reason, r.created_at, cu.name AS by_name, cu.email AS by_email "
+                         "FROM cm_reports r JOIN customers cu ON cu.id = r.customer_id WHERE r.resolved_at IS NULL ORDER BY r.id DESC LIMIT 200").fetchall()
+        msgs = {m["id"]: m for m in community.refresh(c, a, list({r["message_id"] for r in rows}))["items"]}
+    return [{"id": r["id"], "reason": r["reason"], "at": r["created_at"].isoformat(), "by": r["by_name"], "by_email": r["by_email"],
+             "message": msgs.get(r["message_id"])} for r in rows]
+
+
+@app.post("/api/admin/community/reports/{rid}/resolve")
+def adm_cm_resolve(rid: int, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        c.execute("UPDATE cm_reports SET resolved_at = now(), resolved_by = %s WHERE id = %s", (a["name"], rid))
+    return {"ok": True}
+
+
+@app.get("/api/admin/community/members")
+def adm_cm_members(a=Depends(cm_admin)):
+    with pool.connection() as c:
+        rows = c.execute("SELECT m.customer_id, cu.name, cu.email, m.muted_until, m.mute_reason FROM cm_members m JOIN customers cu ON cu.id = m.customer_id "
+                         "WHERE m.muted_until > now() ORDER BY m.muted_until").fetchall()
+    return [{**r, "muted_until": r["muted_until"].isoformat()} for r in rows]
+
+
+@app.post("/api/admin/community/mute")
+def adm_cm_mute(body: CmMuteIn, a=Depends(cm_admin)):
+    reason = " ".join(hd.CTRL.sub("", body.reason).split())[:200] or None
+    with pool.connection() as c:
+        if not c.execute("SELECT 1 FROM customers WHERE id = %s", (body.customer_id,)).fetchone():
+            raise HTTPException(404, "Customer not found")
+        c.execute("INSERT INTO cm_members (customer_id, last_read_id) VALUES (%s, 0) ON CONFLICT DO NOTHING", (body.customer_id,))
+        if body.hours == 0:
+            c.execute("UPDATE cm_members SET muted_until = NULL, mute_reason = NULL WHERE customer_id = %s", (body.customer_id,))
+        elif body.hours is None:
+            c.execute("UPDATE cm_members SET muted_until = '9999-12-31', mute_reason = %s WHERE customer_id = %s", (reason, body.customer_id))
+        else:
+            c.execute("UPDATE cm_members SET muted_until = now() + %s * interval '1 hour', mute_reason = %s WHERE customer_id = %s",
+                      (max(1, min(body.hours, 24 * 365)), reason, body.customer_id))
+        r = c.execute("SELECT muted_until FROM cm_members WHERE customer_id = %s", (body.customer_id,)).fetchone()
+    return {"customer_id": body.customer_id, "muted_until": r["muted_until"] and r["muted_until"].isoformat()}
+
+
+@app.put("/api/admin/community/{mid}/fav")
+def adm_cm_fav(mid: int, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        return community.fav(c, a, mid)
+
+
+# member tags (round 19b): the owner's labels beside a name in the Community — created and given here only
+TAG_COLORS = ("#2563eb", "#7c3aed", "#db2777", "#ea580c", "#0d9488", "#0891b2", "#b45309", "#64748b")
+
+
+class CmTagIn(BaseModel):
+    name: str = Field(..., max_length=24)
+    color: str = Field("#2563eb", max_length=7)
+
+
+class CmTagsIn(BaseModel):
+    tag_ids: list[int] = []
+
+
+def _tag_clean(body):
+    name = " ".join(hd.CTRL.sub("", body.name).split())
+    if not 2 <= len(name) <= 24:
+        raise HTTPException(422, "A tag name is 2–24 characters")
+    if body.color not in TAG_COLORS:
+        raise HTTPException(422, "Pick one of the colours shown")
+    return name, body.color
+
+
+@app.get("/api/admin/community/tags")
+def adm_cm_tags(a=Depends(cm_admin)):
+    with pool.connection() as c:
+        rows = c.execute("SELECT t.id, t.name, t.color, count(mt.customer_id) AS members FROM cm_tags t LEFT JOIN cm_member_tags mt ON mt.tag_id = t.id "
+                         "GROUP BY t.id ORDER BY t.name").fetchall()
+    return {"tags": rows, "colors": TAG_COLORS}
+
+
+@app.post("/api/admin/community/tags")
+def adm_cm_tag_add(body: CmTagIn, a=Depends(cm_admin)):
+    name, color = _tag_clean(body)
+    with pool.connection() as c:
+        if c.execute("SELECT count(*) AS n FROM cm_tags").fetchone()["n"] >= 50:
+            raise HTTPException(422, "Up to 50 tags")
+        if c.execute("SELECT 1 FROM cm_tags WHERE lower(name) = lower(%s)", (name,)).fetchone():
+            raise HTTPException(422, "A tag with that name already exists")
+        return c.execute("INSERT INTO cm_tags (name, color) VALUES (%s, %s) RETURNING id, name, color", (name, color)).fetchone()
+
+
+@app.put("/api/admin/community/tags/{tid}")
+def adm_cm_tag_edit(tid: int, body: CmTagIn, a=Depends(cm_admin)):
+    name, color = _tag_clean(body)
+    with pool.connection() as c:
+        if c.execute("SELECT 1 FROM cm_tags WHERE lower(name) = lower(%s) AND id <> %s", (name, tid)).fetchone():
+            raise HTTPException(422, "A tag with that name already exists")
+        r = c.execute("UPDATE cm_tags SET name = %s, color = %s WHERE id = %s RETURNING id, name, color", (name, color, tid)).fetchone()
+    if not r:
+        raise HTTPException(404, "Tag not found")
+    return r
+
+
+@app.delete("/api/admin/community/tags/{tid}")
+def adm_cm_tag_del(tid: int, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        c.execute("DELETE FROM cm_tags WHERE id = %s", (tid,))
+    return {"ok": True}
+
+
+@app.get("/api/admin/community/people")
+def adm_cm_people(q: str = "", mention: int = 0, a=Depends(cm_admin)):
+    """mention=1: the @mention picker (the Community admins); otherwise approved customers to give tags to (name, email, tags)"""
+    with pool.connection() as c:
+        if mention:
+            return community.people(c, a, q)
+        q = " ".join(hd.CTRL.sub("", q).split())[:60]
+        rows = c.execute("SELECT c.id, c.name, c.email, EXISTS (SELECT 1 FROM cm_messages m WHERE m.customer_id = c.id) AS posted, "
+                         "COALESCE(array_agg(mt.tag_id) FILTER (WHERE mt.tag_id IS NOT NULL), '{}') AS tag_ids FROM customers c "
+                         "LEFT JOIN cm_member_tags mt ON mt.customer_id = c.id WHERE c.status = 'approved' AND (%s = '' OR c.name ILIKE %s OR c.email ILIKE %s) "
+                         "GROUP BY c.id ORDER BY posted DESC, c.name LIMIT 60", (q, f"%{q}%", f"%{q}%")).fetchall()
+    return rows
+
+
+@app.put("/api/admin/community/people/{cid}/tags")
+def adm_cm_people_tags(cid: int, body: CmTagsIn, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        if not c.execute("SELECT 1 FROM customers WHERE id = %s", (cid,)).fetchone():
+            raise HTTPException(404, "Customer not found")
+        ids = [r["id"] for r in c.execute("SELECT id FROM cm_tags WHERE id = ANY(%s)", (body.tag_ids[:20],)).fetchall()]
+        c.execute("DELETE FROM cm_member_tags WHERE customer_id = %s", (cid,))
+        for t in ids:
+            c.execute("INSERT INTO cm_member_tags (customer_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (cid, t))
+    return {"customer_id": cid, "tag_ids": ids}
+
+
+@app.get("/api/admin/community/images/{iid}")
+def adm_cm_image(iid: int, a=Depends(cm_admin)):
+    with pool.connection() as c:
+        return community.image(c, a, iid)
 
 
 @app.get("/api/admin/signup-mode")
@@ -1168,7 +1444,7 @@ def hd_image(iid: int, a=Depends(hd_actor)):
 
 @app.middleware("http")
 async def _helpdesk_body_cap(request: Request, call_next):
-    if request.url.path.startswith("/api/helpdesk"):          # Caddy caps it too; images make messages up to ~5 MB
+    if request.url.path.startswith(("/api/helpdesk", "/api/admin/community")):     # Caddy caps it too; images make messages up to ~5 MB
         try:
             too_big = int(request.headers.get("content-length") or 0) > 8_500_000
         except ValueError:

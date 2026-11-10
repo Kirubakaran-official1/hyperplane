@@ -84,8 +84,6 @@ input:focus,select:focus{outline:none;border-color:var(--acc);box-shadow:var(--d
 .dial-it b{font:600 12px var(--mono);color:var(--acc)}
 .wa-in input{font:600 14px var(--mono);letter-spacing:1px}
 .wa-err{font-size:11px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--mixed)}
-.wa-note{font-size:11px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--t2);line-height:1.45;padding:7px 9px;border-radius:6px;background:rgba(37,211,102,.07);border:1px solid rgba(37,211,102,.25)}
-.wa-note b{color:#25d366;font-weight:700}
 .feats{list-style:none;padding:0;margin:6px 0 0;display:flex;flex-direction:column;gap:13px;max-width:480px}
 .feats li{display:flex;gap:12px}
 .feats b{display:block;font:600 14px/20px var(--sans);color:var(--t1)}

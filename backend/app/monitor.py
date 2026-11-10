@@ -17,7 +17,7 @@ Only NEW changes notify (the last flags are kept in state / alert_state), so a w
 import json
 from datetime import datetime, timedelta, timezone
 
-from . import builder, sip
+from . import builder, inbox, sip
 from .db import pool
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -146,9 +146,13 @@ def run_alerts(data, etf_data):
             word = "quarter" if inp.get("freq") == "quarter" else "month"
             notes.append((f"{p['name']}: this {word}'s order is ready", {"order": True, "total": res["total"]}))
         with pool.connection() as c:
+            # inbox: a stock of an open action that is no longer flagged has recovered — it settles by itself (inbox.settle)
+            inbox.settle(c, p["customer_id"], p["kind"], p["id"], {s_: {"how": "recovered"} for s_ in prev if s_ not in flags})
             for title, body in notes:
-                c.execute("INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body) VALUES (%s, %s, %s, %s, %s)",
-                          (p["customer_id"], p["kind"], p["id"], title, json.dumps(body)))
+                if body.get("order"):
+                    inbox.close_orders(c, p["customer_id"], p["kind"], p["id"])
+                c.execute("INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body, app, type) VALUES (%s, %s, %s, %s, %s, %s, 'action')",
+                          (p["customer_id"], p["kind"], p["id"], title, json.dumps(body), inbox.app_of(p["kind"])))
                 made += 1
             c.execute("UPDATE customer_sips SET state = %s WHERE id = %s",
                       (json.dumps({"flags": flags, "period": period, "checked": now.isoformat()}), p["id"]))
@@ -157,9 +161,10 @@ def run_alerts(data, etf_data):
         flags, alts = portfolio_flags(data, list(r["symbols"]))
         fresh = [s for s in flags if s not in prev]
         with pool.connection() as c:
+            inbox.settle(c, r["customer_id"], "portfolio", None, {s: {"how": "recovered"} for s in prev if s not in flags})
             if fresh:
                 items = [{"s": s, "why": flags[s], "alt": alts.get(s)} for s in fresh]
-                c.execute("INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body) VALUES (%s, 'portfolio', NULL, %s, %s)",
+                c.execute("INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body, app, type) VALUES (%s, 'portfolio', NULL, %s, %s, 'portfolio', 'action')",
                           (r["customer_id"], f"Your portfolio: {len(items)} stock{'s' if len(items) > 1 else ''} need{'s' if len(items) == 1 else ''} a look",
                            json.dumps({"items": items})))
                 made += 1
