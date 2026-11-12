@@ -1394,7 +1394,26 @@ def alternatives(s: str, exclude: str = "", c=Depends(need("portfolio", "builder
     skip = {x for x in exclude.split(",") if PF_SYM.match(x)} | {s}
     view = _latest_view(today=True)
     cur = next((x for x in view.get("stocks", []) if x["s"] == s), None)
-    return {"s": s, "cur": cur and {**monitor.size_of(cur), "n": cur.get("n"), "sec": cur.get("sec"), "ind": cur.get("ind"), "st": monitor.lt_strength(cur)}, "items": monitor.alternatives(view, s, skip, 3, up=3)}
+    return {"s": s, "cur": cur and {**monitor.size_of(cur), "n": cur.get("n"), "sec": cur.get("sec"), "ind": cur.get("ind"), "st": monitor.lt_strength(cur), "rel": cur.get("h")}, "items": monitor.alternatives(view, s, skip, 3, up=3)}
+
+
+@app.get("/app/api/stock/{sym}")
+def stock_insight(sym: str, c=Depends(need("portfolio", "builder", "msip"))):
+    """one stock for the Stock insight pop-up (round 19i, owner 2026-11-12: "clicking a swap recommendation — the well detailed data like the
+    AI summary, as a pop-up, with the option to swap"): the stock's row of today's view plus only the sector / industry rows (Q and Y) the
+    research summary reads — the same labels-only data the Analyser shows, nothing more"""
+    _rate("stock-insight", str(c["id"]), 60, 60)
+    sym = sym.strip().upper()
+    if not PF_SYM.match(sym):
+        raise HTTPException(422, "Unknown stock")
+    v = _latest_view(today=True)
+    s = next((x for x in v.get("stocks", []) if x["s"] == sym), None)
+    if not s:
+        raise HTTPException(404, "This stock is not in today's data")
+    pick = lambda by, f: {tf: [r for r in ((by or {}).get(tf) or []) if f(r)] for tf in ("Q", "Y")}
+    return {"stock": s, "rd": v.get("rd"), "as_of": v.get("as_of"), **monitor.size_of(s),
+            "sectors": pick(v.get("sectors"), lambda r: r.get("k") == s.get("sec")),
+            "industries": pick(v.get("industries"), lambda r: r.get("k") == s.get("ind") and r.get("sec") == s.get("sec"))}
 
 
 def _watch_syms(r):

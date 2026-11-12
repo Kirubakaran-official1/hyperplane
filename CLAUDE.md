@@ -2316,3 +2316,30 @@ Owner's words:
 - **ETF "Best in segment" (same day, "not working properly while clicking"):**
   - Probed with real mouse clicks at 1700, 1280 and 1024 px; nothing covers the button.
   - It toggles 302 ETFs ↔ 66 markets, including with the Up filter (29 → 11) and a search ("gold": 25 → 1), and a row still opens its card. No fault was reproduced locally; waiting for the owner's exact steps.
+
+### Round 19i — tracker swaps, "Needs a swap" filter, Stock insight pop-up (owner 2026-11-12)
+Owner's words: "the swap was not properly happening in My portfolios inside the table"; "a filter to show only the swap stocks"; "clicking a new stock in the swap recommendation — the well-detailed data like the AI summary as a pop-up, with the option to swap".
+
+**Tracker swap bug:**
+- A second swap on the same day replaces that day's version (`portal._new_version`), so `changes` stayed the same.
+- The tracking reload (`useEffect` on `it.changes`) never ran, and the table kept the old stock with its Swap button.
+- Fix: a `rev` counter, bumped after each swap, is added to the reload dependencies.
+- `sections_test` does two swaps on the same day and checks the table both times.
+
+**Filter:**
+- Holdings bar: **All · N / Needs a swap · N** (`#svp-f-all` / `#svp-f-swap`, `.tk-filt`).
+- It shows only the regime-down stocks. It falls back to All once none are left.
+
+**Stock insight** (`frontend/app/src/stock-insight.jsx`, lazy-loaded from `swap-ui.jsx`, rendered with a portal):
+- A click on any stock in any SwapPanel opens it: the Tracker's Swap pop-up, the AI watch, the Analyser watch, the Analyser card's Better alternative, and the Inbox swap.
+- It replaces the inline details row of round 18c.
+- Contents:
+  - "Why it is offered";
+  - **the Analyser's holding card** for that stock (category, chips, sector / industry, StrengthTiles and the Hyperplane AI research summary from `portfolio-engine.analyseHolding`);
+  - a new-vs-now table (strength with its difference, price, size, reliability, sector › industry);
+  - **Swap X → Y** (`#si-swap`, which calls the panel's `onPick`), Back to the options, and the owner-only Full detail view.
+- **Server:** `GET /app/api/stock/{sym}` (`need("portfolio","builder","msip")`, 60 a minute) returns the stock row of today's view, its size, and only the Q/Y sector and industry rows the summary reads.
+- `/app/api/alternatives` `cur` now also carries `rel`.
+- Hooks: `#si-pop[data-detail-of]`, `#si-card`, `#si-why`, `#si-cmp`, `#si-reason`, `#si-x`.
+
+**Tests:** `sections_test` now picks its stocks from today's data (regime-down stocks with and without a same-industry option) instead of fixed names, which broke after a new publish.

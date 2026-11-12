@@ -211,6 +211,9 @@ addCss("saved", `
 .aw-chips span.bad{border-color:var(--short);color:var(--short);background:var(--shortd)}.aw-chips span.ok{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--b1))}
 @keyframes awTick{from{opacity:0;transform:translateY(4px) scale(.95)}to{opacity:1;transform:none}}
 .aw-it{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;border:1px solid var(--b1);background:var(--s1);animation:awTick .35s both}
+.tk-filt{display:inline-flex;padding:3px;gap:3px;border:1px solid var(--b2);border-radius:999px;background:var(--s2)}
+.tk-filt button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:0;border-radius:999px;background:none;color:var(--t2);font:600 12.5px var(--sans);cursor:pointer}
+.tk-filt button.on{background:var(--s1);color:var(--t1);box-shadow:0 1px 3px rgba(0,0,0,.12)}.tk-filt button:last-child.on{color:var(--short)}.tk-filt button:disabled{opacity:.45;cursor:default}
 .aw-ih{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;padding:10px 14px;border-radius:10px;background:var(--s2);box-shadow:inset 3px 0 0 var(--short)}
 .aw-ih .aw-l{font:600 11px var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--t3)}.aw-ih .sym{font:800 16px var(--sans);color:var(--t1)}
 .aw-ih small{color:var(--t2);font-size:12.5px}.aw-ih .aw-k{margin-left:auto;display:flex;gap:14px;font-size:12px;color:var(--t3)}.aw-ih .aw-k b{color:var(--t1);font-feature-settings:"tnum"}
@@ -494,6 +497,9 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
   const [it, setIt] = useState(item), [ck, setCk] = useState(null), [busy, setBusy] = useState(false), [msg, setMsg] = useState("");
   const [swap, setSwap] = useState(null), [confirmDel, setConfirmDel] = useState(false);
   const [shut, setShut] = useState(() => new Set()), [anim, setAnim] = useState({}), [toast, showToast] = useToast();
+  // round 19i: rev reloads the tracking after every swap (a second swap on the same day replaces that day's version, so "changes" stays
+  // the same and the table used to keep the old stock); onlySwap = the "Needs a swap" filter of the holdings table
+  const [rev, setRev] = useState(0), [onlySwap, setOnlySwap] = useState(false);
   const [ren, setRen] = useState(null);
   const load = () => {
     const q = new URLSearchParams(); if (sym) q.set("sym", sym); if (isSip) q.set("stepup", step);
@@ -505,7 +511,7 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
     }
     api(`/app/api/saved/${it.id}/track?${q}`).then(r => { setT(r); setErr(""); }).catch(e => { if (e.status === 401) onOut(e.message); else setErr(e.message); });
   };
-  useEffect(load, [sym, step, it.id, it.changes]);
+  useEffect(load, [sym, step, it.id, it.changes, rev]);
   const check = () => { setCk({ busy: true }); api(`/app/api/saved/${it.id}/check`).then(setCk).catch(e => setCk({ err: e.message })); };
   const patch = j => api(`/app/api/saved/${it.id}`, { method: "PATCH", json: j }).then(r => { setIt(r); onChanged(); }).catch(e => setMsg(e.message));
   const apply = () => { setBusy(true); api(`/app/api/saved/${it.id}/apply`, { method: "POST" })
@@ -518,7 +524,7 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
     setSwap(o => ({ ...o, busy: alt.s }));
     swapCall(it, s, alt)
       .then(r => { setSwap(null); setAnim({ out: s }); setSym("");
-        setTimeout(() => { setIt(r); setAnim({ in: alt.s }); showToast(`${s} → ${alt.s} swapped`); onChanged(); setTimeout(() => setAnim({}), 2000); }, 380); })
+        setTimeout(() => { setIt(r); setRev(n => n + 1); setAnim({ in: alt.s }); showToast(`${s} → ${alt.s} swapped`); onChanged(); setTimeout(() => setAnim({}), 2000); }, 380); })
       .catch(e => setSwap(o => ({ ...o, busy: null, err: e.message })));
   };
   const del = () => api(`/app/api/saved/${it.id}`, { method: "DELETE" }).then(() => { onChanged(); onBack(); }).catch(e => setMsg(e.message));
@@ -536,8 +542,9 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
   const held = t ? t.holdings.filter(h => h.held).sort((a, b) => b.value - a.value) : [];
   const gone = t ? t.holdings.filter(h => !h.held) : [];
   const flagged = held.filter(h => h.flag && h.kind === "stock");
+  const shownHeld = onlySwap && flagged.length ? flagged : held;
   const groupsOf = ["Large", "Mid", "Small", "ETF", "Other"].map(k => {
-    const rows = held.filter(h => (h.grp || "Other") === k);
+    const rows = shownHeld.filter(h => (h.grp || "Other") === k);
     return { k, rows, cost: rows.reduce((a, h) => a + h.cost, 0), value: rows.reduce((a, h) => a + h.value, 0), gain: rows.reduce((a, h) => a + h.gain, 0) };
   }).filter(g => g.rows.length);
   const gTot = t ? t.groups.reduce((s, g) => s + g.value, 0) || 1 : 1;
@@ -624,6 +631,10 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
 
         <section className="px-card tk-card" id="svp-holdings" data-sec>
           <div className="hp-tbar"><h3>Holdings<small>{held.length} · by market cap and ETFs{flagged.length ? ` · ${flagged.length} need a swap` : ""}</small></h3>
+            {!pub && <div className="tk-filt" role="group" aria-label="Show">
+              <button type="button" className={!onlySwap ? "on" : ""} onClick={() => setOnlySwap(false)} id="svp-f-all">All · {held.length}</button>
+              <button type="button" className={onlySwap ? "on" : ""} onClick={() => setOnlySwap(true)} disabled={!flagged.length} id="svp-f-swap"
+                title={flagged.length ? "Only the stocks whose long-term regime turned down" : "No stock needs a swap"}><Icon name="swap" size={13}/> Needs a swap · {flagged.length}</button></div>}
             <button type="button" className="hp-gall" onClick={() => setShut(o => o.size ? new Set() : new Set(groupsOf.map(g => g.k)))} id="svp-gall">{shut.size ? "Show all groups" : "Collapse all groups"}</button></div>
           <div className="hp-tw"><table className="hp-t" id="svp-table">
             <thead><tr><th>Instrument</th><th className="num">Qty.</th><th className="num hm">Avg. cost</th><th className="num">LTP</th><th className="num hm">Invested</th>
