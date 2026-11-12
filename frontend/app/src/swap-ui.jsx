@@ -6,11 +6,10 @@
 //   2. how we choose (one short line) and, when the industry has no peer, a clear note
 //   3. a 2×2 grid of tables — Same industry · Same sector / Better alternative · Upgrade — in the app's table style (.hp-t), theme colours
 //      only; one column on narrow screens. An empty table says why, in one line.
-//   4. a click on a stock opens the Stock insight pop-up (round 19i): the AI research summary card, why it is offered, a side-by-side
-//      with the stock it replaces, and Swap.
-import React, { Suspense, lazy, useContext, useState } from "react";
-import { createPortal } from "react-dom";
-import { DetailCtx, Icon, addCss, loadChunk, swapSections } from "./core.jsx";
+//   4. a click on a stock shows its Stock insight IN PLACE of the options (round 19i / 19j — one pop-up, never a pop-up on a pop-up): the AI
+//      research summary card, why it is offered, a side-by-side with the stock it replaces, Swap, and "Back to the options".
+import React, { Suspense, lazy, useState } from "react";
+import { Icon, addCss, loadChunk, swapSections } from "./core.jsx";
 
 // round 19i: a click on a stock opens the Stock insight pop-up (the Analyser's AI summary card + a side-by-side + Swap), loaded on first use
 const StockInsight = lazy(() => loadChunk(() => import("./stock-insight.jsx")));
@@ -61,12 +60,13 @@ const diff = (v, w, word) => v == null || w == null ? null : v === w ? ["Same as
 export function SwapPanel({ items, cur = {}, onPick, busy, amount, per, idp = "swp", app = "portfolio", rootAttrs = {} }) {
   const { sections } = swapSections(items, cur);
   const [open, setOpen] = useState(null);                        // the stock whose insight pop-up is open
-  const det = useContext(DetailCtx);                             // the owner-level detail view (roles with "<app>:detail")
   const first = items[0] && items[0].s;
   const buys = a => { if (!amount || !a.p) return null; if (per) return `${inr(amount)} ${per}`; const n = Math.max(1, Math.floor(amount / a.p)); return `${n.toLocaleString("en-IN")} share${n === 1 ? "" : "s"} · ${inr(n * a.p)}`; };
   return (
     <div className="swp" data-swap-sections {...rootAttrs}>
-      <div className="swp-grid">
+      {open && <Suspense fallback={<div className="swp-empty">Opening {open.s}…</div>}><StockInsight a={open} cur={cur} reason={why(open, cur)} busy={busy}
+        onClose={() => setOpen(null)} onSwap={x => onPick(x)}/></Suspense>}
+      <div className="swp-grid" style={open ? { display: "none" } : undefined}>
         {sections.map(g => (
           <section key={g.k} id={`${idp}-sec-${g.k}`} className={`swp-sec ${g.k} ${g.items.length ? "" : "empty"}`} data-section={g.k}>
             <header className="swp-sh"><div className="t"><b>{g.title}</b><small>{g.sub}</small></div><span className="c" title={`${g.items.length} option${g.items.length === 1 ? "" : "s"}`}>{g.items.length}</span></header>
@@ -85,7 +85,6 @@ export function SwapPanel({ items, cur = {}, onPick, busy, amount, per, idp = "s
             </table> : <div className="swp-empty" data-empty={g.k}><Icon name="info" size={15}/><span>{g.empty}</span></div>}
           </section>))}
       </div>
-      {open && createPortal(<Suspense fallback={null}><StockInsight a={open} cur={cur} reason={why(open, cur)} busy={busy} onClose={() => setOpen(null)}
-        onSwap={x => { setOpen(null); onPick(x); }} onFullDetail={det && det.can(app) ? () => det.open(open.s, app) : null}/></Suspense>, document.body)}
+
     </div>);
 }

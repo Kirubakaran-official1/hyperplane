@@ -2343,3 +2343,14 @@ Owner's words: "the swap was not properly happening in My portfolios inside the 
 - Hooks: `#si-pop[data-detail-of]`, `#si-card`, `#si-why`, `#si-cmp`, `#si-reason`, `#si-x`.
 
 **Tests:** `sections_test` now picks its stocks from today's data (regime-down stocks with and without a same-industry option) instead of fixed names, which broke after a new publish.
+
+### Round 19j — Stock insight inside the same window; no detail view on swap screens (owner 2026-11-12)
+Owner's words: "remove the detail view on swap — it is only for the manager — is this access restricted?"; "I don't like the pop-up on a pop-up — handle it within one pop-up"; "some issue on the pop-up".
+- **One window:** `StockInsight` is no longer an overlay (no portal, no `.si-ov`).
+  - `SwapPanel` shows it **in place of the options grid** (the grid is hidden with an inline `display:none`; `hidden` loses to `.swp-grid{display:grid}`).
+  - "Back to the options" (`#si-back` / `#si-back2`) returns. Swap sits at the top (`#si-swap-top`) and the bottom (`#si-swap`).
+  - **Esc** is caught in the capture phase and goes back to the options, without closing the outer pop-up. Before, one Esc closed both windows.
+  - It scrolls into view when opened.
+- **No Full detail view on any swap screen.** It was only ever shown to roles holding `<app>:detail` (DetailCtx), and the data route `/app/api/detail` refuses everyone else server-side.
+  - `community_test` checks a plain customer gets 403 there, and that `/app/api/stock/{sym}` returns only {stock, rd, as_of, p, mcap, cap, sectors, industries}.
+  - `sections_test` checks no Full detail view appears on the swap screens, even for a Customer Admin.
