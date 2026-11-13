@@ -23,6 +23,7 @@ const tone = v => v == null ? "" : v < 0 ? "dn" : v >= 24 ? "up" : "";
 
 addCss("swp", `
 .swp{display:flex;flex-direction:column;gap:12px;min-width:0;text-align:left;container-type:inline-size}
+.swp-curbar{display:flex;justify-content:flex-end;margin-bottom:-4px}.swp-curbar button{display:inline-flex;align-items:center;gap:4px;padding:2px 4px;border:0;background:none;color:var(--acc);font:600 12.5px var(--sans);cursor:pointer}.swp-curbar button:hover{text-decoration:underline}
 .swp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .swp-sec{display:flex;flex-direction:column;min-width:0;padding:0!important;margin:0!important;text-align:left!important;border:1px solid var(--b1);border-radius:12px;background:var(--s1);overflow:hidden}
 .swp-sh{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b1);background:var(--s2)}
@@ -64,8 +65,11 @@ export function SwapPanel({ items, cur = {}, onPick, busy, amount, per, idp = "s
   const buys = a => { if (!amount || !a.p) return null; if (per) return `${inr(amount)} ${per}`; const n = Math.max(1, Math.floor(amount / a.p)); return `${n.toLocaleString("en-IN")} share${n === 1 ? "" : "s"} · ${inr(n * a.p)}`; };
   return (
     <div className="swp" data-swap-sections {...rootAttrs}>
-      {open && <Suspense fallback={<div className="swp-empty">Opening {open.s}…</div>}><StockInsight a={open} cur={cur} reason={why(open, cur)} busy={busy}
-        onClose={() => setOpen(null)} onSwap={x => onPick(x)}/></Suspense>}
+      {/* round 19l: the stock being replaced can be looked at too (its AI summary; the detail view for the Customer Admin) — same window */}
+      {!open && cur.s && <div className="swp-curbar"><button type="button" onClick={() => setOpen({ ...cur, self: true })} data-curpeek={cur.s}>See {cur.s} in detail <Icon name="chevron" size={12}/></button></div>}
+      {open && <Suspense fallback={<div className="swp-empty">Opening {open.s}…</div>}>{open.self
+        ? <StockInsight a={open} app={app} onClose={() => setOpen(null)}/>
+        : <StockInsight a={open} cur={cur} reason={why(open, cur)} busy={busy} app={app} onClose={() => setOpen(null)} onSwap={x => onPick(x)}/>}</Suspense>}
       <div className="swp-grid" style={open ? { display: "none" } : undefined}>
         {sections.map(g => (
           <section key={g.k} id={`${idp}-sec-${g.k}`} className={`swp-sec ${g.k} ${g.items.length ? "" : "empty"}`} data-section={g.k}>

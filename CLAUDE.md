@@ -2354,3 +2354,54 @@ Owner's words: "remove the detail view on swap — it is only for the manager �
 - **No Full detail view on any swap screen.** It was only ever shown to roles holding `<app>:detail` (DetailCtx), and the data route `/app/api/detail` refuses everyone else server-side.
   - `community_test` checks a plain customer gets 403 there, and that `/app/api/stock/{sym}` returns only {stock, rd, as_of, p, mcap, cap, sectors, industries}.
   - `sections_test` checks no Full detail view appears on the swap screens, even for a Customer Admin.
+
+### Round 19k — one Inbox item per portfolio · process labels · Detail view for the Customer Admin everywhere, inside the same window (owner 2026-11-13)
+Owner's words:
+- "one portfolio against one inbox message — check every day whether the swap is still needed, merge the new swap, remove the one not needed any more — too many messages";
+- "from which app, which process — investment or SIP";
+- "in the inbox, an option to check the swappable stock data";
+- "for the admin the detail view like the Portfolio Builder's, in all places, only for the Customer Admin, in the RBAC properly";
+- "a swap pop-up, then More details as the admin — a side panel appears along with the pop-up".
+
+**One item per portfolio:**
+- `inbox.sync_changes` is called by `monitor.run_alerts` for every plan and for the Analyser list after each publish:
+  - still flagged → kept, with its reason and suggestion refreshed;
+  - newly flagged → merged in, and the item becomes **unread** again;
+  - no longer flagged and not swapped → removed from the list (`items_done` keeps "recovered" for Activity);
+  - swapped / removed → stays as a history row;
+  - nothing left → the item closes.
+- A new item opens only for symbols flagged for the first time, so a stock the customer marked done does not come back daily.
+- `inbox.consolidate` runs at every start and merges old duplicates into the newest one.
+- New column `updated_at`: the Inbox and the bell sort by it, and the row's age is the last change. The customer service may update it.
+- `sync_changes` is tested directly in `inbox_test` (merge, drop, re-unread, close, reopen).
+
+**Process:**
+- `/app/api/inbox` items carry `plan: {name, kind, code, process}`.
+- `process`: Saved stock list · Your Analyser list · Investment · one-time amount · ETF SIP · monthly / quarterly · Stock SIP · monthly / quarterly.
+- It appears on the row (after the app code) and in the facts (Application · Process · Portfolio · To change · Raised on · Last checked).
+
+**Swappable stock data in the Inbox:** a stock of an item (`[data-ibpeek]`) opens the shared `StockInsight` **in the same middle pane**: "Back to the item", and "Find a swap for X", which opens the swap window.
+
+**RBAC:**
+- The new owner-level permission **`msip:detail`** ("Stock detail view", requires `msip:view`) is granted once to the Customer Admin (`migrate_msip_detail`).
+- `/app/api/detail?app_key=` accepts portfolio · builder · msip. The `stock_detail` RLS already allows any held `action='detail'` permission.
+- The frontend picks the app per portfolio kind: `DETAIL_APP` = analyser / portfolio → portfolio, builder → builder, msip → msip. ETF SIPs have no stock detail.
+
+**Detail view everywhere, never a second layer:**
+- `StockDetail` (apps/detail.jsx) has an `inline` mode: no overlay, no side drawer, no page lock.
+- **StockInsight shows "AI summary | 🔒 Detail view" tabs** only when `DetailCtx.can(app)` is true, and draws the detail view inside the same window. Esc steps back from Detail → AI summary → options, and never closes the outer window.
+- On pages (not windows), the symbol is a `StockLink`, which opens the usual drawer and stays one layer: the My portfolios holdings table, the Analyser watch rows, and the Momentum SIP results (`app="msip"`).
+
+**Tests:**
+- `inbox_test`: the sync, the process label, the peek, the inline detail, and the swap waiting for the save instead of a fixed pause.
+- `sections_test`: the Detail tab inside the swap window, no `.dt-overlay`, and Esc stepping back.
+- `detail_api_test`: 3 detail permissions, and msip:detail giving 200 for the Customer Admin and 403 for a normal customer.
+- **Note:** `access_v2_test` still expects the Momentum SIP in the default Customer role, which the owner removed on 2026-11-11.
+
+### Round 19l — detail view of BOTH stocks while swapping, Customer Admin only, same window (owner 2026-11-13)
+Owner's words: "while swapping I need the detail view of the swappable one too, only for the Customer Admin — normal view first, then a button, in the same pop-up, not a side panel".
+- **StockInsight tabs:** for holders of `<app>:detail`, the tab row is **AI summary | 🔒 Detail view · NEW new | 🔒 Detail view · CUR now** (`#si-tab-ai`, `#si-tab-detail`, `#si-tab-detail-cur`).
+  - Each tab draws `StockDetail inline` for its stock inside the same window. The insight still opens on the AI summary.
+  - Esc: detail tab → AI summary → options.
+- **SwapPanel:** a small "See CUR in detail ›" link (`[data-curpeek]`) above the options opens the replaced stock's own insight, with no Swap button: the AI summary for everyone and the detail tab for the Customer Admin.
+- `sections_test` checks both detail tabs and the replaced-stock insight inside the same `.tk-modal`, with no `.dt-overlay`.

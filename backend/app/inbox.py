@@ -47,12 +47,90 @@ def settle(conn, cid, kind, ref, done):
             continue
         have.update(add)
         if all(s in have for s in syms):
-            conn.execute("UPDATE customer_notifications SET items_done = %s, status = 'done', done_at = now(), done_note = %s, "
+            conn.execute("UPDATE customer_notifications SET items_done = %s, status = 'done', done_at = now(), done_note = %s, updated_at = now(), "
                          "read_at = COALESCE(read_at, now()) WHERE id = %s", (json.dumps(have), _note(have), r["id"]))
             closed += 1
         else:
-            conn.execute("UPDATE customer_notifications SET items_done = %s WHERE id = %s", (json.dumps(have), r["id"]))
+            conn.execute("UPDATE customer_notifications SET items_done = %s, updated_at = now() WHERE id = %s", (json.dumps(have), r["id"]))
     return closed
+
+
+def _title(base, n):
+    return f"{base}: {n} stock{'s' if n != 1 else ''} to change"
+
+
+OPEN_CHANGE = ("SELECT id, title, body, items_done, read_at FROM customer_notifications WHERE customer_id = %s AND kind = %s "
+               "AND ref_id IS NOT DISTINCT FROM %s AND status = 'open' AND type = 'action' AND body ? 'items' ORDER BY id DESC")
+
+
+def sync_changes(conn, cid, kind, ref, base, current, fresh, what="portfolio"):
+    """ONE open "stocks to change" item per portfolio (round 19k, owner 2026-11-13: "one portfolio, one inbox message — check every day;
+    merge the new swap in and remove the swap that is not needed any more"). current = {symbol: item} flagged today; fresh = symbols
+    flagged for the first time (a new item is opened only for them, so a stock the customer marked done does not come back every day).
+      · still flagged → stays (its reason / suggestion refreshed) · newly flagged → merged in, and the item is unread again
+      · no longer flagged and not swapped → removed from the list (Activity keeps "trend recovered") · swapped → stays as "Swapped → X"
+      · nothing left to change → the item closes by itself. Returns 1 when a new item was opened."""
+    day = datetime.now(IST).date().isoformat()
+    row = conn.execute(OPEN_CHANGE + " LIMIT 1", (cid, kind, ref)).fetchone()
+    if not row:
+        new = [current[s] for s in current if s in fresh]
+        if not new:
+            return 0
+        conn.execute("INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body, app, type) VALUES (%s, %s, %s, %s, %s, %s, 'action')",
+                     (cid, kind, ref, _title(base, len(new)), json.dumps({"items": new, "what": what}), app_of(kind)))
+        return 1
+    body, done = dict(row["body"] or {}), dict(row["items_done"] or {})
+    items, keep = body.get("items") or [], []
+    for x in items:
+        s = x.get("s")
+        if s in done and done[s].get("how") != "recovered":
+            keep.append(x)                                          # swapped / removed: stays as history
+        elif s in current:
+            done.pop(s, None)
+            keep.append({**x, **current[s]})                        # still flagged: today's reason and suggestion
+        else:
+            done[s] = {"how": "recovered", "d": day}                # not needed any more: off the list
+    have = {x.get("s") for x in keep}
+    gone = {s for s, v in done.items() if v.get("how") in ("swapped", "removed")}           # already handled here
+    added = [current[s] for s in current if s not in have and s not in gone]
+    keep += added
+    left = [x for x in keep if x.get("s") not in done]
+    body["items"] = keep
+    if not left:
+        conn.execute("UPDATE customer_notifications SET body = %s, items_done = %s, status = 'done', done_at = now(), done_note = %s, updated_at = now(), "
+                     "read_at = COALESCE(read_at, now()) WHERE id = %s", (json.dumps(body), json.dumps(done), _note(done), row["id"]))
+        return 0
+    changed = bool(added) or len(keep) != len(items) or body["items"] != items
+    conn.execute("UPDATE customer_notifications SET body = %s, items_done = %s, title = %s" + (", updated_at = now()" if changed else "")
+                 + (", read_at = NULL" if added else "") + " WHERE id = %s", (json.dumps(body), json.dumps(done), _title(base, len(left)), row["id"]))
+    return 0
+
+
+def consolidate(conn):
+    """once per start, cheap: older duplicates (several open "stocks to change" items of one portfolio, from before round 19k) are merged
+    into the newest one, which keeps every stock (newest reason first) and every settled mark"""
+    groups = conn.execute("SELECT customer_id, kind, ref_id, array_agg(id ORDER BY id DESC) AS ids FROM customer_notifications "
+                          "WHERE status = 'open' AND type = 'action' AND body ? 'items' GROUP BY customer_id, kind, ref_id HAVING count(*) > 1").fetchall()
+    for g in groups:
+        rows = {r["id"]: r for r in conn.execute("SELECT id, title, body, items_done FROM customer_notifications WHERE id = ANY(%s)", (g["ids"],)).fetchall()}
+        top = rows[g["ids"][0]]
+        items, done, seen = [], {}, set()
+        for i in g["ids"]:                                          # newest first
+            for x in (rows[i]["body"] or {}).get("items") or []:
+                if x.get("s") not in seen:
+                    seen.add(x.get("s")); items.append(x)
+            for s, v in (rows[i]["items_done"] or {}).items():
+                done.setdefault(s, v)
+        body = {**(top["body"] or {}), "items": items}
+        base = (top["title"] or "").split(":")[0] or "Your portfolio"
+        left = [x for x in items if x.get("s") not in done]
+        conn.execute("UPDATE customer_notifications SET body = %s, items_done = %s, title = %s, updated_at = now() WHERE id = %s",
+                     (json.dumps(body), json.dumps(done), _title(base, len(left) or len(items)), top["id"]))
+        conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = %s, read_at = COALESCE(read_at, now()) "
+                     "WHERE id = ANY(%s)", (f"Merged into #{top['id']} — one item per portfolio", g["ids"][1:]))
+        if not left:
+            conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = %s WHERE id = %s", (_note(done), top["id"]))
+    return len(groups)
 
 
 def close_orders(conn, cid, kind, ref):

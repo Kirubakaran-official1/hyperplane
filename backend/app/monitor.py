@@ -133,21 +133,18 @@ def run_alerts(data, etf_data):
             continue
         flags = {e["s"]: e["why"] for e in res["exit"] if e["kind"] == "stock"}
         prev = state.get("flags") or {}
-        fresh = [e for e in res["exit"] if e["kind"] == "stock" and e["s"] not in prev]
+        current = {e["s"]: {"s": e["s"], "n": e.get("n"), "why": e["why"],
+                            "alt": next(({"s": n["s"], "n": n.get("n"), "st": n.get("st")} for n in res["new"] if n.get("replaces") == e["s"]), None)}
+                   for e in res["exit"] if e["kind"] == "stock"}
         notes = []
-        if fresh:
-            items = [{"s": e["s"], "n": e.get("n"), "why": e["why"],
-                      "alt": next(({"s": n["s"], "n": n.get("n"), "st": n.get("st")} for n in res["new"] if n.get("replaces") == e["s"]), None)}
-                     for e in fresh]
-            what = "SIP" if p["kind"] in ("sip", "msip") else "portfolio"
-            notes.append((f"{p['name']}: {len(items)} stock{'s' if len(items) > 1 else ''} to change", {"items": items, "what": what}))
         period = _period(inp.get("freq", "month"), now)
         if p["kind"] in ("sip", "msip") and state.get("period") and state.get("period") != period:
             word = "quarter" if inp.get("freq") == "quarter" else "month"
             notes.append((f"{p['name']}: this {word}'s order is ready", {"order": True, "total": res["total"]}))
         with pool.connection() as c:
-            # inbox: a stock of an open action that is no longer flagged has recovered — it settles by itself (inbox.settle)
-            inbox.settle(c, p["customer_id"], p["kind"], p["id"], {s_: {"how": "recovered"} for s_ in prev if s_ not in flags})
+            # inbox (round 19k): ONE "stocks to change" item per portfolio, synced every day — new flags merged in, recovered ones dropped
+            made += inbox.sync_changes(c, p["customer_id"], p["kind"], p["id"], p["name"], current, {s_ for s_ in current if s_ not in prev},
+                                       "SIP" if p["kind"] in ("sip", "msip") else "portfolio")
             for title, body in notes:
                 if body.get("order"):
                     inbox.close_orders(c, p["customer_id"], p["kind"], p["id"])
@@ -161,13 +158,8 @@ def run_alerts(data, etf_data):
         flags, alts = portfolio_flags(data, list(r["symbols"]))
         fresh = [s for s in flags if s not in prev]
         with pool.connection() as c:
-            inbox.settle(c, r["customer_id"], "portfolio", None, {s: {"how": "recovered"} for s in prev if s not in flags})
-            if fresh:
-                items = [{"s": s, "why": flags[s], "alt": alts.get(s)} for s in fresh]
-                c.execute("INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body, app, type) VALUES (%s, 'portfolio', NULL, %s, %s, 'portfolio', 'action')",
-                          (r["customer_id"], f"Your portfolio: {len(items)} stock{'s' if len(items) > 1 else ''} need{'s' if len(items) == 1 else ''} a look",
-                           json.dumps({"items": items})))
-                made += 1
+            made += inbox.sync_changes(c, r["customer_id"], "portfolio", None, "Your Analyser list",
+                                       {s: {"s": s, "why": flags[s], "alt": alts.get(s)} for s in flags}, set(fresh))
             c.execute("UPDATE customer_portfolio SET alert_state = %s WHERE customer_id = %s",
                       (json.dumps({"flags": flags, "checked": now.isoformat()}), r["customer_id"]))
     with pool.connection() as c:

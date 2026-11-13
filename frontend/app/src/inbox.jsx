@@ -9,9 +9,13 @@
 //   right   the status flow (Raised → Seen → Settled → Done) and help; for a helpdesk query, its conversation
 // Data: /app/api/inbox (portal.py — notifications + the customer's helpdesk tickets). Items settle by themselves on the server (inbox.py):
 // a swap here or anywhere else settles its stock; a recovered trend settles too.
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AiSpark, Icon, addCss, api } from "./core.jsx";
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { AiSpark, Icon, addCss, api, loadChunk } from "./core.jsx";
 import { SwapPanel } from "./swap-ui.jsx";
+// a stock of an item opens its insight IN this pane (round 19k — the AI summary, and the detail view for the Customer Admin)
+const StockInsight = lazy(() => loadChunk(() => import("./stock-insight.jsx")));
+// which application's detail permission a saved portfolio's stocks use (RBAC): Analyser → portfolio, Builder → builder, Momentum SIP → msip
+const DETAIL_APP = { analyser: "portfolio", portfolio: "portfolio", builder: "builder", msip: "msip" };
 import { HD_CSS, HdThread } from "../../shared/helpdesk.jsx";
 
 const META = {
@@ -74,7 +78,7 @@ addCss("inbox", `
 .ib-row .tt{grid-column:1;display:flex;align-items:center;gap:6px;font:500 13.5px/19px var(--sans);color:var(--t1);min-width:0}.ib-row .tt span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ib-row.un .tt{font-weight:700}.ib-row.un .tt::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--acc)}
 .ib-row .sm{grid-column:1/-1;font-size:12.5px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ib-row .sm b{font-weight:600;color:var(--t2)}
-.ib-row .mt{grid-column:1/-1;display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--t3)}.ib-row .mt .ib-ap{font-weight:600}.ib-row .mt .dd{margin-left:auto}.ib-row .dd{font-size:11.5px;color:var(--t3);justify-self:end;white-space:nowrap}
+.ib-row .mt{grid-column:1/-1;display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--t3)}.ib-row .mt .ib-ap{font-weight:600}.ib-row .mt .ib-proc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.ib-row .mt .dd{margin-left:auto}.ib-row .dd{font-size:11.5px;color:var(--t3);justify-self:end;white-space:nowrap}
 .ib-none{padding:28px 16px;text-align:center;font-size:13px;color:var(--t3)}
 .ib-m{min-width:0;display:flex;flex-direction:column;overflow-y:auto}
 .ib-mh{display:flex;flex-direction:column;gap:6px;padding:16px 20px;border-bottom:1px solid var(--b1)}
@@ -92,6 +96,7 @@ addCss("inbox", `
 .ib-body{padding:16px 20px;display:flex;flex-direction:column;gap:14px}
 .ib-t td .sub{max-width:260px}.ib-t .stl{display:inline-flex;align-items:center;gap:5px;color:var(--long);font-weight:600}.ib-t .stl.rc{color:var(--acc)}
 .ib-t .wait{color:var(--mixed);font-weight:600}
+.ib-stk{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;cursor:pointer;color:inherit;font:inherit}.ib-stk:hover .sym{text-decoration:underline}.ib-stk .ic{color:var(--t3)}
 .ib-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.ib-act input{flex:1;min-width:180px;height:36px;border:1px solid var(--b2);border-radius:6px;background:var(--bg);color:var(--t1);padding:0 10px;font:13px var(--sans)}
 .ib-msg{white-space:pre-wrap;font-size:14px;line-height:22px;color:var(--t1);padding:14px 16px;border:1px solid var(--b1);border-radius:10px;background:var(--bg)}
 .ib-order{padding:14px 16px;border-radius:10px;background:var(--adim);font-size:14px;color:var(--t1)}.ib-order b{font-size:18px}
@@ -190,14 +195,14 @@ function SwapModal({ x, sym, onClose, onDone }) {
       {st.err && <div className="pf-miss">{st.err}</div>}
       {!st.items ? !st.err && <div className="svp-note">Finding the best alternatives…</div>
         : !st.items.length ? <div className="svp-note">No better stock in its industry, sector or size today.</div>
-        : <SwapPanel items={st.items} cur={st.cur || { s: sym }} onPick={pick} busy={st.busy} idp="ib" app={st.saved.kind === "builder" ? "builder" : "portfolio"}/>}
+        : <SwapPanel items={st.items} cur={st.cur || { s: sym }} onPick={pick} busy={st.busy} idp="ib" app={DETAIL_APP[st.saved.kind] || "portfolio"}/>}
     </div></div>);
 }
 
 function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) {
   const [tab, setTab] = useState("overview"); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
-  const [swap, setSwap] = useState(null);
-  useEffect(() => { setTab("overview"); setNote(""); setErr(""); }, [x.id]);
+  const [swap, setSwap] = useState(null), [peek, setPeek] = useState(null);       // peek = the stock whose insight is open in this pane
+  useEffect(() => { setTab("overview"); setNote(""); setErr(""); setPeek(null); }, [x.id]);
   const b = x.body || {}, its = b.items || [], m = META[x.app] || META.hyperplane, has = apps.some(a => a.key === x.app);
   const set = async path => {
     setBusy(true); setErr("");
@@ -210,7 +215,8 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
     : x.src === "announce" ? [["From", "Hyperplane"], ["Sent on", day(x.at)], ["Type", "Information"]]
     : x.src === "mention" ? [["From", b.by], ["Where", b.thread ? "A thread in the Community" : "Community chat"], ["Sent on", day(x.at)]]
     : b.order ? [["Application", m.name], ["Plan", pfName(x)], ["This instalment", inr(b.total)], ["Raised on", day(x.at)]]
-    : [["Application", m.name], ["Portfolio", pfName(x)], ["Stocks affected", its.length], ["Settled", `${Object.keys(x.items_done || {}).length} of ${its.length}`], ["Raised on", day(x.at)]];
+    : [["Application", m.name], ["Process", (x.plan && x.plan.process) || "—"], ["Portfolio", (x.plan && x.plan.name) || pfName(x)],
+       ["To change", `${its.filter(i => !(x.items_done || {})[i.s]).length} of ${its.length}`], ["Raised on", day(x.created || x.at)], ["Last checked", day(x.at)]];
   return (<>
     <div className="ib-m" id="ib-detail" data-item={x.id}>
       <div className="ib-mh">
@@ -223,7 +229,11 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
       <div className="ib-facts">{facts.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}</div>
       <div className="ib-dt" role="tablist">{[["overview", "Overview"], ["activity", "Activity"]].map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)} id={`ib-tab-${k}`}>{l}</button>)}</div>
       <div className="ib-body">
-        {tab === "activity" ? <Activity x={x}/> : <>
+        {peek ? <Suspense fallback={<div className="ib-note">Opening {peek.s}…</div>}>
+            <StockInsight a={{ s: peek.s, n: peek.n }} reason={peek.why ? `${(peek.why || "").replace(/^./, c => c.toUpperCase())}.` : null} app={DETAIL_APP[x.kind] || "portfolio"}
+              backLabel="Back to the item" onClose={() => setPeek(null)} swapLabel={`Find a swap for ${peek.s}`}
+              onSwap={!(x.items_done || {})[peek.s] && x.status !== "done" && x.ref && has ? () => { setPeek(null); setSwap(peek.s); } : null}/></Suspense>
+          : tab === "activity" ? <Activity x={x}/> : <>
           {x.src === "announce" && <div className="ib-msg" id="ib-text">{b.text}</div>}
           {x.src === "mention" && <><div className="ib-msg" id="ib-text"><b>{b.by}</b>{b.admin ? " · Hyperplane" : ""}<br/>{b.text}</div>
             <div className="ib-act"><button type="button" className="px-btn primary" id="ib-community" onClick={() => { if (x.status !== "done") set("done"); onCommunity(b.mid, b.thread); }}>Open in the Community</button>
@@ -236,7 +246,8 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
             <thead><tr><th>Stock</th><th className="ib-hm">Why</th><th className="ib-hm">Suggested</th><th>Status</th><th/></tr></thead>
             <tbody>{its.map(i => { const d = (x.items_done || {})[i.s]; return (
               <tr key={i.s} data-stock={i.s}>
-                <td><b className="sym">{i.s}</b>{i.n && <span className="sub">{i.n}</span>}</td>
+                <td><button type="button" className="ib-stk" onClick={() => setPeek(i)} data-ibpeek={i.s} title={`See ${i.s} in detail`}><b className="sym">{i.s}</b><Icon name="chevron" size={12}/></button>
+                  {i.n && <span className="sub">{i.n}</span>}</td>
                 <td className="wrap ib-hm">{(i.why || "").replace(/^./, c => c.toUpperCase())}</td>
                 <td className="ib-hm">{i.alt ? <><b className="sym">{i.alt.s}</b>{i.alt.n && <span className="sub">{i.alt.n}</span>}</> : <span className="sub">Choose on Swap</span>}</td>
                 <td>{d ? <span className={`stl ${d.how === "recovered" ? "rc" : ""}`}><Icon name="check" size={13}/>{HOW[d.how] || d.how}{d.in ? ` → ${d.in}` : ""}</span> : x.status === "done" ? <span className="sub">Closed</span> : <span className="wait">To change</span>}</td>
@@ -324,7 +335,7 @@ export default function Inbox({ apps = [], openReq, onOpen, onHelpdesk, onCommun
                   <button key={x.id} type="button" className={`ib-row ${sel === x.id ? "on" : ""} ${x.read ? "" : "un"}`} onClick={() => pick(x)} data-ib={x.id}>
                     <span className="tt"><span>{x.title}</span></span><span className="ag" title="Age">{age(x.at)}</span>
                     <span className="sm"><b>{fromOf(x)}</b> · {summary(x)}</span>
-                    <span className="mt"><span>{refOf(x)}</span><span className="ib-ap" style={{ color: (META[x.app] || META.hyperplane).c }}>{(META[x.app] || META.hyperplane).code}</span>
+                    <span className="mt"><span>{refOf(x)}</span><span className="ib-ap" style={{ color: (META[x.app] || META.hyperplane).c }}>{(META[x.app] || META.hyperplane).code}</span>{x.plan && <span className="ib-proc">{x.plan.process}</span>}
                       <span>{tabOf(x) === "done" ? "Done" : tabOf(x) === "action" ? "Action" : "Update"}</span><span className="dd">{dt(x.at)}</span></span>
                   </button>))}
               </div>); })}

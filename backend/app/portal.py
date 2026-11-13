@@ -834,7 +834,7 @@ def stock_detail(symbol: str, request: Request, response: Response, app_key: str
     """Stock detail view (customer admin): everything behind one stock's result for the day on screen. Permission
     "<application>:detail" (portfolio / builder), checked here AND by the database (row-level security on stock_detail).
     Every look is written to the activity log."""
-    if app_key not in ("portfolio", "builder"):
+    if app_key not in ("portfolio", "builder", "msip"):                # round 19k: the Momentum SIP has its own detail permission
         raise HTTPException(422, "Unknown application")
     c = need_perm(f"{app_key}:detail")(_session(request, response))
     _rate("detail", str(c["id"]), 120, 60)
@@ -1449,18 +1449,34 @@ class ReadIn(SafeModel):
 @app.get("/app/api/notifications")
 def notifications(c=Depends(customer)):
     with _own(c) as conn:
-        rows = conn.execute("SELECT id, kind, ref_id, title, body, created_at, read_at, app, type, status FROM customer_notifications "
-                            "WHERE customer_id = %s ORDER BY id DESC LIMIT 50", (c["id"],)).fetchall()
-    items = [{"id": r["id"], "kind": r["kind"], "ref": r["ref_id"], "title": r["title"], "body": r["body"], "at": r["created_at"].isoformat(),
+        rows = conn.execute("SELECT id, kind, ref_id, title, body, created_at, updated_at, read_at, app, type, status FROM customer_notifications "
+                            "WHERE customer_id = %s ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 50", (c["id"],)).fetchall()
+    items = [{"id": r["id"], "kind": r["kind"], "ref": r["ref_id"], "title": r["title"], "body": r["body"], "at": (r["updated_at"] or r["created_at"]).isoformat(),
               "read": r["read_at"] is not None, "app": r["app"], "type": r["type"], "status": r["status"]} for r in rows]
     return {"items": items, "unread": sum(1 for i in items if not i["read"])}
 
 
 # ── Unified inbox (round 19, inbox.py): every notification + the helpdesk tickets, for the three-pane inbox page ──
-def _inbox_note(r):
+# which process an item belongs to (round 19k, owner: "from which app, which process — the investment or the SIP"), in plain words
+PROCESS = {"analyser": "Saved stock list", "portfolio": "Your Analyser list", "builder": "Investment · one-time amount", "sip": "ETF SIP", "msip": "Stock SIP"}
+INBOX_COLS = "id, kind, ref_id, title, body, created_at, updated_at, read_at, app, type, status, done_at, done_note, items_done"
+
+
+def _plan_of(r, plans):
+    p = plans.get(r["ref_id"]) if r["ref_id"] else None
+    if r["kind"] not in PROCESS or r["kind"] in ("announce", "mention"):
+        return None
+    freq = ((p or {}).get("inputs") or {}).get("freq")
+    word = {"month": "monthly", "quarter": "quarterly"}.get(freq, "")
+    return {"name": p["name"] if p else "Your Analyser list", "kind": r["kind"], "code": p and p["code"],
+            "process": PROCESS[r["kind"]] + (f" · {word}" if word and r["kind"] in ("sip", "msip") else "")}
+
+
+def _inbox_note(r, plans=None):
     return {"id": f"n{r['id']}", "nid": r["id"], "src": {"announce": "announce", "mention": "mention"}.get(r["kind"], "alert"), "kind": r["kind"],
             "app": r["app"] or inbox.app_of(r["kind"]), "type": r["type"] or "info", "status": r["status"], "title": r["title"],
-            "body": r["body"], "ref": r["ref_id"], "at": r["created_at"].isoformat(), "read": r["read_at"] is not None,
+            "body": r["body"], "ref": r["ref_id"], "at": (r.get("updated_at") or r["created_at"]).isoformat(), "created": r["created_at"].isoformat(),
+            "plan": _plan_of(r, plans or {}), "read": r["read_at"] is not None,
             "read_at": r["read_at"] and r["read_at"].isoformat(), "done_at": r["done_at"] and r["done_at"].isoformat(),
             "done_note": r["done_note"], "items_done": r["items_done"] or {}}
 
@@ -1469,8 +1485,11 @@ def _inbox_note(r):
 def inbox_list(c=Depends(customer)):
     _rate("inbox", str(c["id"]), 60, 60)
     with _own(c) as conn:
-        rows = conn.execute("SELECT id, kind, ref_id, title, body, created_at, read_at, app, type, status, done_at, done_note, items_done "
-                            "FROM customer_notifications WHERE customer_id = %s ORDER BY id DESC LIMIT 500", (c["id"],)).fetchall()
+        rows = conn.execute(f"SELECT {INBOX_COLS} FROM customer_notifications WHERE customer_id = %s "
+                            "ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 500", (c["id"],)).fetchall()
+        refs = list({r["ref_id"] for r in rows if r["ref_id"]})
+        plans = {p["id"]: p for p in conn.execute("SELECT id, name, kind, share_id AS code, inputs FROM customer_sips WHERE customer_id = %s AND id = ANY(%s)",
+                                                  (c["id"], refs)).fetchall()} if refs else {}
     a = {"kind": "customer", "id": str(c["id"]), "name": c["name"], "staff": False}
     with _hd(a) as conn:
         tk = hd.list_tickets(conn, a, "all", 200)["tickets"]
@@ -1479,7 +1498,7 @@ def inbox_list(c=Depends(customer)):
                 "title": t["subject"], "body": {"severity": t["severity"], "messages": t["messages"], "snippet": t["snippet"], "unread": t["unread"]},
                 "at": t["updated_at"], "created": t["created_at"], "read": not t["unread"], "done_at": t["closed_at"],
                 "done_note": "Query closed" if t["status"] == "closed" else None, "items_done": {}} for t in tk]
-    return {"items": [_inbox_note(r) for r in rows] + tickets}
+    return {"items": [_inbox_note(r, plans) for r in rows] + tickets}
 
 
 class DoneIn(SafeModel):
@@ -1492,8 +1511,7 @@ def inbox_done(nid: int, body: DoneIn, c=Depends(customer)):
     note = " ".join(hd.CTRL.sub("", body.note).split())[:200] or "Marked done by you"
     with _own(c) as conn:
         r = conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = %s, read_at = COALESCE(read_at, now()) "
-                         "WHERE id = %s AND customer_id = %s RETURNING id, kind, ref_id, title, body, created_at, read_at, app, type, status, "
-                         "done_at, done_note, items_done", (note, nid, c["id"])).fetchone()
+                         "WHERE id = %s AND customer_id = %s RETURNING " + INBOX_COLS, (note, nid, c["id"])).fetchone()
     if not r:
         raise HTTPException(404, "Not found")
     return _inbox_note(r)
@@ -1504,7 +1522,7 @@ def inbox_reopen(nid: int, c=Depends(customer)):
     _rate("inbox-w", str(c["id"]), 60, 60)
     with _own(c) as conn:
         r = conn.execute("UPDATE customer_notifications SET status = 'open', done_at = NULL, done_note = NULL WHERE id = %s AND customer_id = %s "
-                         "RETURNING id, kind, ref_id, title, body, created_at, read_at, app, type, status, done_at, done_note, items_done",
+                         "RETURNING " + INBOX_COLS,
                          (nid, c["id"])).fetchone()
     if not r:
         raise HTTPException(404, "Not found")

@@ -8,7 +8,7 @@
 // Portfolio Builder layout (steps on the left, How it works + Your plan on the right, the same .al sliders); the
 // sector / market bars of the result filter the holdings table.
 import React, { useEffect, useState } from "react";
-import { AiSpark, BrandBand, CopyBtns, GroupRow, Icon, Info, MultiSelect, addCss, api, dirVal, loadChunk, signed, tc, trackAction, trendWordOf, useAsOf } from "../core.jsx";
+import { AiSpark, BrandBand, CopyBtns, GroupRow, Icon, Info, MultiSelect, StockLink, addCss, api, dirVal, loadChunk, signed, tc, trackAction, trendWordOf, useAsOf } from "../core.jsx";
 import { CSS } from "./sip.css.js";
 import { MyPortfolios, SaveBar, SavedNote, buyText } from "../saved.jsx";
 
@@ -422,7 +422,7 @@ function SipView({ apps = [], onAddToPortfolio, onOpenApp, onOut, onHelpdesk, mo
                 color={g.color} label={g.label} id={`${APP}-grp-${g.k}`}
                 meta={<><span>{g.rows.length} holding{g.rows.length === 1 ? "" : "s"}</span><span><b>{inr(amt)}</b> a {w}</span><span><b>{(amt / res.invested * 100).toFixed(1)}%</b> of the SIP</span></>}/>
               {!shut.has(g.k) && g.rows.map(h => <tr key={h.s} className="hp-row sp-in" onClick={() => setOpen(h)} data-sym={h.s} data-sec={h.sec || h.grp}>
-                <td><span className="sym">{h.s}</span><span className="sub">{h.n !== h.s ? h.n : h.grp}{h.kind === "stock" ? ` · ${h.sec}` : ""}</span></td>
+                <td>{h.kind === "stock" && isStock ? <StockLink sym={h.s} app="msip"><span className="sym">{h.s}</span></StockLink> : <span className="sym">{h.s}</span>}<span className="sub">{h.n !== h.s ? h.n : h.grp}{h.kind === "stock" ? ` · ${h.sec}` : ""}</span></td>
                 <td>{h.kind === "stock" ? <span className={`hp-rel ${h.rel}`}><i/>{REL_WORD[h.rel]}{h.rs != null ? ` · ${h.rs}` : ""}</span> : <span className="hp-rel">{ROLE[h.role] || "ETF"}</span>}</td>
                 <td><Strength v={h.st}/></td>
                 <td className="num"><b>{h.every > 1 ? `1 every ${h.every} ${w}s` : h.units}</b></td>

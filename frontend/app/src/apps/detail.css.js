@@ -4,6 +4,7 @@ body.dt-lock{overflow:hidden}
 .dt-overlay{position:fixed;inset:0;z-index:80;background:rgba(3,8,16,.55);display:flex;justify-content:flex-end;animation:dt-in .15s ease-out}
 @keyframes dt-in{from{opacity:0}to{opacity:1}}
 .dt-panel{width:min(1080px,100vw);height:100%;overflow-y:auto;background:var(--bg);border-left:1px solid var(--b2);padding:0 22px 30px;outline:none;box-shadow:-30px 0 60px -30px rgba(0,0,0,.5)}
+.dt-panel.dt-inline{width:auto;height:auto;overflow:visible;padding:0;border:0;box-shadow:none;background:none}.dt-inline .dt-head{position:static;padding-top:0}
 .dt-head{position:sticky;top:0;z-index:2;display:flex;gap:12px;align-items:flex-start;justify-content:space-between;padding:16px 0 12px;background:var(--bg);border-bottom:1px solid var(--b1)}
 .dt-head h2{margin:4px 0 3px;font:700 20px/1.25 var(--sans);color:var(--t1)}
 .dt-sym{font:600 13px var(--mono);color:var(--acc);margin-left:6px}

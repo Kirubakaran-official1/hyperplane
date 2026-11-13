@@ -61,6 +61,11 @@ PERMISSIONS = (
     ("msip:customer", "Momentum SIP Builder · Customer level",
      "Up to ₹50,000 an instalment and 50 stocks, High reliability only, standard settings (More options locked) — every role has it",
      "msip:view", False),
+    # round 19k (owner 2026-11-13: "the detail view like the Portfolio Builder, only for the Customer Admin, in all the places — keep it in the
+    # RBAC properly"): the Momentum SIP's own detail permission (its stocks were only reachable through the builder's before)
+    ("msip:detail", "Stock detail view",
+     "Click a stock of a Momentum SIP (results, saved plans, swaps, Inbox) to see its checklist, zones, mother candles, regime and technicals",
+     "msip:view", True),
     ("msip:admin", "Momentum SIP Builder · Admin level",
      "Any amount and number of stocks, High / Medium / Low reliability, every More option — for the owner", "msip:view", True),
 )
@@ -206,6 +211,15 @@ def migrate_history_perm(c):
     c.execute("INSERT INTO role_permissions (role_id, permission) SELECT id, 'research:history' FROM roles WHERE lower(name) = 'customer admin' "
               "ON CONFLICT DO NOTHING")
     c.execute("INSERT INTO settings (key, value) VALUES ('history_perm_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
+
+
+def migrate_msip_detail(c):
+    """Once (round 19k): the Customer Admin role gets msip:detail (owner-level — never on the default role)."""
+    if c.execute("SELECT 1 FROM settings WHERE key = 'msip_detail_v1'").fetchone():
+        return
+    c.execute("INSERT INTO role_permissions (role_id, permission) SELECT r.id, 'msip:detail' FROM roles r WHERE lower(r.name) = 'customer admin' "
+              "AND EXISTS (SELECT 1 FROM app_permissions p WHERE p.key = 'msip:detail') ON CONFLICT DO NOTHING")
+    c.execute("INSERT INTO settings (key, value) VALUES ('msip_detail_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
 
 
 def migrate_pins8(c):

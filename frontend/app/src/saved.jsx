@@ -6,7 +6,7 @@
 // (monitor.py → the 🔔 notification centre). Shared by apps/portfolio.jsx, builder.jsx and sip.jsx; the server does
 // every calculation. Only the customer who saved a portfolio can see it (row-level security).
 import React, { useEffect, useRef, useState } from "react";
-import { APP_SLUG, AiSpark, GroupRow, Icon, Info, addCss, api, copyText, fmtDT, goPath, portfolioUrl, routeOf, signed, swapSections, useToast } from "./core.jsx";
+import { APP_SLUG, AiSpark, GroupRow, Icon, Info, StockLink, addCss, api, copyText, fmtDT, goPath, portfolioUrl, routeOf, signed, swapSections, useToast } from "./core.jsx";
 import { Simulators } from "./sim.jsx";
 import { SwapPanel } from "./swap-ui.jsx";
 
@@ -281,8 +281,9 @@ const crore = v => v == null ? "—" : v >= 1e5 ? `₹${(v / 1e5).toFixed(2)} L 
 // price and company size of one stock (round 16: "mention the price and the size of both, the swap and the current one")
 export const SizeTags = ({ x }) => <span className="tk-sz"><span className="pr" title="Last price">{inr2(x.p)}</span>
   <span title="Market value of the company">{crore(x.mcap)}</span>{x.cap && <span>{x.cap} cap</span>}</span>;
+export const DETAIL_APP = { analyser: "portfolio", portfolio: "portfolio", builder: "builder", msip: "msip" };
 export function SwapOptions({ items, busy, onPick, cur, amount, per, kind }) {
-  return <SwapPanel items={items} cur={cur || {}} onPick={onPick} busy={busy} amount={amount} per={per} idp="tk" app={kind === "builder" ? "builder" : "portfolio"}/>;
+  return <SwapPanel items={items} cur={cur || {}} onPick={onPick} busy={busy} amount={amount} per={per} idp="tk" app={DETAIL_APP[kind] || "portfolio"}/>;
 }
 
 // one swap, opened (round 17): both sides with price then / now, quantity and the money in each
@@ -645,7 +646,7 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
                 meta={<><span>{g.rows.length} holding{g.rows.length === 1 ? "" : "s"}</span><span>Invested <b>{inr(g.cost)}</b></span><span>Value <b>{inr(g.value)}</b></span>
                   <span className={tone(g.gain)}>{money(g.gain)} ({pctTxt(g.cost ? g.gain / g.cost * 100 : null)})</span></>}/>
               {!shut.has(g.k) && g.rows.map(h => <tr key={h.s} data-h={h.s} className={anim.out === h.s ? "hp-leaving" : anim.in === h.s ? "hp-swapped" : ""}>
-                <td><span className="sym">{h.s}</span>{h.flag && <span className="hp-flag" title={h.flag}>{h.kind === "stock" ? "Regime down" : "Consider removing"}</span>}
+                <td>{h.kind === "stock" && !pub && DETAIL_APP[it.kind] ? <StockLink sym={h.s} app={DETAIL_APP[it.kind]}><span className="sym">{h.s}</span></StockLink> : <span className="sym">{h.s}</span>}{h.flag && <span className="hp-flag" title={h.flag}>{h.kind === "stock" ? "Regime down" : "Consider removing"}</span>}
                   <span className="sub">{h.n && h.n !== h.s ? h.n : GROUP_NAME[h.grp] || h.grp}{h.from && h.from !== t.start ? ` · since ${dShort(h.from)}` : ""}</span></td>
                 <td className="num">{(+h.qty).toLocaleString("en-IN", { maximumFractionDigits: 2 })}{h.waiting > 1 && <span className="sub" title="Money set aside for the next unit">+ {inr(h.waiting)} waiting</span>}</td><td className="num hm">{inr2(h.avg)}</td><td className="num">{inr2(h.ltp)}</td>
                 <td className="num hm">{h.qty ? inr(h.cost) : "—"}</td><td className="num">{h.qty ? inr(h.value) : "—"}</td><td className={`num ${tone(h.gain)}`}>{h.qty ? money(h.gain) : "—"}</td>

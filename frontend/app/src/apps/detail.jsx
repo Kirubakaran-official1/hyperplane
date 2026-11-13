@@ -287,7 +287,10 @@ function Verdict({ d, held }) {
     </div>);
 }
 
-export default function StockDetail({ req, onClose, onOut }) {
+// inline (round 19k, owner 2026-11-13: "a pop-up with the recommendation, then More details as the admin — a side panel appears along with
+// the pop-up; handle it properly"): inside another window (the Stock insight of a swap, the Inbox) the same view is drawn IN that window —
+// no overlay, no side drawer, no page lock; the host window keeps its own Close / Back.
+export default function StockDetail({ req, onClose, onOut = () => {}, inline = false }) {
   const [res, setRes] = useState(null); const [err, setErr] = useState("");
   const [play, setPlay] = useState(0);
   const panel = useRef(null);
@@ -297,6 +300,7 @@ export default function StockDetail({ req, onClose, onOut }) {
     api(`/app/api/detail/${encodeURIComponent(req.sym)}?${q}`).then(setRes).catch(e => { if (e.status === 401) onOut(e.message); else setErr(e.message); });
   }, [req.n]);
   useEffect(() => {
+    if (inline) return undefined;
     const k = e => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", k); document.body.classList.add("dt-lock");
     panel.current && panel.current.focus();
@@ -306,15 +310,15 @@ export default function StockDetail({ req, onClose, onOut }) {
   const d = res && { ...res.stock, weights: meta.tf_weight, squeeze: meta.squeeze };
   const held = d ? d.regime.long_held || "" : "";
   return (
-    <div className="dt-overlay" onClick={onClose}>
-      <aside className="dt-panel" role="dialog" aria-label={`Detail view of ${req.sym}`} onClick={e => e.stopPropagation()} ref={panel} tabIndex={-1} id="stock-detail">
+    <Wrap inline={inline} onClose={onClose}>
+      <aside className={`dt-panel ${inline ? "dt-inline" : ""}`} role={inline ? "region" : "dialog"} aria-label={`Detail view of ${req.sym}`} onClick={e => e.stopPropagation()} ref={panel} tabIndex={-1} id="stock-detail">
         <header className="dt-head">
           <div style={{ minWidth: 0 }}>
             <div className="dt-badge"><Icon name="lock" size={12}/> Owner only · detail view</div>
             <h2>{d ? d.n : req.sym} <span className="dt-sym">{req.sym}</span></h2>
             {d && <div className="dt-mut">{d.sec} · {d.ind}{d.cap ? ` · ${d.cap} cap` : ""} · price {n2(d.p)}{d.c != null ? ` (${d.c >= 0 ? "+" : "−"}${Math.abs(d.c).toFixed(2)}% today)` : ""} · data as of {fmtDT(meta.as_of)}{req.day ? ` (${req.day.part === "open" ? "day open" : "day end"})` : ""}</div>}
           </div>
-          <button type="button" className="dt-x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>
+          {!inline && <button type="button" className="dt-x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>}
         </header>
         {err && <div className="dt-empty" role="alert">{err}</div>}
         {!res && !err && <div className="dt-empty">Loading the detail…</div>}
@@ -345,5 +349,6 @@ export default function StockDetail({ req, onClose, onOut }) {
           </div>
         </Guard>}
       </aside>
-    </div>);
+    </Wrap>);
 }
+const Wrap = ({ inline, onClose, children }) => inline ? children : <div className="dt-overlay" onClick={onClose}>{children}</div>;

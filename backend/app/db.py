@@ -6,6 +6,7 @@ import os
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from . import adoption
+from . import inbox
 from . import mailer
 from . import permissions as perms
 
@@ -309,6 +310,10 @@ ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS status TEXT NOT NULL
 ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ;
 ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS done_note TEXT;
 ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS items_done JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- round 19k: an item is kept up to date (one per portfolio), so it has a "last changed" time the Inbox sorts by
+ALTER TABLE customer_notifications ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+UPDATE customer_notifications SET updated_at = created_at WHERE updated_at IS NULL;
+ALTER TABLE customer_notifications ALTER COLUMN updated_at SET DEFAULT now();
 UPDATE customer_notifications SET
     app  = CASE kind WHEN 'analyser' THEN 'portfolio' WHEN 'announce' THEN 'hyperplane' ELSE kind END,
     type = CASE WHEN body ? 'items' OR body ? 'order' THEN 'action' ELSE 'info' END,
@@ -673,6 +678,8 @@ def init_db():
         perms.migrate_share(c)                                 # Customer Admin may share saved portfolios (owner 2026-11-07)
         perms.migrate_share_all(c)
         perms.migrate_history_perm(c)                          # past data = a permission, Customer Admin (owner 2026-11-07, round 16)                             # …then every role that opens the app (owner 2026-11-07, round 15)
+        inbox.consolidate(c)                                   # one open "stocks to change" item per portfolio (round 19k)
+        perms.migrate_msip_detail(c)                           # the Momentum SIP's detail view, Customer Admin (round 19k)
         perms.migrate_pins8(c)                                 # 8 pins: the AI Momentum SIP joins saved pins (owner 2026-11-06)
         perms.migrate_msip_levels(c)                           # Momentum SIP Customer / Admin levels (owner 2026-11-06 r6)
         perms.rename_builder_levels(c)
@@ -755,7 +762,7 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION shared_portfolio_seen(TEXT) TO {}").format(role))
     c.execute(sql.SQL("GRANT SELECT ON price_hist, price_adj TO {}").format(role))     # market prices for tracking
     # notification centre: read, mark read, delete own rows (the worker writes them)
-    c.execute(sql.SQL("GRANT SELECT, UPDATE (read_at, status, done_at, done_note, items_done), DELETE ON customer_notifications TO {}").format(role))
+    c.execute(sql.SQL("GRANT SELECT, UPDATE (read_at, status, done_at, done_note, items_done, updated_at), DELETE ON customer_notifications TO {}").format(role))
     c.execute("ALTER TABLE customer_notifications ENABLE ROW LEVEL SECURITY")
     c.execute("DROP POLICY IF EXISTS portal_own ON customer_notifications")
     c.execute(sql.SQL("CREATE POLICY portal_own ON customer_notifications TO {} USING (customer_id::text = current_setting('hp.cid', true)) "

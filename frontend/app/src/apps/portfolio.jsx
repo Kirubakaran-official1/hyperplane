@@ -233,7 +233,7 @@ function AiWatch({ symbols, setSymbols, bySym }) {
           return (
             <div key={it.s} className={`pf-wr ${anim && anim.out === it.s ? "hp-leaving" : ""}`} data-watch={it.s}>
               <div className="pf-wfrom">
-                <span className="pf-wl1"><b className="sym">{it.s}</b><span className="hp-flag">Regime down</span>{strength(it.st)}{it.p != null && <span className="pf-wpx" title="Last price (1 share)">{rs(it.p)}</span>}</span>
+                <span className="pf-wl1"><StockLink sym={it.s} app="portfolio"><b className="sym">{it.s}</b></StockLink><span className="hp-flag">Regime down</span>{strength(it.st)}{it.p != null && <span className="pf-wpx" title="Last price (1 share)">{rs(it.p)}</span>}</span>
                 <small>{it.n || b.n || ""}{(it.sec || b.sec) ? ` · ${it.sec || b.sec}` : ""}{(it.ind || b.ind) ? ` › ${it.ind || b.ind}` : ""}</small></div>
               <span className="hp-arrow pf-warr" aria-hidden="true">→</span>
               {a ? <div className="pf-wto" key={a.s} data-alt={a.s}>
