@@ -58,7 +58,8 @@
 
 	# Customer edition: its own small bundle (contains none of the dashboard code)
 	handle /app* {
-		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://kite.zerodha.com"
+		# Buy on Zerodha (round 20): the only outside place a form may go is Kite's basket page (the customer confirms there)
 		# every application is its own file with its content hash in the name: cache it for good; the page itself is
 		# always re-checked, so a deploy reaches customers at once (each app downloads only when first opened)
 		@appassets path /app/assets/*

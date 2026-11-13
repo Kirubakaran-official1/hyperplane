@@ -8,7 +8,18 @@ import { QuickGuideButton } from "./quick.jsx";
 import { DIAL_CODES, POPULAR_DIAL } from "./dial.js";
 import { emailError, lettersOnly, nameError, noSpaces, passwordError, passwordScore, placeError } from "./validate.js";
 import { APP_SLUG, goPath, routeOf } from "./core.jsx";
-import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, AsOfCtx, BrandBand, GridIcon, GuideIcon, HD_TEMPLATES, Icon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, setApiDay, fmtDT, fmtDay, fmtTime, foldText, getMode, loadChunk, useTheme } from "./core.jsx";
+import { AppIcon, Brand, CollapseIcon, DISCLAIMER, DetailCtx, ZerodhaChip, ZerodhaCtx, AsOfCtx, BrandBand, GridIcon, GuideIcon, HD_TEMPLATES, Icon, Logo, MODE_KEY, MenuIcon, NavSvg, PinIcon, SearchIcon, api, applyMode, setApiDay, fmtDT, fmtDay, fmtTime, foldText, getMode, loadChunk, useTheme } from "./core.jsx";
+// Buy on Zerodha (round 20): back from Kite (/app/#zerodha=…) → read and clear the hash at once (before any routing can drop it) and go to
+// the page the customer left (same site, /app only); Home shows the return screen
+let ZR_BACK = null;
+try {
+  const m = /^#zerodha=(success|cancelled|other)$/.exec(window.location.hash);
+  if (m) {
+    ZR_BACK = m[1];
+    const st = JSON.parse(localStorage.getItem("hp_zerodha") || "null"), p = st && st.here && st.here.path;
+    window.history.replaceState(null, "", typeof p === "string" && /^\/app(\/[A-Za-z0-9_-]+)*\/?$/.test(p) ? p : window.location.pathname);
+  }
+} catch { /* ignore */ }
 // loadChunk reloads a page opened before an update once; when this version has run a while, allow that again later
 setTimeout(() => { try { sessionStorage.removeItem("hp_reloaded"); } catch { /* ignore */ } }, 20000);
 
@@ -53,6 +64,8 @@ const IN_STATES = ["Andaman and Nicobar Islands","Andhra Pradesh","Arunachal Pra
 function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
   const [open, setOpen] = useState(false); const [acct, setAcct] = useState(false);
   const [theme, setTheme] = useTheme();
+  const z = React.useContext(ZerodhaCtx);                // round 20c: the Zerodha key under the profile (customers with "<app>:zerodha")
+  const zr = () => { setOpen(false); setAcct(false); z.setup(); };
   const ref = useRef(null);
   useEffect(() => { const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }; document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
   useEffect(() => { const k = e => { if (e.key === "Escape") { setOpen(false); setAcct(false); } }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
@@ -67,6 +80,8 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
           <div className="acct-h"><span className="avatar lg">{initial}</span><div><b>{me.name}</b><div className="sub">{me.email}</div></div></div>
           <button type="button" role="menuitem" className="acct-it" onClick={() => { setAcct(true); setOpen(false); }}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Account</button>
+          {z && <button type="button" role="menuitem" className="acct-it" onClick={zr} id="acct-zerodha"><Icon name="out" size={15}/>Zerodha
+            <span className="acct-hint">{z.key ? "connected" : "connect"}</span></button>}
           <button type="button" role="menuitem" className="acct-it" onClick={() => { setOpen(false); onHelpdesk(); }}><HelpdeskIcon/>Helpdesk{unread > 0 && <span className="tab-n acct-n">{unread}</span>}</button>
           <button type="button" role="menuitem" className="acct-it" onClick={() => { setOpen(false); onDocs(); }}><GuideIcon/>Docs<span className="acct-hint">how to use · golden rules</span></button>
           <div className="acct-it static">
@@ -90,6 +105,9 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
                 <span key={i} className="acct-chip">{g.name} · {g.app}{g.until ? ` (until ${fmtDay(g.until)})` : ""}</span>))}</span></div>}
               <div className="acct-apps"><span className="lbl">Applications</span><span className="acct-chips">{(me.apps || []).length
                 ? me.apps.map(a => <span key={a.key} className="acct-chip"><AppIcon k={a.key}/>{a.name}</span>) : "None yet"}</span></div>
+              {z && <div id="acct-zr-row"><span className="lbl">Zerodha</span><span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                {z.key ? <span>Connected · encrypted key ID <b style={{ fontFamily: "var(--mono)" }}>{z.key.id}</b></span> : <span>Not connected</span>}
+                <button type="button" className="px-btn zr-btn sm" onClick={zr} id="acct-zr-manage">{z.key ? "Change or remove key" : "Connect Zerodha"}</button></span></div>}
               <div><span className="lbl">Appearance</span><div className="sg">{[["dark", "Dark"], ["light", "Light"]].map(([k, l]) => <button key={k} type="button" className={theme === k ? "on" : ""} onClick={() => setTheme(k)}>{l}</button>)}</div></div>
             </div>
             <p className="sub">To change your email or password, or to renew your access, raise a query in the <b>Helpdesk</b>.</p>
@@ -486,12 +504,18 @@ const APP_MODULES = {
   builder: lazy(() => loadChunk(() => import("./apps/builder.jsx"))),
   etf: lazy(() => loadChunk(() => import("./apps/etf.jsx"))),                     // ETF analyser: its own data (/app/api/etf)
   sip: lazy(() => loadChunk(() => import("./apps/sip.jsx"))),                     // AI ETF SIP Builder (ETFs, reliable)
-  msip: lazy(() => loadChunk(() => import("./apps/msip.jsx"))),                   // AI Momentum SIP (stocks, risk)
+  msip: lazy(() => loadChunk(() => import("./apps/msip.jsx"))),
+  portfolios: lazy(() => loadChunk(() => import("./apps/allportfolios.jsx"))),      // All Portfolios (round 21): every saved portfolio                   // AI Momentum SIP (stocks, risk)
 };
 const Guide = lazy(() => loadChunk(() => import("./guide.jsx")));
 const Inbox = lazy(() => loadChunk(() => import("./inbox.jsx")));            // the Unified Inbox (round 19)
 // stock detail view (customer admin): its own chunk, downloaded only by someone with a detail permission who opens it
 const StockDetail = lazy(() => loadChunk(() => import("./apps/detail.jsx")));
+// Buy on Zerodha (round 20): the preview of a Kite basket (one pop-up) and the screen after coming back from Kite
+const ZrPanel = lazy(() => loadChunk(() => import("./zerodha.jsx")));
+const ZrReturn = lazy(() => loadChunk(() => import("./zerodha.jsx").then(m => ({ default: m.ZrReturn }))));
+const ZrConnect = lazy(() => loadChunk(() => import("./zerodha.jsx").then(m => ({ default: m.ZrConnect }))));
+const ZrCheckInBox = lazy(() => loadChunk(() => import("./zerodha.jsx").then(m => ({ default: m.ZrCheckInBox }))));
 const SharedView = lazy(() => loadChunk(() => import("./saved.jsx").then(m => ({ default: m.SharedView }))));   // /app/portfolio/<ID> of someone else
 const DATA_APPS = ["research", "simple", "portfolio"];         // the builder works on the server: no stock data needed
 const Waiting = ({ text = "Loading…" }) => <div className="card empty">{text}</div>;
@@ -513,7 +537,8 @@ function Home({ me, onOut, reloadMe }) {
   const maxPins = me.max_pins || 8;
   const [pinsRaw, setPinsRaw] = useState(me.pins ?? null);
   useEffect(() => { setPinsRaw(me.pins ?? null); }, [me]);
-  const pins = (pinsRaw ?? allowed.slice(0, maxPins)).filter(k => allowed.includes(k)).slice(0, maxPins);   // default order: AI Mode, Deep Research, …
+  // round 21: All Portfolios is never pinned by default (owner: "in More apps … not pinned") — a customer may pin it
+  const pins = (pinsRaw ?? allowed.filter(k => k !== "portfolios").slice(0, maxPins)).filter(k => allowed.includes(k)).slice(0, maxPins);   // default order: AI Mode, Deep Research, …
   // the open application: one the customer's roles allow; at sign-in the first pinned app (the landing page), else the first one
   const face = allowed.includes(faceRaw) ? faceRaw : pins[0] || allowed[0] || null;
   const [moreOpen, setMoreOpen] = useState(false); const [pinMsg, setPinMsg] = useState("");
@@ -658,6 +683,20 @@ function Home({ me, onOut, reloadMe }) {
     can: k => perms.includes(`${k}:detail`),
     open: (sym, k) => setDetail({ sym, app: k, day: k === "portfolio" ? sel : null, n: Date.now() }),
   } : null, [perms.join(), sel]);
+  // Buy on Zerodha (round 20): "<application>:zerodha" (Customer Admin first) — one preview pop-up for the whole app; back from Kite the
+  // address is /app/#zerodha=<what Kite said>: the hash is cleared at once, the customer is put back where they were, the return is shown
+  // round 20c: "Connect Zerodha" (top bar, every page): the customer's own Publisher key, saved once (encrypted on the server)
+  const [zr, setZr] = useState(null), [zrBack, setZrBack] = useState(null), [zrSetup, setZrSetup] = useState(false), [zrCk, setZrCk] = useState(null);
+  const [zrKey, setZrKey] = useState(me.zerodha || null);
+  const zrCtx = useMemo(() => perms.some(p => p.endsWith(":zerodha")) ? {
+    can: k => perms.includes(`${k}:zerodha`), open: req => setZr({ req, here: { path: window.location.pathname } }), here: () => ({ path: window.location.pathname }),
+    key: zrKey, setKey: setZrKey, setup: () => setZrSetup(true), checkin: (h, done) => setZrCk({ h, done }),
+  } : null, [perms.join(), zrKey]);
+  useEffect(() => {
+    if (!ZR_BACK) return;
+    const w = ZR_BACK; ZR_BACK = null;
+    if (perms.some(p => p.endsWith(":zerodha"))) setZrBack(w);
+  }, []);
   const app = k => {
     if (k === "research") return <APP_MODULES.research data={data} err={err} sel={sel} mode={mode} setMode={setMode}/>;
     // the applications with their own server data start again on that day when the day changes (key)
@@ -665,6 +704,7 @@ function Home({ me, onOut, reloadMe }) {
     if (k === "sip") return <APP_MODULES.sip key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
     if (k === "msip") return <APP_MODULES.msip key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
     if (k === "builder") return <APP_MODULES.builder key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
+    if (k === "portfolios") return <APP_MODULES.portfolios key={dayKey} onOut={onOut}/>;
     if (!data) return <Waiting text={err || "Loading…"}/>;
     if (k === "simple") return <APP_MODULES.simple data={data} mode={mode} setMode={setMode} sym={simpleSym} setSym={setSimpleSym}/>;
     if (k === "portfolio") return pf != null ? <APP_MODULES.portfolio data={data} symbols={pf} setSymbols={setPf} status={pfStatus} me={me} sent={pfSent} onOut={onOut}/> : <Waiting/>;
@@ -684,7 +724,7 @@ function Home({ me, onOut, reloadMe }) {
   const showsData = view === "tower" && DATA_APPS.includes(face);
   const ownAsOf = view === "tower" && !showsData && face ? appAsOf[face] : null;     // apps with their own data (ETF, SIP, Builder)
   return (
-    <DetailCtx.Provider value={detailCtx}><AsOfCtx.Provider value={reportAsOf}>
+    <DetailCtx.Provider value={detailCtx}><ZerodhaCtx.Provider value={zrCtx}><AsOfCtx.Provider value={reportAsOf}>
     <div className={`shell ${navMin ? "nav-min" : ""}`}>
       <SideNav apps={apps} pins={pins} face={face} view={view} onFace={k => { setMoreOpen(false); setFace(k); }}
         onDocs={() => { setMoreOpen(false); goView("guide"); }} onHelpdesk={() => { setMoreOpen(false); openHelpdesk(null); }}
@@ -704,6 +744,7 @@ function Home({ me, onOut, reloadMe }) {
           ? <DayPicker days={hist.days} sel={sel} asOf={showsData ? data && data.as_of : ownAsOf || (sel && (hist.days.find(x => x.d === sel.date) || {})[sel.part])} onPick={setSel} onOpen={loadHist} face={face}/>
           : <>{showsData && <div className="asof">{data ? <>DATA AS OF <b>{fmtDT(data.as_of)}</b></> : err ? "" : "Loading…"}</div>}
             {ownAsOf && <div className="asof" id="top-asof">DATA AS OF <b>{fmtDT(ownAsOf)}</b></div>}</>}
+        <ZerodhaChip/>
         <QuickGuideButton onDocs={() => goView("guide")}/>
         <CommunityButton unread={cm} onOpen={() => goView("community")} active={view === "community"}/>
         <NotifyCenter notes={notes} hd={unread} onInbox={openInbox}/>
@@ -737,8 +778,12 @@ function Home({ me, onOut, reloadMe }) {
     </div>
       </div>
       {detail && <Suspense fallback={null}><StockDetail req={detail} onClose={() => setDetail(null)} onOut={onOut}/></Suspense>}
+      {zr && <Suspense fallback={null}><ZrPanel req={zr.req} here={zr.here} zkey={zrKey} onKey={setZrKey} onClose={() => { setZr(null); zr.req.onClosed && zr.req.onClosed(); }}/></Suspense>}
+      {zrCk && <Suspense fallback={null}><ZrCheckInBox h={zrCk.h} onDone={r => zrCk.done && zrCk.done(r)} onClose={() => setZrCk(null)}/></Suspense>}
+      {zrBack && <Suspense fallback={null}><ZrReturn word={zrBack} onClose={() => setZrBack(null)}/></Suspense>}
+      {zrSetup && zrCtx && <Suspense fallback={null}><ZrConnect zkey={zrKey} onKey={setZrKey} onClose={() => setZrSetup(false)}/></Suspense>}
     </div>
-    </AsOfCtx.Provider></DetailCtx.Provider>
+    </AsOfCtx.Provider></ZerodhaCtx.Provider></DetailCtx.Provider>
   );
 }
 

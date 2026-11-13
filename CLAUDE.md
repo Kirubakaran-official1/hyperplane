@@ -88,6 +88,9 @@ A new customer application is not finished until each line below is done and tes
    - RLS + column grants for any new table the customer service touches (`db._setup_portal_role`);
    - per-account / per-IP rate limits.
 6. **Tests:** API + browser suite in the scratchpad (`run_all.sh`), including access (403 without the permission), Inbox items, phone width and dark mode. Add the suite to the list in CLAUDE.md.
+7. **Buy on Zerodha (round 20):** an application whose results hold stocks and quantities gets an owner-level `<key>:zerodha` permission
+   (granted once to the Customer Admin) and a `ZerodhaButton` (core.jsx) with lines `[{s, qty, every?}]`. Lines are always checked on the
+   server (`/app/api/zerodha/check` → `prepare`) against Zerodha's own list; the server never places an order. Inside a pop-up use `inline`.
 
 ---
 
@@ -2405,3 +2408,141 @@ Owner's words: "while swapping I need the detail view of the swappable one too, 
   - Esc: detail tab → AI summary → options.
 - **SwapPanel:** a small "See CUR in detail ›" link (`[data-curpeek]`) above the options opens the replaced stock's own insight, with no Swap button: the AI summary for everyone and the detail tab for the Customer Admin.
 - `sections_test` checks both detail tabs and the replaced-stock insight inside the same `.tk-modal`, with no `.dt-overlay`.
+
+### Round 20 — Buy on Zerodha (Kite Publisher offsite basket), Customer Admin first (owner 2026-11-13)
+Owner's words: "push the script and quantity to Zerodha … if not logged in, Zerodha asks for the login … our ticker and Zerodha's might be
+different — the best way, with validation that the same ticker is used in Zerodha … no scraping from untrusted sources, proper compliance".
+Full write-up (sources, setup, crosswalk, checklist): `docs/zerodha-publisher.md`.
+- **How it works:** the customer's own browser posts a form (`api_key` + `data` = basket JSON) to `https://kite.zerodha.com/connect/basket`.
+  Kite logs them in when needed, shows the orders, and they confirm there. No order API, no Zerodha token, nothing automatic.
+- **Symbols** (`backend/app/zerodha.py`): Zerodha's official NSE instrument list (`api.kite.trade/instruments/NSE`), fetched by the worker
+  once a day after 08:35 IST (Zerodha's advice), stored whole in `zerodha_instruments` after a sanity gate (exact header, ≥ 1,500 rows,
+  ≤ 20 % drop — else the old list stays). Our ChartInk symbol → ✓ same tradingsymbol · ⚠ exactly one `<sym>-<series>` (BE / BZ / SM / ST)
+  · ✓ admin correction (`zerodha_symbol_map`, target must be on the list) · ✗ missing / blocked. Never matched by name.
+  On 13 Nov 2026: 2,717 published stocks / ETFs → 2,557 same symbol, 160 `-BE` / `-BZ`, 0 missing.
+- **Orders:** NSE · CNC · **LIMIT** (offsite baskets reject MARKET — market protection is not passed) at OUR latest server price
+  +1 % to buy / −1 % to sell (owner's choice), rounded to Zerodha's `tick_size` per instrument; whole lots; `readonly:false`;
+  ≤ 10 lines a basket (more = "basket 1 of N", each its own click); 8-character uppercase tag.
+- **Where:** SIP + Momentum SIP result (this instalment's units; "1 every N" holdings unticked), Builder result (day 1 of the buying plan
+  when there is one), saved SIP / Builder (tracker `#svp-zr`; lines built on the server from the plan), Inbox "order is ready" (`#ib-zr`),
+  swaps (tracker banner `#svp-zr-swap`, Swaps list `#sw-zr-N`, Inbox swapped rows, AI watch — **inline** there, no pop-on-pop).
+  A swap basket = SELL the old stock (≤ what the plan's tracking holds; the Analyser list has no quantities) then BUY the new one.
+- **RBAC:** `sip:zerodha`, `msip:zerodha`, `builder:zerodha`, `portfolio:zerodha` (owner-level; `migrate_zerodha` → Customer Admin once).
+  `ZerodhaCtx` in core.jsx; customers without it get no button and never download the `zerodha` chunk.
+- **Return:** the redirect URL registered on the Publisher app is `/app/api/zerodha/return` (public — the SameSite=Strict cookie does not
+  come with Kite's redirect). It drops the query (request token never stored; `uvicorn.access` filter keeps the path only) and 303s to
+  `/app/#zerodha=success|cancelled|other`. The shell restores the page left (`hp_zerodha.here.path`), then POSTs `/returned` as the
+  signed-in customer: their newest `SENT_TO_KITE` hand-off of the last 2 h → `RETURNED_UNVERIFIED` (else a `NEEDS_REVIEW` row). The
+  screen says "Kite says … sent for placing — check Kite → Orders", never placed / filled, and offers the next basket.
+- **Tables:** `zerodha_instruments`, `zerodha_symbol_map` (portal read-only), `zerodha_handoffs` (portal: own rows by RLS, insert + the
+  return columns only; worker expires after 2 h, deletes after 400 days). Publisher key + on/off: `portal_config.zerodha`, read by the
+  portal only through `portal_zerodha()`.
+- **CSP:** `/app` `form-action 'self' https://kite.zerodha.com` (the only outside place a form may go).
+- **Admin → 🔗 Zerodha:** setup steps + redirect URL (copy), the key and on/off, the list status + "Load now", today's stocks not plainly on
+  Zerodha with Map to… / Block / Clear, the last 100 hand-offs.
+- **Tests:** `zerodha_test` (72 API checks: RBAC 403, catalogue, list + coverage, resolution, tick / limit, quantities, 10-line cap, tag,
+  SELL only in a swap within the plan, basket JSON, return without token in URL / log / DB, replay, RLS, switched off), `zerodha_ui_test`
+  (35 browser checks; `form.submit` is replaced in the page so NOTHING reaches Zerodha), `zerodha_admin_ui`.
+
+### Round 20b — Connect Zerodha in the top bar + international momentum ETFs (owner 2026-11-13)
+Owner's words: "Connect Zerodha on the top of every page … one-time … very very simple for people who are not tech … step by step in the
+customer app itself … once connected show it". He chose to stay on the free Publisher hand-off (no algo certification: the customer confirms
+every order on Kite). Publisher keeps no login of ours, so the top bar says **"Zerodha · ready"** (the steps are done) — never "logged in".
+- **Top bar** `ZerodhaChip` (core.jsx, `#zr-chip`) for holders of any `<app>:zerodha`: "Connect Zerodha" → `ZrConnect` (zerodha.jsx) — one
+  window, 3 steps: (1) a Zerodha account — "Yes, I have one" / "Open a Zerodha account" (zerodha.com/open-account, new tab), (2) sign in to
+  Kite on this device (kite.zerodha.com, new tab) → "I'm signed in", (3) how buying works (delivery only; **-BE stocks are delivery only, no
+  intraday**, so they work the same; Zerodha may ask to sign in each day) → Done. Then "Zerodha · ready" (green) on every page; its window:
+  Open Kite · See the steps again · Disconnect.
+- **First Buy on Zerodha** without the steps → the same 3 steps first, in the same pop-up (or inline in the AI watch), then the orders.
+- **Back from Kite** with a sent basket marks ready by itself. The `#zerodha=` hash is now read and cleared at module load (shell.jsx
+  `ZR_BACK`) — the app's own routing used to drop it when the customer came back to plain `/app/`.
+- **Stored:** `customer_zerodha (customer_id PK, ready_at)` — own table with RLS (a `customer_prefs` row would turn "never chose pins" into
+  "no pins"). Nothing secret is stored: the only key is the owner's Publisher key (a public app id) in Admin → Zerodha.
+  `POST /app/api/zerodha/ready {ready}`; `/me.zerodha_ready`.
+- **AI ETF SIP Builder, More diversified** (`sip._intl_momentum`, `INTL_MAX = 2`): the 2 strongest international ETFs in a long-term uptrend
+  (`_up`), easy to trade, one per market, first among the extras (so they always fit), role `diversifier`, ≤ `EXTRA_CAP` each — even when
+  not "Recommended" (owner: "momentum, easy to trade, top 2"; their trading may be uneven → "buy it with a limit order" in the why).
+  On 13 Nov 2026: MONQ50 (Nasdaq Q-50 +79) and MAFANG (FANG+ +31). Focus / Standard unchanged.
+- **Tests:** `zerodha_test` (+ ready mark, RLS, no pins row, More diversified), `zerodha_ui_test` (+ chip, 3 steps, links, ready, Disconnect,
+  ready by itself after a return, phone).
+
+### Round 20c — each customer's own Publisher key, encrypted; Account settings; disclaimer (owner 2026-11-13)
+Owner's words: "the API key comes from the customer, in the customer app, not the admin app … the step-by-step guide in ONE pop-up … store it
+against the user, encrypted with high-end security … next time just ask them to log in to Kite in the next tab … if they didn't, ask while
+pushing the order … remove the zombie code … a market-risk disclaimer before placing … the key under Profile → Account, change or remove".
+- **Admin:** the Publisher key field, the on/off switch and `portal_config.zerodha` / `portal_zerodha()` are gone. Admin → 🔗 Zerodha keeps
+  only the symbol list (status, Load now, corrections), the hand-offs and "Customers connected: N".
+- **Vault** (`backend/app/vault.py`): AES-256-GCM envelope (a random data key per secret, sealed by the master key), AAD = purpose + kek id +
+  customer id (a copied or edited row fails to open). Master key = `secrets/zerodha_kek` (base64 32 bytes, git-ignored), mounted read-only
+  into the **portal only** (`./secrets:/run/hp-secrets:ro`) — `.env` would reach api / worker. `secrets/zerodha_kek_old` = kek id 0.
+- **Table** `zerodha_keys (customer_id PK, key_ct, key_nonce, dek_ct, dek_nonce, kek_id, key_hint (last 4), saved_at)`, RLS own row.
+  Routes: `PUT/DELETE /app/api/zerodha/key`, `GET /app/api/zerodha/status` (key hint, available, redirect URL); `/me.zerodha` = {hint, saved}.
+  `prepare` opens the key (`vault.unseal`) only for that hand-off; 409 "Connect Zerodha first" / "could not be opened — save it again".
+- **Customer app:** `ZerodhaChip` "Connect Zerodha" / "Zerodha · connected"; `ZrConnect` = `KeyForm` (4 steps + the redirect URL with Copy +
+  a password-type key field, autocomplete off) or `Connected` (••••hint, Log in to Kite in a new tab, Replace key, Remove key). Buy on Zerodha
+  without a key → `KeyForm` first (same pop-up / inline), then the orders. Profile menu "Zerodha" + Account window row "Change or remove key".
+- **Orders:** the market-risk disclaimer ("Investments in the securities market are subject to market risks …") with a required "I have read
+  and understood this" tick before Open Kite. Kite opens in a **new tab** (`window.open` inside the click → form `target="hp_kite"`;
+  blocked pop-up → this tab); the Hyperplane tab shows "Kite opened in a new tab" and "Open basket 2 of N". State in localStorage.
+  Basket lines now carry `validity: "DAY"` (the owner's tested format). The round 20b 3-step "ready" flow was removed.
+
+### Round 20d — guided Zerodha onboarding with screenshots; no part of the key is ever shown (owner 2026-11-13)
+Owner's words: "improve the Zerodha onboarding … use only the email and phone of the Zerodha account … don't show any part of the key — show the
+encrypted one … educate the user … ask them to create a developer account … the screenshots in the website itself, every field marked, don't
+fill the IP … then log in … hide my details in the images".
+- **Connect Zerodha = 3 steps in ONE pop-up** (`KeyForm`, zerodha.jsx): (1) free Kite developer account — `developers.kite.trade/signup`
+  / `login`, "use only the email and mobile number of your Zerodha trading account", every field explained, **IP Whitelist: leave it
+  empty**; (2) Create new app (`/apps/new`) — Publisher (free, not Connect / Personal), any name, the Redirect URL with Copy, any
+  description, Create; (3) copy the API key → the key field → Save; then `Connected` = "Step 4: log in to Kite". Change key opens at step 3
+  with an empty field ("See all the steps" goes back); the saved key stays until the new one is saved (one UPSERT).
+- **Screenshots** `frontend/app/src/zr-guide/*.png` (imported → hashed assets in the zerodha chunk only): the owner's console screenshots
+  with every personal detail and the real API key painted over, fields outlined + numbered, the IP whitelist marked LEAVE EMPTY.
+  Made by the scratchpad script `zr_guide_imgs.py` (re-run it with new screenshots if Zerodha changes its pages).
+- **Key ID instead of the last 4 characters:** `zerodha_keys.key_fp` = `vault.key_id(key)` — HMAC-SHA256 under a sub-key of the master key,
+  shown as `XXXX-XXXX` ("Encrypted key ID"). `key_hint` was dropped (round 20c rows without a key ID are removed at start: customers save
+  again). `/me.zerodha` and `status.key` = {id, saved}.
+- Tests: `zerodha_test` (key ID format, no run of the key in it, no `key_hint` column, a failed change keeps the saved key),
+  `zerodha_ui_test` (the 3 steps, links, the IP / email notes, the screenshots load, Change key shows nothing of the old key).
+
+### Round 21 — SIP reminders, check-in of real orders, sell-then-buy swaps, multi-basket UX, All Portfolios (owner 2026-11-13)
+Owner's words: "a monthly reminder for the SIP — ask for the date … a notification in the Inbox, from where they place the order on Zerodha or
+go to the portfolio … track the real order … if stocks were swapped, remove the old stocks first, then another basket for the new ones — the
+system doesn't know whether the previous order is done … multiple baskets: don't confirm automatically … always a new tab … a swap never
+repeated … All Portfolios in More apps for every customer, not pinned".
+- **Reminder:** `customer_sips.reminder_day` (1–28, PATCH `/app/api/saved/{sid}` — SIPs only), tracker "Reminder: Day N" select
+  (`#svp-remind`). `monitor.run_reminders` (worker, once a day after 09:00 IST, settings `sip_reminders_day`): on that day (quarterly: first
+  month of the quarter) one Inbox item "<plan>: this month's instalment is due" `{order, total, period, reminder}`; a plan with a reminder
+  no longer gets the automatic "order is ready" item. Inbox: Buy on Zerodha + Open the plan + "On Zerodha (2026-11): …" status.
+- **Check-in** (Hyperplane cannot read Zerodha): `zerodha_handoffs.period / swap_key / step / checkin / checked_at`.
+  `POST /app/api/zerodha/handoffs/{id}/checkin {status placed|partly|not_placed, lines [{s, qty, price}]}` (own row; subset of the basket;
+  qty 0…10× plan; price ≤ 10× limit). A placed instalment (last basket of the run) closes its Inbox item (`inbox.settle_order`); the same
+  instalment is refused again (409) unless `again`. `GET /app/api/saved/{sid}/zerodha` → periods (placed / partly / waiting / not placed),
+  swaps (todo · sell_sent · sold · buy_sent · done), waiting baskets, real holdings (qty, avg cost) — the tracker's **On Zerodha** section
+  (`#svp-zerodha`) beside the model tracking.
+- **Swaps = two steps:** check / prepare take `step`; sell (≤ what the plan holds) → check in → buy → check in → done. The buy is refused
+  before the sell check-in, the sell after it, both once done (never sent twice). "I don't hold it / sold it already" =
+  `POST /app/api/zerodha/swap/skip-sell` (a SKIPPED hand-off). Swaps list buttons follow the state (Sell on Zerodha · Check in the sell ·
+  Buy on Zerodha · Check in the buy · "Done on Zerodha").
+- **Baskets:** Kite ALWAYS opens in a new tab (`window.open` in the click → form `target=hp_kite`; blocked → a real `<form target=_blank>`
+  button; never this tab). After each basket the window asks "Did you place basket k of N?" — Placed as planned · Edit what I placed ·
+  Not placed — before offering the next. Kite's tab (return URL) shows what Kite said + the same check-in + Close this tab, and tells the
+  Hyperplane tab through localStorage (`hp_zerodha_ret` heard, `hp_zerodha_ck` checked in). A basket sent earlier and not checked in
+  (`check.pending`) opens first. `ZrCheckInBox` (shell, `ZerodhaCtx.checkin`) for the tracker's waiting list.
+- **All Portfolios:** module `portfolios` + `portfolios:view` (`migrate_all_portfolios` → every role), `apps/allportfolios.jsx`
+  (slug `all-portfolios`): totals (portfolios, invested, value, returns from `saved?kind=all&spark=1`) + `MyPortfolios app="portfolios"`
+  (KIND_OF_APP → "all"). Never in the default pins (shell leaves it out); under More apps.
+- Tests: `zerodha_test` (+ swap steps, check-in rules, reminders, instalment once, Zerodha view), `zerodha_ui_test` (rewritten: new tab
+  only, check-in gates, Kite tab heard, swap two-step → done, Inbox instalment closes, All Portfolios, Account key).
+
+### Round 21b — several swaps at once: all sells, then all buys (owner 2026-11-13)
+Owner: "for the swaps bring the option for all sell then all buy with the check box"; also "UI issue: Your holdings from your check-ins".
+- **Swaps list** (`SwapHistory`, `zrBulk`): a tick box on each swap not done yet (state todo / sold) + "Select all" bar (`#sw-bulk`) →
+  "Sell all N on Zerodha" (ticked swaps still to sell) and "Buy all N on Zerodha" (ticked swaps already sold). Shown when ≥ 2 can be ticked.
+- **Source `swaps`** (`ZrIn.swaps = [{out, in}]`, `step` required): check / prepare build one line per eligible swap (sell: state todo;
+  buy: state sold) — others are left out and listed (`check.swaps[].ok`). The basket records `zerodha_handoffs.swap_keys` (one key per line).
+  Swap state is now per stock (`_line_ok`): a partly check-in counts the stocks with a quantity > 0, so in a shared sell basket one swap can be
+  sold and another not. After all sell baskets are checked in, the window offers "Next: buy the new stocks" (`#zr-bulk-buy`).
+- **On Zerodha** section: the card has no padding of its own — its content now sits in `.zrs-body` (12 × 16 px), tables boxed.
+- Tests: `zerodha_test` (+ shared sell basket, per-stock check-in, buy only the sold one, done never offered again),
+  `zerodha_ui_test` (+ tick 2 → sell all → check in → buy all → check in → all done; the label inside the card padding).
+

@@ -5,8 +5,8 @@
 // current value, P&L, net and day change) with Swap in a centre pop-up, the momentum check and the alerts switch
 // (monitor.py → the 🔔 notification centre). Shared by apps/portfolio.jsx, builder.jsx and sip.jsx; the server does
 // every calculation. Only the customer who saved a portfolio can see it (row-level security).
-import React, { useEffect, useRef, useState } from "react";
-import { APP_SLUG, AiSpark, GroupRow, Icon, Info, StockLink, addCss, api, copyText, fmtDT, goPath, portfolioUrl, routeOf, signed, swapSections, useToast } from "./core.jsx";
+import React, { useContext, useEffect, useRef, useState } from "react";
+import { APP_SLUG, AiSpark, GroupRow, Icon, Info, StockLink, ZerodhaButton, ZerodhaCtx, addCss, api, copyText, fmtDT, goPath, portfolioUrl, routeOf, signed, swapSections, useToast } from "./core.jsx";
 import { Simulators } from "./sim.jsx";
 import { SwapPanel } from "./swap-ui.jsx";
 
@@ -211,6 +211,16 @@ addCss("saved", `
 .aw-chips span.bad{border-color:var(--short);color:var(--short);background:var(--shortd)}.aw-chips span.ok{color:var(--long);border-color:color-mix(in srgb,var(--long) 40%,var(--b1))}
 @keyframes awTick{from{opacity:0;transform:translateY(4px) scale(.95)}to{opacity:1;transform:none}}
 .aw-it{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;border:1px solid var(--b1);background:var(--s1);animation:awTick .35s both}
+.aw-zr{display:flex;flex-wrap:wrap;align-items:flex-start}
+.zrs-st{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:11px;font:700 11.5px var(--sans);white-space:nowrap}
+.zrs-st.ok{background:color-mix(in srgb,var(--long) 12%,transparent);color:var(--long)}.zrs-st.part{background:color-mix(in srgb,var(--mixed) 14%,transparent);color:var(--mixed)}
+.zrs-st.wait{background:var(--adim);color:var(--acc)}.zrs-st.no{background:color-mix(in srgb,var(--short) 12%,transparent);color:var(--short)}
+.zrs-wait{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}.zrs-wait>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;border-radius:9px;background:var(--adim);font-size:13px;color:var(--t1)}
+.zrs-wait>div span{flex:1;min-width:180px}
+.zrs-body{display:flex;flex-direction:column;gap:10px;padding:12px 16px}.zrs-body .hp-tw{border:1px solid var(--b1);border-radius:10px}.zrs-lbl{margin-top:4px}
+.zrs-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--b1);background:var(--s2);font-size:13px;color:var(--t2)}
+.zrs-bar label{display:inline-flex;gap:7px;align-items:center;font-weight:700;color:var(--t1);cursor:pointer}.zrs-bar .zrs-gap{flex:1}
+.sw-pick{display:inline-flex;align-items:center;gap:6px;margin-bottom:4px}.sw-pick input,.zrs-bar input{width:16px;height:16px;accent-color:var(--acc);cursor:pointer}#svp-zr-swap{align-items:center;flex-wrap:wrap}
 .tk-filt{display:inline-flex;padding:3px;gap:3px;border:1px solid var(--b2);border-radius:999px;background:var(--s2)}
 .tk-filt button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:0;border-radius:999px;background:none;color:var(--t2);font:600 12.5px var(--sans);cursor:pointer}
 .tk-filt button.on{background:var(--s1);color:var(--t1);box-shadow:0 1px 3px rgba(0,0,0,.12)}.tk-filt button:last-child.on{color:var(--short)}.tk-filt button:disabled{opacity:.45;cursor:default}
@@ -252,7 +262,7 @@ addCss("saved", `
 `);
 
 const WORD = { month: "month", quarter: "quarter" };
-const KIND_OF_APP = { sip: "sip", msip: "msip", builder: "builder", portfolio: "analyser" };
+const KIND_OF_APP = { sip: "sip", msip: "msip", builder: "builder", portfolio: "analyser", portfolios: "all" };   // portfolios = All Portfolios (round 21)
 const TAGS = [["analyser", "AI Portfolio Analyser"], ["builder", "Portfolio Builder"], ["sip", "AI ETF SIP Builder"], ["msip", "AI Momentum SIP Builder"]];
 const GROUP_NAME = { Large: "Large cap", Mid: "Mid cap", Small: "Small cap", ETF: "ETFs", Other: "Other" };
 const GROUP_COL = { Large: "var(--mx-l)", Mid: "var(--mx-m)", Small: "var(--mx-s)", ETF: "var(--ch-etf)", Other: "var(--mx-c)" };
@@ -282,6 +292,41 @@ const crore = v => v == null ? "—" : v >= 1e5 ? `₹${(v / 1e5).toFixed(2)} L 
 export const SizeTags = ({ x }) => <span className="tk-sz"><span className="pr" title="Last price">{inr2(x.p)}</span>
   <span title="Market value of the company">{crore(x.mcap)}</span>{x.cap && <span>{x.cap} cap</span>}</span>;
 export const DETAIL_APP = { analyser: "portfolio", portfolio: "portfolio", builder: "builder", msip: "msip" };
+// Buy on Zerodha (round 20): which application's "<app>:zerodha" permission a saved portfolio uses
+export const ZR_APP = { sip: "sip", msip: "msip", builder: "builder", analyser: "portfolio" };
+const zrSwapReq = (it, out, inn, onClosed) => ({ app: ZR_APP[it.kind], source: "swap", sid: it.id, swap_out: out, swap_in: inn, title: `Swap ${out} → ${inn} · ${it.name}`, onClosed });
+// round 21: where a swap stands on Zerodha (the customer's check-ins) → the next step's button, or "done"
+const SWAP_NEXT = { todo: "Sell on Zerodha", sell_sent: "Check in the sell", sold: "Buy on Zerodha", buy_sent: "Check in the buy" };
+const PERIOD_WORD = { placed: ["ok", "Placed"], partly: ["part", "Partly placed"], waiting: ["wait", "Waiting for your check-in"], not_placed: ["no", "Not placed"] };
+const periodName = p => /^\d{4}-Q\d$/.test(p) ? `${p.slice(5)} ${p.slice(0, 4)}` : new Date(p + "-01T00:00:00").toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+
+// round 21 (owner: "track the real order for the SIP … what I pushed this month, and check in"): this plan on Zerodha as the customer checked
+// it in, beside the model tracking — each instalment planned vs placed, the baskets waiting for a check-in, and the holdings the check-ins add up to
+function OnZerodha({ zv, onCheckin }) {
+  if (!zv) return null;
+  const sum = (ls, k) => (ls || []).reduce((a, x) => a + (+x[k] || 0), 0);
+  return (
+    <section className="px-card tk-card" id="svp-zerodha" data-sec>
+      <div className="tk-ch"><h3><Icon name="out" size={15}/> On Zerodha<small>what you placed, as you checked it in · beside the plan</small></h3></div>
+      <div className="zrs-body">
+      {!zv.periods.length && !zv.waiting.length && !zv.holdings.length ? <div className="svp-note" id="svp-zr-none">Nothing sent to Zerodha from this portfolio yet. Use Buy on Zerodha, then check in what you placed.</div> : <>
+        {zv.waiting.length > 0 && <div className="zrs-wait" id="svp-zr-waiting">{zv.waiting.map(h => <div key={h.id} data-wait={h.id}>
+          <Icon name="clock" size={14}/><span>Sent to Kite on {dLong(h.at.slice(0, 10))}{h.parts > 1 ? ` · basket ${h.part} of ${h.parts}` : ""}{h.step ? ` · swap ${h.step}` : ""} — waiting for your check-in</span>
+          <button type="button" className="px-btn primary zr-btn sm" onClick={() => onCheckin(h)} data-checkin={h.id}>Check in</button></div>)}</div>}
+        {zv.periods.length > 0 && <div className="hp-tw"><table className="hp-t" id="svp-zr-periods"><thead><tr><th>Instalment</th><th>On Zerodha</th><th className="num">Planned</th><th className="num">Placed</th><th className="num hm">Baskets</th></tr></thead>
+          <tbody>{zv.periods.map(p => { const [tone, word] = PERIOD_WORD[p.status] || []; const lines = p.baskets.flatMap(b => b.lines || []), ck = p.baskets.flatMap(b => (b.checkin && b.checkin.lines) || []);
+            return <tr key={p.period} data-period={p.period}><td><b>{periodName(p.period)}</b></td><td><span className={`zrs-st ${tone}`}>{word}</span></td>
+              <td className="num">{sum(lines, "qty").toLocaleString("en-IN")} shares</td><td className="num">{ck.length ? `${sum(ck, "qty").toLocaleString("en-IN")} shares` : "—"}</td>
+              <td className="num hm">{p.baskets.length}</td></tr>; })}</tbody></table></div>}
+        {zv.holdings.length > 0 && <><div className="px-label zrs-lbl">Your holdings from your check-ins</div>
+          <div className="hp-tw"><table className="hp-t" id="svp-zr-hold"><thead><tr><th>Stock</th><th className="num">Qty</th><th className="num">Avg. cost</th><th className="num">Invested</th></tr></thead>
+            <tbody>{zv.holdings.map(h => <tr key={h.s} data-zr-hold={h.s}><td><span className="sym">{h.k || h.s}</span></td><td className="num">{h.qty.toLocaleString("en-IN")}</td>
+              <td className="num">{inr2(h.avg)}</td><td className="num">{inr(h.cost)}</td></tr>)}</tbody></table></div></>}
+      </>}
+      </div>
+      <div className="tk-foot">Hyperplane cannot see your Zerodha account — these are the orders you checked in. Kite → Orders is the record.</div>
+    </section>);
+}
 export function SwapOptions({ items, busy, onPick, cur, amount, per, kind }) {
   return <SwapPanel items={items} cur={cur || {}} onPick={onPick} busy={busy} amount={amount} per={per} idp="tk" app={DETAIL_APP[kind] || "portfolio"}/>;
 }
@@ -303,9 +348,19 @@ export function SwapDetail({ w, inr, inr2, pct, tone, isSip }) {
     </div>);
 }
 // ── swap history: from when, what to what, and how both did after (round 15); each swap opens for its amounts (round 17) ──
-export function SwapHistory({ swaps, id = "svp-swaps", isSip }) {
+export function SwapHistory({ swaps, id = "svp-swaps", isSip, zr = null, zrBulk = null }) {
   const [open, setOpen] = useState(() => new Set());
+  // round 21b (owner: "for the swaps — all sell, then all buy, with check boxes"): tick the swaps not done yet → sell them all in one go, check
+  // in, then buy all the ones sold
+  const [pick, setPick] = useState(() => new Set());
   if (!swaps || !swaps.length) return null;
+  const kOf = w => `${w.d}|${w.out && w.out.s}|${w.in && w.in.s}`;
+  const zs = zr ? swaps.filter(w => w.out && w.in).map(w => ({ w, k: kOf(w), z: zr(w) })) : [];
+  const can = zs.filter(x => x.z.state === "todo" || x.z.state === "sold");
+  const chosen = can.filter(x => pick.has(x.k));
+  const toSell = chosen.filter(x => x.z.state === "todo"), toBuy = chosen.filter(x => x.z.state === "sold");
+  const toggle = k => setPick(o => { const x = new Set(o); x.has(k) ? x.delete(k) : x.add(k); return x; });
+  const allOn = can.length > 0 && can.every(x => pick.has(x.k));
   const side = (x, cls) => !x ? <div className={`sw-s ${cls}`}><div><span className="sym">—</span><small>{cls === "out" ? "nothing left" : "nothing bought"}</small></div></div> : (
     <div className={`sw-s ${cls}`}><div><span className="sym">{x.s}</span><small>{x.n && x.n !== x.s ? x.n : ""}{x.cap ? ` · ${x.cap} cap` : ""}</small>
       {(x.invested != null || x.sold_for != null) && <small className="sw-am">{cls === "out" ? `${inr(x.sold_for != null ? x.sold_for : x.invested)} moved` : `${inr(x.invested)} in`}</small>}</div>
@@ -313,15 +368,25 @@ export function SwapHistory({ swaps, id = "svp-swaps", isSip }) {
   return (
     <section className="px-card tk-card" id={id} data-sec>
       <div className="tk-ch"><h3><Icon name="swap" size={15}/> Swaps<small>{swaps.length} change{swaps.length === 1 ? "" : "s"} · the stock that left is still followed, so you see what the swap did</small></h3></div>
+      {zrBulk && can.length > 1 && <div className="zrs-bar" id="sw-bulk">
+        <label><input type="checkbox" checked={allOn} onChange={e => setPick(e.target.checked ? new Set(can.map(x => x.k)) : new Set())} id="sw-pick-all"/> Select all</label>
+        <span>{chosen.length ? `${chosen.length} selected` : "Tick swaps to do them together on Zerodha: all the sells first, then all the buys"}</span><span className="zrs-gap"/>
+        {toSell.length > 0 && <ZerodhaButton small label={`Sell all ${toSell.length} on Zerodha`} id="sw-sell-all" req={zrBulk(toSell.map(x => x.w), "sell", () => setPick(new Set()))}/>}
+        {toBuy.length > 0 && <ZerodhaButton small label={`Buy all ${toBuy.length} on Zerodha`} id="sw-buy-all" req={zrBulk(toBuy.map(x => x.w), "buy", () => setPick(new Set()))}/>}
+      </div>}
       <div className="sw-list">{swaps.map((w, i) => (
         <div key={i} className={`sw-wrap ${open.has(i) ? "open" : ""}`}>
           <div className="sw-r" data-out={w.out && w.out.s} data-in={w.in && w.in.s} role="button" tabIndex={0} aria-expanded={open.has(i)} data-swap-row={i}
             onClick={() => setOpen(o => { const x = new Set(o); x.has(i) ? x.delete(i) : x.add(i); return x; })}
             onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } }}>
-            <div className="sw-d">{dLong(w.d)}<small>swapped</small></div>
+            <div className="sw-d">{zrBulk && can.length > 1 && can.some(x => x.k === kOf(w)) && <span className="sw-pick" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+                <input type="checkbox" checked={pick.has(kOf(w))} onChange={() => toggle(kOf(w))} aria-label={`Select the swap ${w.out.s} → ${w.in.s}`} data-sw-pick={kOf(w)}/></span>}
+              {dLong(w.d)}<small>swapped</small></div>
             {side(w.out, "out")}<span className="sw-ar"><Icon name="chevron" size={15}/></span>{side(w.in, "in")}
             <div className="sw-e">{w.edge == null || (w.edge === 0 && w.in && w.in.then === w.in.now) ? <b>Starts next close</b> : <b className={tone(w.edge)}>{w.edge >= 0 ? "Swap ahead" : "Swap behind"} {Math.abs(w.edge).toFixed(2)}%</b>}
-              <span>{open.has(i) ? "Hide details" : "Details"} <Icon name="chevron" size={11}/></span></div>
+              <span>{open.has(i) ? "Hide details" : "Details"} <Icon name="chevron" size={11}/></span>
+              {zr && w.out && w.in && (z => z.state === "done" ? <span className="zrs-st ok" id={`sw-zr-${i}`} data-zr-state="done"><Icon name="check" size={12}/> Done on Zerodha</span>
+                : <span onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()} data-zr-state={z.state}><ZerodhaButton small label={SWAP_NEXT[z.state] || "On Zerodha"} req={z.req} id={`sw-zr-${i}`}/></span>)(zr(w))}</div>
           </div>
           {open.has(i) && <SwapDetail w={w} inr={inr} inr2={inr2} pct={pctTxt} tone={tone} isSip={isSip}/>}
         </div>))}</div>
@@ -502,6 +567,14 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
   // the same and the table used to keep the old stock); onlySwap = the "Needs a swap" filter of the holdings table
   const [rev, setRev] = useState(0), [onlySwap, setOnlySwap] = useState(false);
   const [ren, setRen] = useState(null);
+  // round 20: after a swap here, "also do it on Zerodha" (sell the old stock, buy the new one) — for holders of "<app>:zerodha"
+  const zc = useContext(ZerodhaCtx), canZr = !pub && !!zc && zc.can(ZR_APP[item.kind]);
+  const [zrSwap, setZrSwap] = useState(null);
+  // round 21: this plan on Zerodha (check-ins), reloaded after every Zerodha window
+  const [zv, setZv] = useState(null), [ztick, setZtick] = useState(0);
+  const zReload = () => setZtick(n => n + 1);
+  useEffect(() => { if (canZr) api(`/app/api/saved/${item.id}/zerodha`).then(setZv).catch(() => setZv(null)); }, [item.id, rev, ztick, canZr]);
+  const swapState = w => ((zv && zv.swaps) || []).find(x => x.d === w.d && x.out === w.out.s && x.in === w.in.s)?.state || "todo";
   const load = () => {
     const q = new URLSearchParams(); if (sym) q.set("sym", sym); if (isSip) q.set("stepup", step);
     if (pub) {
@@ -525,7 +598,7 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
     setSwap(o => ({ ...o, busy: alt.s }));
     swapCall(it, s, alt)
       .then(r => { setSwap(null); setAnim({ out: s }); setSym("");
-        setTimeout(() => { setIt(r); setRev(n => n + 1); setAnim({ in: alt.s }); showToast(`${s} → ${alt.s} swapped`); onChanged(); setTimeout(() => setAnim({}), 2000); }, 380); })
+        setTimeout(() => { setIt(r); setRev(n => n + 1); setAnim({ in: alt.s }); showToast(`${s} → ${alt.s} swapped`); onChanged(); setZrSwap({ out: s, in: alt.s }); setTimeout(() => setAnim({}), 2000); }, 380); })
       .catch(e => setSwap(o => ({ ...o, busy: null, err: e.message })));
   };
   const del = () => api(`/app/api/saved/${it.id}`, { method: "DELETE" }).then(() => { onChanged(); onBack(); }).catch(e => setMsg(e.message));
@@ -569,6 +642,9 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
               {pub ? <span className="svp-vis public"><Icon name="globe" size={12}/> Public · read only</span>
                 : <span className={`svp-vis ${it.visibility}`} id="svp-vis"><Icon name={it.visibility === "public" ? "globe" : "lock"} size={12}/> {it.visibility === "public" ? "Public" : "Private"}</span>}</div></div></div>
         <div className="tk-acts">
+          {isSip && !pub && <label className="tk-sel" id="svp-remind-l">Reminder <select value={it.reminder_day || 0} onChange={e => patch({ reminder_day: +e.target.value })} id="svp-remind" aria-label="Monthly reminder day">
+            <option value={0}>Off</option>{Array.from({ length: 28 }, (_, i) => i + 1).map(d => <option key={d} value={d}>Day {d}{it.inputs.freq === "quarter" ? " (each quarter)" : " of every month"}</option>)}</select>
+            <Info text="On this day an Inbox item reminds you to buy this instalment — send it to Zerodha from the Inbox or from here."/></label>}
           {isSip && <label className="tk-sel">Step-up <select value={step} onChange={e => setStep(+e.target.value)} id="svp-stepup" aria-label="Yearly step-up">
             {STEPS.map(v => <option key={v} value={v}>{v ? `+${v}% a year` : "Off"}</option>)}</select><Info text="Raise the instalment every year by this %. The tracking replays your SIP with it."/></label>}
           {pub ? <CopyLink code={it.code}/> : <>
@@ -576,11 +652,17 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
             Alerts <Info text={ALERTS}/></label>
           <Visibility it={it} onSet={v => api(`/app/api/saved/${it.id}`, { method: "PATCH", json: { visibility: v } }).then(r => { setIt(r); onChanged(); })}/>
           <CopyLink code={it.code}/>
+          {(isSip || it.kind === "builder") && <ZerodhaButton id="svp-zr" req={{ app: ZR_APP[it.kind], source: isSip ? "order" : "builder", sid: it.id,
+            title: isSip ? `This instalment · ${it.name}` : it.name, onClosed: zReload }}/>}
           <button type="button" className="px-btn primary" onClick={check} id="svp-check"><AiSpark/> Momentum check</button>
           {confirmDel ? <><button type="button" className="px-btn danger" onClick={del} id="svp-del-yes">Delete</button><button type="button" className="px-btn" onClick={() => setConfirmDel(false)}>Keep</button></>
             : <button type="button" className="px-btn" onClick={() => setConfirmDel(true)} aria-label="Delete this portfolio" title="Delete" id="svp-del"><Icon name="x" size={14}/></button>}</>}
         </div>
       </div>
+      {canZr && zrSwap && <div className="px-card svp-msg" role="status" id="svp-zr-swap"><Icon name="swap" size={14}/>
+        <span>Swapped here. On Zerodha it is two steps: sell <b>{zrSwap.out}</b> first, check in, then buy <b>{zrSwap.in}</b> — Kite opens in a new tab each time.</span>
+        <ZerodhaButton small label="Sell, then buy on Zerodha" id="svp-zr-swapbtn" req={zrSwapReq(it, zrSwap.out, zrSwap.in, zReload)}/>
+        <button type="button" className="tk-x" onClick={() => setZrSwap(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>}
       {msg && <div className="px-card svp-msg" role="status"><Icon name="check" size={14}/><span>{msg}</span><button type="button" className="tk-x" onClick={() => setMsg("")} aria-label="Close"><Icon name="x" size={14}/></button></div>}
       {ck && <section className="px-card tk-card" id="svp-checkbox"><div className="tk-ch"><h3><AiSpark/> Momentum check</h3><button type="button" className="tk-x" onClick={() => setCk(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
         <CheckResult ck={ck} kind={it.kind} freq={it.inputs.freq} onApply={apply} busy={busy}/></section>}
@@ -662,7 +744,10 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
           <div className="tk-foot">{pub ? "" : flagged.length ? "Swap shows only when a stock's long-term regime turns down — not for ordinary pullbacks. " : "No stock needs a swap: every long-term regime is still up. "}
             {it.kind === "analyser" ? "Tracked as 1 share of each stock." : isSip ? `The same money every ${WORD[it.inputs.freq]}; whole units at that day's price, the rest waits for the next instalment.` : "Your saved quantities."} Prices: last close of each day.</div>
         </section>
-        <SwapHistory swaps={t.swaps} isSip={isSip}/>
+        <SwapHistory swaps={t.swaps} isSip={isSip} zr={canZr ? w => ({ req: zrSwapReq(it, w.out.s, w.in.s, zReload), state: swapState(w) }) : null}
+          zrBulk={canZr ? (ws, step, done) => ({ app: ZR_APP[it.kind], source: "swaps", sid: it.id, step, swaps: ws.map(w => ({ out: w.out.s, in: w.in.s })),
+            title: step === "sell" ? `Sell ${ws.length} stocks that left · ${it.name}` : `Buy ${ws.length} new stocks · ${it.name}`, onClosed: () => { done(); zReload(); } }) : null}/>
+        {canZr && <OnZerodha zv={zv} onCheckin={h => zc.checkin(h, zReload)}/>}
         {!pub && <div id="svp-sim-wrap"><Simulators isSip={isSip} amount0={amount0} years0={it.inputs.years} idp="svp" title="Simulators · this portfolio"/></div>}
       </>}
       {toast}
@@ -790,7 +875,8 @@ function AiWatch({ list, onClose, onChanged, onOpen }) {
             <small>{[x.n, [x.sec, x.ind].filter(Boolean).join(" › ")].filter(Boolean).join(" · ")}</small>
             <span className="aw-k">{x.p != null && <span>Price <b>₹{(+x.p).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></span>}
               {x.cap && <span>Size <b>{x.cap} cap</b></span>}{x.st != null && <span>Strength <b>{x.st > 0 ? "+" : ""}{Math.round(x.st)}</b></span>}</span></div>
-          {done[`${p.id}:${x.s}`] ? <div className="svp-ok"><Icon name="check" size={14}/> Swapped to {done[`${p.id}:${x.s}`]} — tracking continues with it from today.</div>
+          {done[`${p.id}:${x.s}`] ? <><div className="svp-ok"><Icon name="check" size={14}/> Swapped to {done[`${p.id}:${x.s}`]} — tracking continues with it from today.</div>
+              <div className="aw-zr"><ZerodhaButton inline small label="Also do it on Zerodha" id={`aw-zr-${x.s}`} req={zrSwapReq(p, x.s, done[`${p.id}:${x.s}`])}/></div></>
             : !x.alts.length ? <div className="svp-note">No better stock in its industry, sector or market cap today.</div>
             : <SwapOptions items={x.alts} busy={busy} kind={p.kind} from={x.cap} cur={x} onPick={a => pick(p.id, x.s, a)} {...amountOf(cur[p.id], x)}/>}
         </div>)}

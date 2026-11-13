@@ -133,6 +133,13 @@ def consolidate(conn):
     return len(groups)
 
 
+def settle_order(conn, cid, kind, ref, note):
+    """round 21: the customer checked in this instalment as placed on Zerodha → its open "order" item is done"""
+    conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = %s, updated_at = now(), read_at = COALESCE(read_at, now()) "
+                 "WHERE customer_id = %s AND kind = %s AND ref_id IS NOT DISTINCT FROM %s AND status = 'open' AND body ? 'order'",
+                 (note, cid, kind, ref))
+
+
 def close_orders(conn, cid, kind, ref):
     """a new instalment order replaces the open one of the same SIP"""
     conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = 'A newer order replaced this one' "

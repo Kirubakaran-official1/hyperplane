@@ -21,6 +21,7 @@ from datetime import timedelta
 
 from . import activity as act
 from . import tracking
+from . import zerodha
 from . import config
 from . import etf
 from . import mailer
@@ -326,6 +327,10 @@ def cleanup():
                   "AND (ended_at IS NOT NULL OR created_at < now() - interval '7 days')", (keep,))
     if n:
         print(f"🧹 Activity log: removed {n} events older than {keep} days")
+    # Buy on Zerodha (round 20): a hand-off not back from Kite within 2 hours has expired (never "placed"); the record goes after 400 days
+    with pool.connection() as c:
+        c.execute("UPDATE zerodha_handoffs SET status = 'EXPIRED' WHERE status = 'SENT_TO_KITE' AND created_at < now() - interval '2 hours'")
+        c.execute("DELETE FROM zerodha_handoffs WHERE created_at < now() - interval '400 days'")
 
 
 def main():
@@ -368,6 +373,24 @@ def main():
             if last_cleanup != now().date():
                 cleanup()
                 last_cleanup = now().date()
+            try:                                         # round 21: SIP reminders, once a day after 09:00 IST
+                t = now()
+                if t.hour >= 9 and get_meta("sip_reminders_day") != t.date().isoformat():
+                    from .monitor import run_reminders
+                    n = run_reminders(t)
+                    set_meta("sip_reminders_day", t.date().isoformat())
+                    if n:
+                        print(f"🔔 SIP reminders: {n} instalment item(s) in the Inbox", flush=True)
+            except Exception:                            # noqa: BLE001
+                traceback.print_exc()
+            try:                                         # Buy on Zerodha: Zerodha's own NSE instrument list, once a day after 08:35 IST
+                with pool.connection() as c:
+                    if zerodha.due(c):
+                        r = zerodha.sync(c)
+                        print(f"🔗 Zerodha instrument list: {r['rows']} NSE stocks / ETFs" if r["ok"] else
+                              f"⚠ Zerodha instrument list not refreshed ({r['error']}) — kept the one from {r.get('kept')}", flush=True)
+            except Exception:                            # noqa: BLE001 — never block the worker
+                traceback.print_exc()
             # final output of older collections (missing, or built with an older formula): one per idle tick (light
             # on a small server) — always, so turning past days on is instant and the strength evidence is complete
             todo = history_missing(limit=2)

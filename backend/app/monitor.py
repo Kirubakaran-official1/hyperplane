@@ -110,12 +110,44 @@ def _period(freq, now):
     return f"{now.year}-Q{(now.month - 1) // 3 + 1}" if freq == "quarter" else f"{now.year}-{now.month:02d}"
 
 
+def reminder_due(day, freq, now):
+    """round 21: a saved SIP's reminder is due today — its day of the month (quarterly: in the first month of each quarter)"""
+    return bool(day) and now.day == day and (freq != "quarter" or now.month in (1, 4, 7, 10))
+
+
+def run_reminders(now=None):
+    """round 21 (owner: "a monthly reminder for the SIP — ask for the date — on that date a notification in the Inbox, from where they
+    can place the order on Zerodha"): once a day (worker), for every saved SIP whose reminder is due today. One item per period: a second
+    run the same day adds nothing; it replaces an older open instalment item of the same plan."""
+    now = now or datetime.now(IST)
+    made = 0
+    with pool.connection() as c:
+        plans = c.execute("SELECT id, customer_id, kind, name, inputs, holdings, reminder_day FROM customer_sips "
+                          "WHERE kind IN ('sip', 'msip') AND reminder_day = %s", (now.day,)).fetchall()
+        for p in plans:
+            freq = (p["inputs"] or {}).get("freq", "month")
+            if not reminder_due(p["reminder_day"], freq, now):
+                continue
+            period = _period(freq, now)
+            if c.execute("SELECT 1 FROM customer_notifications WHERE customer_id = %s AND kind = %s AND ref_id = %s AND body->>'period' = %s",
+                         (p["customer_id"], p["kind"], p["id"], period)).fetchone():
+                continue
+            total = round(sum(float(h.get("amt") or 0) for h in p["holdings"] or []), 2)
+            word = "quarter" if freq == "quarter" else "month"
+            inbox.close_orders(c, p["customer_id"], p["kind"], p["id"])
+            c.execute("INSERT INTO customer_notifications (customer_id, kind, ref_id, title, body, app, type) VALUES (%s, %s, %s, %s, %s, %s, 'action')",
+                      (p["customer_id"], p["kind"], p["id"], f"{p['name']}: this {word}'s instalment is due",
+                       json.dumps({"order": True, "total": total, "period": period, "reminder": True}), inbox.app_of(p["kind"])))
+            made += 1
+    return made
+
+
 def run_alerts(data, etf_data):
     """after a publish: notify the customers whose saved plans / lists changed (never fails the publish)"""
     now = datetime.now(IST)
     made = 0
     with pool.connection() as c:
-        plans = c.execute("SELECT id, customer_id, kind, name, inputs, holdings, state FROM customer_sips WHERE alerts").fetchall()
+        plans = c.execute("SELECT id, customer_id, kind, name, inputs, holdings, state, reminder_day FROM customer_sips WHERE alerts").fetchall()
         lists = c.execute("SELECT customer_id, symbols, alert_state FROM customer_portfolio WHERE alerts AND cardinality(symbols) > 0").fetchall()
     for p in plans:
         inp, state = p["inputs"] or {}, p["state"] or {}
@@ -138,7 +170,7 @@ def run_alerts(data, etf_data):
                    for e in res["exit"] if e["kind"] == "stock"}
         notes = []
         period = _period(inp.get("freq", "month"), now)
-        if p["kind"] in ("sip", "msip") and state.get("period") and state.get("period") != period:
+        if p["kind"] in ("sip", "msip") and state.get("period") and state.get("period") != period and not p.get("reminder_day"):   # a reminder brings its own (round 21)
             word = "quarter" if inp.get("freq") == "quarter" else "month"
             notes.append((f"{p['name']}: this {word}'s order is ready", {"order": True, "total": res["total"]}))
         with pool.connection() as c:

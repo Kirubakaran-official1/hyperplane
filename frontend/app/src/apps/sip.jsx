@@ -8,7 +8,7 @@
 // Portfolio Builder layout (steps on the left, How it works + Your plan on the right, the same .al sliders); the
 // sector / market bars of the result filter the holdings table.
 import React, { useEffect, useState } from "react";
-import { AiSpark, BrandBand, CopyBtns, GroupRow, Icon, Info, MultiSelect, StockLink, addCss, api, dirVal, loadChunk, signed, tc, trackAction, trendWordOf, useAsOf } from "../core.jsx";
+import { AiSpark, BrandBand, CopyBtns, GroupRow, Icon, Info, MultiSelect, StockLink, ZerodhaButton, addCss, api, dirVal, loadChunk, signed, tc, trackAction, trendWordOf, useAsOf } from "../core.jsx";
 import { CSS } from "./sip.css.js";
 import { MyPortfolios, SaveBar, SavedNote, buyText } from "../saved.jsx";
 
@@ -30,7 +30,7 @@ const YEARS = [5, 10, 15, 20, 25];
 const STYLES = [
   ["focus", "Focus", "Only what is going up", "The strongest sectors, themes and markets. The core index only if it is going up too. Fewer ETFs, bolder."],
   ["standard", "Standard", "Core index + what is going up", "The core Nifty markets always, plus the sectors and themes going up. The balanced way."],
-  ["diverse", "More diversified", "Standard + diversifiers", "Everything in Standard, plus steady strategy, international and other index ETFs to spread the risk wider."],
+  ["diverse", "More diversified", "Standard + diversifiers", "Everything in Standard, plus the 2 strongest international ETFs going up, steady strategy and other index ETFs to spread the risk wider."],
 ];
 const STYLE_NAME = { focus: "Focus", standard: "Standard", diverse: "More diversified" };
 const MSIP_CHIPS = [10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100, 150, 250];
@@ -366,6 +366,9 @@ function SipView({ apps = [], onAddToPortfolio, onOpenApp, onOut, onHelpdesk, mo
             <button type="button" className="px-btn" onClick={csv} id={`${APP}-csv`}><Icon name="table" size={14}/> CSV</button>
             <span className="tcopy"><span className="lbl">Tickers · {hs.length}</span><CopyBtns syms={hs.map(h => h.s)}/></span></span>
           <button type="button" className="px-btn hp-link" id={`${APP}-how-btn`} onClick={() => setHow(true)}><Icon name="info" size={14}/> How to buy</button>
+          {/* round 20: Kite opens with this instalment's whole units (Customer Admin first — "<app>:zerodha") */}
+          <ZerodhaButton id={`${APP}-zr`} req={{ app: APP, source: APP, title: `This ${w}'s instalment · ${inrShort(res.amount)} ${isStock ? "Momentum SIP" : "SIP"}`,
+            lines: hs.map(h => ({ s: h.s, qty: h.units || 1, every: h.every || 1 })) }}/>
           {canPf && stocks.length > 0 && <button type="button" className="px-btn primary" id={`${APP}-send`} disabled={sent === "busy"} onClick={() => setSent("ask")}>Send to AI Portfolio Analyser <Icon name="chevron" size={14}/></button>}
         </div>
         {saving && <SaveBar kind={APP} defName={`${inrShort(res.amount)} ${M.word}`} inputs={res.inputs} holdings={hs} onCancel={() => setSaving(false)}
@@ -509,7 +512,7 @@ function SipView({ apps = [], onAddToPortfolio, onOpenApp, onOut, onHelpdesk, mo
             <Sliders keys={["Large", "Mid", "Small"]} labels={[["Large cap", "Nifty 50 + Nifty Next 50"], ["Mid cap", "Nifty Midcap 150"], ["Small cap", "Nifty Smallcap 250"]]} vals={caps}
               onChange={v => setOpt({ caps: v })} idp={`${APP}-c`} colors={CAP_COL} amount={inp.amount * (100 - o.gold) / 100} word={fw}/></div>}
 
-          {!isStock && <div className="bd-f" id={`${APP}-style`}>{step(4, "How focused", "Focus holds only what is going up today. Standard holds the core Nifty index ETFs plus what is going up. More diversified adds steady strategy, international and other index ETFs on top of Standard. The core index already diversifies, so Focus and Standard never add diversifiers.")}
+          {!isStock && <div className="bd-f" id={`${APP}-style`}>{step(4, "How focused", "Focus holds only what is going up today. Standard holds the core Nifty index ETFs plus what is going up. More diversified adds the 2 strongest international ETFs going up, then steady strategy and other index ETFs, on top of Standard. The core index already diversifies, so Focus and Standard never add diversifiers.")}
             <div className="sp-styles" role="radiogroup" aria-label="How focused">{STYLES.map(([k, l, sub, d]) => { const n = pool ? pool[k] + (o.gold > 0 ? 1 : 0) : null; return (
               <button key={k} type="button" role="radio" aria-checked={o.style === k} id={`${APP}-st-${k}`} className={`sp-style ${o.style === k ? "on" : ""}`} onClick={() => setOpt({ style: k })}>
                 <span className="sp-sttop"><b>{l}</b>{n != null && <em>{n} ETFs today</em>}</span>

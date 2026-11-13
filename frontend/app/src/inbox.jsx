@@ -10,7 +10,9 @@
 // Data: /app/api/inbox (portal.py — notifications + the customer's helpdesk tickets). Items settle by themselves on the server (inbox.py):
 // a swap here or anywhere else settles its stock; a recovered trend settles too.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { AiSpark, Icon, addCss, api, loadChunk } from "./core.jsx";
+import { AiSpark, Icon, ZerodhaButton, addCss, api, loadChunk } from "./core.jsx";
+// Buy on Zerodha (round 20): the application whose "<app>:zerodha" permission a saved portfolio uses (as saved.jsx ZR_APP)
+const ZR_APP = { sip: "sip", msip: "msip", builder: "builder", analyser: "portfolio" };
 import { SwapPanel } from "./swap-ui.jsx";
 // a stock of an item opens its insight IN this pane (round 19k — the AI summary, and the detail view for the Customer Admin)
 const StockInsight = lazy(() => loadChunk(() => import("./stock-insight.jsx")));
@@ -202,6 +204,9 @@ function SwapModal({ x, sym, onClose, onDone }) {
 function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) {
   const [tab, setTab] = useState("overview"); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const [swap, setSwap] = useState(null), [peek, setPeek] = useState(null);       // peek = the stock whose insight is open in this pane
+  const [zst, setZst] = useState(null);                                             // round 21: this instalment on Zerodha (the customer's check-ins)
+  const zload = () => { if ((x.body || {}).order && x.ref) api(`/app/api/saved/${x.ref}/zerodha`).then(setZst).catch(() => setZst(null)); };
+  useEffect(() => { setZst(null); zload(); }, [x.id]);
   useEffect(() => { setTab("overview"); setNote(""); setErr(""); setPeek(null); }, [x.id]);
   const b = x.body || {}, its = b.items || [], m = META[x.app] || META.hyperplane, has = apps.some(a => a.key === x.app);
   const set = async path => {
@@ -242,6 +247,12 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
           {x.src === "helpdesk" && <><div className="ib-msg">{b.snippet || "Open the conversation to read the messages."}</div>
             <div className="ib-act"><button type="button" className="px-btn" onClick={() => onHelpdesk(x.hid)}>Open in Helpdesk</button></div></>}
           {b.order && <div className="ib-order">This instalment's order is ready: <b>{inr(b.total)}</b>. Open the plan to see what to buy.</div>}
+          {/* round 20: Kite opens with this instalment's units, from the saved plan ("<app>:zerodha" — Customer Admin first) */}
+          {b.order && zst && zst.periods.length > 0 && (p => <div className="ib-note" id="ib-zr-status" style={{ fontSize: 13 }}>On Zerodha ({p.period}): <b>{
+            { placed: "placed ✓ (you checked it in)", partly: "partly placed", waiting: "sent — waiting for your check-in", not_placed: "not placed" }[p.status]}</b></div>)(zst.periods[0])}
+          {b.order && x.ref && has && <div className="ib-act"><ZerodhaButton id="ib-zr" req={{ app: ZR_APP[x.kind], source: "order", sid: x.ref, title: `This instalment · ${pfName(x)}`,
+            onClosed: () => { zload(); onChange(null); } }}/>
+            <button type="button" className="px-btn" onClick={() => onOpen(x.app, x.ref)} id="ib-open-plan">Open the plan</button></div>}
           {its.length > 0 && <table className="hp-t ib-t" id="ib-items">
             <thead><tr><th>Stock</th><th className="ib-hm">Why</th><th className="ib-hm">Suggested</th><th>Status</th><th/></tr></thead>
             <tbody>{its.map(i => { const d = (x.items_done || {})[i.s]; return (
@@ -251,7 +262,9 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
                 <td className="wrap ib-hm">{(i.why || "").replace(/^./, c => c.toUpperCase())}</td>
                 <td className="ib-hm">{i.alt ? <><b className="sym">{i.alt.s}</b>{i.alt.n && <span className="sub">{i.alt.n}</span>}</> : <span className="sub">Choose on Swap</span>}</td>
                 <td>{d ? <span className={`stl ${d.how === "recovered" ? "rc" : ""}`}><Icon name="check" size={13}/>{HOW[d.how] || d.how}{d.in ? ` → ${d.in}` : ""}</span> : x.status === "done" ? <span className="sub">Closed</span> : <span className="wait">To change</span>}</td>
-                <td className="num">{!d && x.status !== "done" && x.ref && has && <button type="button" className="px-btn primary" data-ibswap={i.s} onClick={() => setSwap(i.s)}><Icon name="swap" size={14}/> Swap</button>}</td>
+                <td className="num">{!d && x.status !== "done" && x.ref && has && <button type="button" className="px-btn primary" data-ibswap={i.s} onClick={() => setSwap(i.s)}><Icon name="swap" size={14}/> Swap</button>}
+                  {d && d.how === "swapped" && d.in && x.ref && has && ZR_APP[x.kind] && <ZerodhaButton small label="On Zerodha" id={`ib-zr-${i.s}`}
+                    req={{ app: ZR_APP[x.kind], source: "swap", sid: x.ref, swap_out: i.s, swap_in: d.in, title: `Swap ${i.s} → ${d.in} · ${pfName(x)}` }}/>}</td>
               </tr>); })}</tbody></table>}
           {x.src === "alert" && <div className="ib-act">
             {has && <button type="button" className="px-btn" onClick={() => onOpen(x.app, x.ref)} id="ib-open">{x.ref ? "Open the portfolio" : "Open the AI Portfolio Analyser"}</button>}

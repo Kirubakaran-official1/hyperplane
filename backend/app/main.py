@@ -16,6 +16,7 @@ Hyperplane API.
   /api/admin/access, roles, modules     Access manager — roles and applications of the customer app (RBAC)
   /api/admin/activity/*     Activity log — sign-ins, devices, applications used and minutes per application
 """
+import gzip
 import hmac
 import json
 import os
@@ -38,6 +39,7 @@ from . import config
 from . import etf
 from . import helpdesk as hd
 from . import community
+from . import zerodha
 from . import mailer
 from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_history_enabled, get_meta, get_settings,
                  init_db, pool, put_settings, set_auto_approve, set_history_enabled, set_meta, get_history_changed)
@@ -492,6 +494,94 @@ def announce_delete(batch: str, user=Depends(admin_user)):
     with pool.connection() as c:
         n = c.execute("DELETE FROM customer_notifications WHERE kind = 'announce' AND body->>'batch' = %s", (batch,)).rowcount
     return {"deleted": n}
+
+
+# ─────────────────────────────── Buy on Zerodha — the admin side (round 20, zerodha.py) ───────────────────────────────
+class ZerodhaMapIn(BaseModel):
+    sym: str = Field(..., max_length=30)
+    kite_symbol: str | None = Field(None, max_length=40)
+    status: str = "verified"                             # verified (matched to kite_symbol) | blocked
+    note: str = Field("", max_length=200)
+
+
+def _published_syms(c):
+    """the stocks and ETFs of the latest publish (what customers can put in a basket)"""
+    r = c.execute("SELECT data_gz FROM published ORDER BY id DESC LIMIT 1").fetchone()
+    if not r:
+        return []
+    syms = [x["s"] for x in json.loads(gzip.decompress(bytes(r["data_gz"]))).get("stocks", [])]
+    e = c.execute("SELECT etf_gz FROM published WHERE etf_gz IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+    if e:
+        syms += [x["s"] for x in json.loads(gzip.decompress(bytes(e["etf_gz"]))).get("etfs", [])]
+    return syms
+
+
+@app.get("/api/admin/zerodha")
+def zerodha_admin(request: Request, user=Depends(admin_user)):
+    with pool.connection() as c:
+        d = zerodha.list_day(c)
+        n = c.execute("SELECT count(*) AS n FROM zerodha_instruments").fetchone()["n"]
+        cover = zerodha.coverage(c, _published_syms(c)) if d else []
+        maps = c.execute("SELECT sym, kite_symbol, status, note, set_by, set_at FROM zerodha_symbol_map ORDER BY sym").fetchall()
+        counts = {r["status"]: r["n"] for r in c.execute("SELECT status, count(*) AS n FROM zerodha_handoffs "
+                                                         "WHERE created_at > now() - interval '30 days' GROUP BY status").fetchall()}
+        keys = c.execute("SELECT count(*) AS n FROM zerodha_keys").fetchone()["n"]       # how many — never a key (this service cannot open them)
+    return {"connected": keys,
+            "list": {"day": d.isoformat() if d else None, "rows": n, "sync": get_meta("zerodha_sync"), "url": zerodha.INSTRUMENTS_URL},
+            "coverage": cover, "maps": [{**m, "set_at": m["set_at"].isoformat()} for m in maps], "handoffs30": counts,
+            "max": zerodha.MAX_LINES}
+
+
+@app.post("/api/admin/zerodha/sync")
+def zerodha_admin_sync(user=Depends(admin_user)):
+    with pool.connection() as c:
+        return zerodha.sync(c)
+
+
+@app.get("/api/admin/zerodha/search")
+def zerodha_admin_search(q: str = Query("", max_length=40), user=Depends(admin_user)):
+    q = q.strip().upper()
+    if not q:
+        return []
+    with pool.connection() as c:
+        rows = c.execute("SELECT tradingsymbol AS s, name AS n, lot_size AS lot FROM zerodha_instruments "
+                         "WHERE tradingsymbol LIKE %s OR upper(name) LIKE %s ORDER BY (tradingsymbol LIKE %s) DESC, tradingsymbol LIMIT 20",
+                         (q.replace("%", "") + "%", "%" + q.replace("%", "") + "%", q.replace("%", "") + "%")).fetchall()
+    return rows
+
+
+@app.put("/api/admin/zerodha/map")
+def zerodha_admin_map(body: ZerodhaMapIn, user=Depends(admin_user)):
+    sym, ks = body.sym.strip().upper(), (body.kite_symbol or "").strip().upper() or None
+    if not zerodha.SYM.match(sym) or body.status not in ("verified", "blocked") or (body.status == "verified" and not ks):
+        raise HTTPException(422, "Pick our symbol and the Zerodha symbol it matches (or Block)")
+    with pool.connection() as c:
+        if ks and not c.execute("SELECT 1 FROM zerodha_instruments WHERE tradingsymbol = %s", (ks,)).fetchone():
+            raise HTTPException(422, f"{ks} is not on today's Zerodha list")
+        c.execute("INSERT INTO zerodha_symbol_map (sym, kite_symbol, status, note, set_by, set_at) VALUES (%s, %s, %s, %s, %s, now()) "
+                  "ON CONFLICT (sym) DO UPDATE SET kite_symbol = EXCLUDED.kite_symbol, status = EXCLUDED.status, note = EXCLUDED.note, "
+                  "set_by = EXCLUDED.set_by, set_at = now()",
+                  (sym, ks if body.status == "verified" else None, body.status, hd.CTRL.sub("", body.note).strip() or None, user["name"]))
+        r = zerodha.resolve(c, [sym])[sym]
+    return {k: r.get(k) for k in ("k", "st", "note")}
+
+
+@app.delete("/api/admin/zerodha/map/{sym}")
+def zerodha_admin_unmap(sym: str, user=Depends(admin_user)):
+    with pool.connection() as c:
+        n = c.execute("DELETE FROM zerodha_symbol_map WHERE sym = %s", (sym.strip().upper(),)).rowcount
+    return {"deleted": n}
+
+
+@app.get("/api/admin/zerodha/handoffs")
+def zerodha_admin_handoffs(user=Depends(admin_user)):
+    """the last 100 hand-offs to Kite — the app-side record only (Kite's redirect is not proof of an order)"""
+    with pool.connection() as c:
+        c.execute("UPDATE zerodha_handoffs SET status = 'EXPIRED' WHERE status = 'SENT_TO_KITE' AND created_at < now() - interval '2 hours'")
+        rows = c.execute("SELECT h.id, h.source, h.sid, h.part, h.parts, h.tag, h.lines, h.status, h.said, h.created_at, h.returned_at, h.checkin, "
+                         "c.name, c.email FROM zerodha_handoffs h JOIN customers c ON c.id = h.customer_id ORDER BY h.created_at DESC LIMIT 100").fetchall()
+    return [{**r, "id": str(r["id"]), "created_at": r["created_at"].isoformat(), "returned_at": r["returned_at"] and r["returned_at"].isoformat()}
+            for r in rows]
 
 
 # ─────────────────────────────── Hyperplane Community — the admin side (round 19, community.py) ───────────────────────────────

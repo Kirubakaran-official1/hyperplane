@@ -68,6 +68,15 @@ PERMISSIONS = (
      "msip:view", True),
     ("msip:admin", "Momentum SIP Builder · Admin level",
      "Any amount and number of stocks, High / Medium / Low reliability, every More option — for the owner", "msip:view", True),
+    # round 20 (owner 2026-11-13: "push the script and quantity to Zerodha … Customer Admin first"): Kite opens with the plan's
+    # stocks and quantities filled in; the customer signs in and confirms on Kite (app/zerodha.py). One per application, like the
+    # detail view; owner-level until the owner gives it to the Customer role in Admin → Access manager.
+    ("sip:zerodha", "Buy on Zerodha", "Open Kite with this SIP's instalment filled in (the customer confirms on Kite)", "sip:view", True),
+    ("msip:zerodha", "Buy on Zerodha", "Open Kite with this Momentum SIP's instalment, or a swap (sell + buy), filled in", "msip:view", True),
+    ("builder:zerodha", "Buy on Zerodha", "Open Kite with the built portfolio's quantities, or a swap (sell + buy), filled in", "builder:view", True),
+    ("portfolio:zerodha", "Buy on Zerodha", "Open Kite with a swap of the Analyser list (sell + buy) filled in", "portfolio:view", True),
+    # round 21 (owner 2026-11-13: "in More apps, All Portfolios to see the portfolios of every sub-application — for all customers, not pinned")
+    ("portfolios:view", "Open All Portfolios", "Every saved portfolio of the applications the customer holds, in one place", None, False),
 )
 KEYS = tuple(p[0] for p in PERMISSIONS)
 assert all(r is None or r in KEYS for *_, r, _ in PERMISSIONS), "requires must name a catalogue key"
@@ -220,6 +229,26 @@ def migrate_msip_detail(c):
     c.execute("INSERT INTO role_permissions (role_id, permission) SELECT r.id, 'msip:detail' FROM roles r WHERE lower(r.name) = 'customer admin' "
               "AND EXISTS (SELECT 1 FROM app_permissions p WHERE p.key = 'msip:detail') ON CONFLICT DO NOTHING")
     c.execute("INSERT INTO settings (key, value) VALUES ('msip_detail_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
+
+
+ZERODHA_PERMS = ("sip:zerodha", "msip:zerodha", "builder:zerodha", "portfolio:zerodha")
+
+
+def migrate_zerodha(c):
+    """Once (round 20): the Customer Admin role gets Buy on Zerodha in every application (owner-level — never on the default role)."""
+    if c.execute("SELECT 1 FROM settings WHERE key = 'zerodha_v1'").fetchone():
+        return
+    c.execute("INSERT INTO role_permissions (role_id, permission) SELECT r.id, p.key FROM roles r JOIN app_permissions p ON p.key = ANY(%s) "
+              "WHERE lower(r.name) = 'customer admin' ON CONFLICT DO NOTHING", (list(ZERODHA_PERMS),))
+    c.execute("INSERT INTO settings (key, value) VALUES ('zerodha_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
+
+
+def migrate_all_portfolios(c):
+    """Once (round 21): every role gets All Portfolios (it shows only the portfolios of the applications each customer holds)."""
+    if c.execute("SELECT 1 FROM settings WHERE key = 'all_portfolios_v1'").fetchone():
+        return
+    c.execute("INSERT INTO role_permissions (role_id, permission) SELECT id, 'portfolios:view' FROM roles ON CONFLICT DO NOTHING")
+    c.execute("INSERT INTO settings (key, value) VALUES ('all_portfolios_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
 
 
 def migrate_pins8(c):

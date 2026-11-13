@@ -39,6 +39,7 @@ const ICON_PATHS = {
   edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></>,
   trend: <><path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/></>,
   help: <><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></>,
+  out: <><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></>,
 };
 export function Icon({ name, size = 16, className = "", title }) {
   return (
@@ -348,6 +349,7 @@ export const APP_ICON = {
   sip: <NavSvg><ellipse cx="8" cy="6" rx="5.5" ry="2.3"/><path d="M2.5 6v3.6c0 1.3 2.5 2.3 5.5 2.3s5.5-1 5.5-2.3V6"/><path d="M2.5 9.6v3.6c0 1.3 2.5 2.3 5.5 2.3"/><path d="M2.5 13.2v3.6c0 1.3 2.5 2.3 5.5 2.3"/><path d="m12 19 3.2-3.4 2.4 2.2 4-4.6"/><path d="M18.6 13.2h3v3"/></NavSvg>,
   // AI Momentum SIP (2026-11-06): Lucide "trending-up"
   msip: <NavSvg><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></NavSvg>,
+  portfolios: <NavSvg><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/></NavSvg>,
   // ETF analyser (2026-11-06): Lucide "coins"
   etf: <NavSvg><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></NavSvg>,
 };
@@ -355,7 +357,7 @@ export const APP_ICON = {
 // address"): /app/<app-name> for each application, /app/<app-name>/portfolio/<ID> for one of the customer's own saved portfolios (signed
 // in), /app/portfolio/<ID> for the PUBLIC page of a shared one (no sign-in, no app shell — main.jsx / public.jsx), /app/docs, /app/helpdesk.
 // The server already sends /app/* to the page (Caddyfile try_files).
-export const APP_SLUG = { simple: "ai-mode", research: "deep-research", portfolio: "portfolio-analyser", builder: "portfolio-builder",
+export const APP_SLUG = { simple: "ai-mode", research: "deep-research", portfolio: "portfolio-analyser", builder: "portfolio-builder", portfolios: "all-portfolios",
   etf: "etf-analyser", sip: "etf-sip-builder", msip: "momentum-sip-builder" };
 const SLUG_APP = Object.fromEntries(Object.entries(APP_SLUG).map(([k, v]) => [v, k]));
 export const routeOf = (p = window.location.pathname) => {
@@ -662,6 +664,51 @@ export function addCss(id, css) {
 
 // Stock detail view (customer admin, permission "<application>:detail"): the shell provides open(symbol, app) when the
 // customer's roles hold that permission; everyone else gets a plain name (no link, no extra download).
+// Buy on Zerodha (round 20, owner 2026-11-13: "push the script and quantity to Zerodha"): the shell provides can(app) / open(req) / here()
+// / key / setKey / setup() when the customer's roles hold "<application>:zerodha" (Customer Admin first); everyone else gets nothing —
+// no button, no download. req = { app, source, sid?, lines?: [{ s, qty, side?, every? }], swap_out?, swap_in?, title }. inline = the preview
+// opens in place, under the button (inside a pop-up — never a pop-up on a pop-up). Round 20c: no key saved yet → the Connect Zerodha
+// window (steps + the customer's own Publisher API key) comes first, in the same place, then the orders.
+export const ZerodhaCtx = React.createContext(null);
+const ZrPanel = React.lazy(() => loadChunk(() => import("./zerodha.jsx")));
+const ZR_BTN_CSS = `.zr-btn{gap:6px}.zr-btn .ic{color:var(--acc)}.zr-btn.sm{height:28px;padding:0 10px;font-size:12.5px}
+.zr-chip{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 12px 0 4px;border:1px solid var(--b2);border-radius:17px;background:var(--s1);color:var(--t1);
+  font:700 12.5px var(--sans);cursor:pointer;white-space:nowrap;transition:border-color .15s,box-shadow .15s}
+.zr-chip:hover{border-color:var(--acc);box-shadow:0 2px 10px color-mix(in srgb,var(--acc) 18%,transparent)}
+.zr-mark{position:relative;flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1px var(--b2)}
+.zr-mark .zr-dot{position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;border-radius:50%;border:2px solid var(--s1);background:var(--t3)}
+.zr-chip.on .zr-dot{background:var(--long)}
+.zr-chip .zr-tx{display:flex;flex-direction:column;line-height:1.05;text-align:left}.zr-chip .zr-tx small{font:700 10px var(--sans);letter-spacing:.04em;text-transform:uppercase;color:var(--t3)}
+.zr-chip.on .zr-tx small{color:var(--long)}.zr-chip:not(.on) .zr-tx b{color:var(--acc)}
+@media (max-width:720px){.zr-chip{padding:0 4px}.zr-chip .zr-tx{display:none}}`;
+// the Kite by Zerodha mark (round 21c, owner: "bring this logo for the Zerodha Kite") — drawn from the owner's image, to name the integration
+// next to Zerodha's own product (as Zerodha's Kite buttons do); two flat shapes, sharp at any size
+export const KiteLogo = ({ size = 18 }) => <svg width={size} height={Math.round(size * 0.68)} viewBox="13 32 122 83" aria-hidden="true" focusable="false">
+  <path d="M56 34H133L55 113L15 74Z" fill="#F6461A"/><path d="M93 74L133 113H55Z" fill="#DB342C"/></svg>;
+export function ZerodhaButton({ req, inline = false, id, label = "Buy on Zerodha", small = false }) {
+  const z = React.useContext(ZerodhaCtx);
+  const [open, setOpen] = React.useState(false);
+  if (!z || !z.can(req.app)) return null;
+  addCss("zr-btn", ZR_BTN_CSS);
+  const btn = <button type="button" className={`px-btn zr-btn ${small ? "sm" : ""}`} id={id} data-zr={req.source} aria-expanded={inline ? open : undefined}
+    onClick={e => { e.stopPropagation(); if (inline) setOpen(v => !v); else z.open(req); }}><Icon name="out" size={small ? 13 : 14}/> {label}</button>;
+  if (!inline) return btn;
+  return <>{btn}{open && <React.Suspense fallback={<div style={{ fontSize: 12, color: "var(--t3)" }}>Opening…</div>}>
+    <ZrPanel req={req} here={z.here()} zkey={z.key} onKey={z.setKey} inline onClose={() => { setOpen(false); req.onClosed && req.onClosed(); }}/></React.Suspense>}</>;
+}
+// the top bar (round 20b/c, owner: "on the top keep the Connect Zerodha button on every page … once connected show it"): connected = the
+// customer's own Publisher key is saved (never "logged in" — the Kite login lives only on Kite)
+export function ZerodhaChip() {
+  const z = React.useContext(ZerodhaCtx);
+  if (!z) return null;
+  addCss("zr-btn", ZR_BTN_CSS);
+  return <button type="button" className={`zr-chip ${z.key ? "on" : ""}`} id="zr-chip" onClick={() => z.setup()}
+    title={z.key ? "Zerodha is connected — log in to Kite before you place an order" : "Connect Zerodha: once, about 5 minutes"}
+    aria-label={z.key ? "Zerodha connected" : "Connect Zerodha"}>
+    <span className="zr-mark"><KiteLogo/><i className="zr-dot"/></span>
+    <span className="zr-tx">{z.key ? <><b>Zerodha</b><small>Connected</small></> : <><b>Connect</b><small>Zerodha</small></>}</span></button>;
+}
+
 export const DetailCtx = React.createContext(null);
 export function StockLink({ sym, app, className = "", children, title }) {
   const d = React.useContext(DetailCtx);

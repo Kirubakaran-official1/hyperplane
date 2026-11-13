@@ -1,7 +1,7 @@
 // Hyperplane AI Portfolio Builder — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AiSpark, BrandBand, Icon, addCss, useAsOf } from "../core.jsx";
-import { CopyBtns, HD_LIMIT_SUBJECT, Info, MultiSelect, RELIABILITY, StockLink, api, colorOf, fmtDT, signed, tc, trackAction, trendWordOf } from "../core.jsx";
+import { CopyBtns, HD_LIMIT_SUBJECT, Info, MultiSelect, RELIABILITY, StockLink, ZerodhaButton, api, colorOf, fmtDT, signed, tc, trackAction, trendWordOf } from "../core.jsx";
 import { CSS } from "./builder.css.js";
 import { MyPortfolios, SaveBar, SavedNote } from "../saved.jsx";
 
@@ -647,6 +647,10 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut, onHelpdesk }) {
             <span className="hp-grp" role="group" aria-label="Export">
               <button type="button" className="px-btn" id="bd-csv" onClick={csv}><Icon name="table" size={14}/> Excel</button>
               <span className="tcopy"><span className="lbl">Tickers · {picks.length}</span><CopyBtns syms={picks.map(p => p.s)}/></span></span>
+            {/* round 20: Kite opens with the quantities — day 1 of the buying plan when the Builder spread big buys over days */}
+            <ZerodhaButton id="bd-zr" req={{ app: "builder", source: "builder",
+              title: res.plan && res.plan.days[0] ? `Day 1 of the buying plan · ${inrShort(res.amount)} portfolio` : `${inrShort(res.amount)} portfolio · ${picks.length} stocks`,
+              lines: (res.plan && res.plan.days[0] ? res.plan.days[0].buys : picks).map(p => ({ s: p.s, qty: p.qty })) }}/>
             {canPf && <button type="button" className="px-btn primary" id="bd-add" disabled={added === "busy" || done} onClick={ask}>
               {done ? <><Icon name="check" size={16}/> Sent to AI Portfolio</> : <>Send to AI Portfolio Analyser <Icon name="chevron" size={14}/></>}</button>}
         </div>

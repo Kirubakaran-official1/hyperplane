@@ -983,6 +983,82 @@ function CustomersTab({ snaps, notify }) {
 }
 
 // ─── ADMIN AREA: settings, customers, adoption, access manager, shared portfolios (admins only) ───
+// ─── Buy on Zerodha (round 20, backend zerodha.py): Zerodha's symbol list + corrections, the hand-offs. Round 20c: no key here —
+// each customer connects their own Publisher app in the customer app (encrypted; this admin service cannot open those keys) ───
+const ZR_ST = { series: ["#d4a72c", "Different symbol on Zerodha"], manual: ["var(--long)", "Matched by you"], missing: ["var(--short)", "Not on Zerodha"],
+  blocked: ["var(--short)", "Blocked"], nolist: ["var(--t3)", "List not loaded"] };
+const ZR_HS = { SENT_TO_KITE: "Sent to Kite", RETURNED_UNVERIFIED: "Back from Kite (not verified)", EXPIRED: "No return (expired)", NEEDS_REVIEW: "Return without a basket", SKIPPED: "Sell skipped (customer)" };
+function ZerodhaTab({ notify }) {
+  const [d, setD] = useState(null), [busy, setBusy] = useState("");
+  const [hs, setHs] = useState(null), [map, setMap] = useState(null), [q, setQ] = useState(""), [found, setFound] = useState([]), [flt, setFlt] = useState("all");
+  const load = useCallback(() => api("/api/admin/zerodha").then(setD).catch(e => notify(e.message, "err")), []);
+  const loadHs = useCallback(() => api("/api/admin/zerodha/handoffs").then(setHs).catch(e => notify(e.message, "err")), []);
+  useEffect(() => { load(); loadHs(); }, [load, loadHs]);
+  const sync = async () => {
+    setBusy("sync");
+    try { const r = await api("/api/admin/zerodha/sync", { method: "POST" }); notify(r.ok ? `Zerodha list loaded: ${r.rows.toLocaleString("en-IN")} NSE stocks / ETFs` : `Not refreshed: ${r.error}`, r.ok ? undefined : "err"); load(); }
+    catch (e) { notify(e.message, "err"); } finally { setBusy(""); }
+  };
+  const search = async v => { setQ(v); if (v.trim().length < 2) { setFound([]); return; } try { setFound(await api(`/api/admin/zerodha/search?q=${encodeURIComponent(v.trim())}`)); } catch { setFound([]); } };
+  const setSym = async (sym, body) => {
+    try { await api("/api/admin/zerodha/map", { method: "PUT", json: { sym, ...body } }); notify(body.status === "blocked" ? `${sym} will not be sent to Zerodha` : `${sym} → ${body.kite_symbol}`); setMap(null); setQ(""); setFound([]); load(); }
+    catch (e) { notify(e.message, "err"); }
+  };
+  const clear = async sym => { try { await api(`/api/admin/zerodha/map/${encodeURIComponent(sym)}`, { method: "DELETE" }); notify(`${sym}: back to Zerodha's list`); load(); } catch (e) { notify(e.message, "err"); } };
+  if (!d) return <div style={{ padding: "18px 22px", color: "var(--t2)" }}>Loading…</div>;
+  const sy = d.list.sync || {};
+  const cov = d.coverage.filter(x => flt === "all" || x.st === flt);
+  const cell = { padding: "6px 8px", borderBottom: "1px solid var(--b1)", textAlign: "left", fontSize: 12, verticalAlign: "top" };
+  return (
+    <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 12 }} id="zr-admin">
+      <FocusCard icon="🔗" title="Buy on Zerodha" id="zr-about"
+        sub="Customers who hold “Buy on Zerodha” (🔐 Access manager — Customer Admin only for now) connect their own free Kite Publisher app in the customer app: Connect Zerodha (top bar) → the steps → their API key. Each key is encrypted (AES-256) against that customer and only the customer service can open it — not this admin app. Every order is confirmed by the customer on Kite.">
+        <div style={{ fontSize: 13, color: "var(--t1)" }} id="zr-connected">Customers connected: <b>{d.connected}</b>
+          <span style={{ color: "var(--t3)", marginLeft: 10 }}>Hand-offs in the last 30 days: {Object.values(d.handoffs30 || {}).reduce((a, n) => a + n, 0)} · Kite takes {d.max} orders a basket · LIMIT at our last price ±1%</span></div>
+      </FocusCard>
+      <FocusCard icon="🧾" title="Zerodha's symbol list"
+        sub="Zerodha's own NSE instrument list (api.kite.trade, the official daily file) is loaded every morning after 08:35. Each of our stocks must be on it with the same symbol — or a single series form such as XYZ-BE — before it can go in a basket. Never matched by name.">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12.5, color: "var(--t2)" }} id="zr-list">
+          <span>List of <b style={{ color: "var(--t1)" }}>{d.list.day ? fmtDay(d.list.day) : "—"}</b> · {d.list.rows.toLocaleString("en-IN")} NSE stocks / ETFs</span>
+          {sy.at && <span style={{ color: sy.ok ? "var(--t3)" : "var(--short)" }}>{sy.ok ? `last loaded ${fmtDT(sy.at)}` : `last try ${fmtDT(sy.at)} failed: ${sy.error} — kept the list of ${sy.kept || "—"}`}</span>}
+          <button type="button" style={btn()} onClick={sync} disabled={busy === "sync"} id="zr-sync">{busy === "sync" ? "Loading…" : "⟳ Load now"}</button>
+        </div>
+        <div style={{ marginTop: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12 }}>
+          <b style={{ color: "var(--t1)" }}>Today's stocks and ETFs not plainly on Zerodha: {d.coverage.length}</b>
+          {[["all", "All"], ["missing", "Not on Zerodha"], ["series", "Different symbol"], ["manual", "Matched by you"], ["blocked", "Blocked"]].map(([k, l]) =>
+            <button key={k} type="button" style={{ ...btn(flt === k), padding: "3px 9px" }} onClick={() => setFlt(k)}>{l} · {k === "all" ? d.coverage.length : d.coverage.filter(x => x.st === k).length}</button>)}
+        </div>
+        {cov.length > 0 && <div style={{ marginTop: 8, maxHeight: 360, overflow: "auto", border: "1px solid var(--b1)", borderRadius: 8 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }} id="zr-cover"><thead><tr><th style={cell}>Our symbol</th><th style={cell}>On Zerodha</th><th style={cell}>Why</th><th style={cell}/></tr></thead>
+            <tbody>{cov.map(x => <tr key={x.s} data-zr-cover={x.s}>
+              <td style={cell}><b>{x.s}</b></td>
+              <td style={cell}><span style={{ color: (ZR_ST[x.st] || ZR_ST.missing)[0], fontWeight: 700 }}>{(ZR_ST[x.st] || ZR_ST.missing)[1]}</span>{x.k ? ` · ${x.k}` : ""}</td>
+              <td style={{ ...cell, color: "var(--t2)" }}>{x.note}</td>
+              <td style={{ ...cell, whiteSpace: "nowrap" }}>{map === x.s ? <span style={{ display: "inline-flex", flexDirection: "column", gap: 4 }}>
+                  <input autoFocus value={q} onChange={e => search(e.target.value)} placeholder="Search Zerodha's list" style={{ ...input, fontSize: 12, padding: "4px 7px", width: 200 }}/>
+                  {found.map(f => <button key={f.s} type="button" style={{ ...btn(), textAlign: "left" }} onClick={() => setSym(x.s, { kite_symbol: f.s, status: "verified" })}>{f.s} · {f.n}{f.lot > 1 ? ` · lot ${f.lot}` : ""}</button>)}
+                  <button type="button" style={btn()} onClick={() => { setMap(null); setQ(""); setFound([]); }}>Cancel</button></span>
+                : <><button type="button" style={btn()} onClick={() => { setMap(x.s); search(x.s); }}>Map to…</button>{" "}
+                  {x.st !== "blocked" && <button type="button" style={btn()} onClick={() => setSym(x.s, { status: "blocked" })}>Block</button>}{" "}
+                  {(x.st === "manual" || x.st === "blocked") && <button type="button" style={btn()} onClick={() => clear(x.s)}>Clear</button>}</>}</td></tr>)}</tbody></table></div>}
+      </FocusCard>
+      <FocusCard icon="📤" title="Hand-offs to Kite · last 100"
+        sub="What Hyperplane sent to Kite, and whether the customer came back. Kite's redirect only says “sent” or “cancelled” — it is not proof that an order was placed or filled; that is only in the customer's Kite → Orders (tag shown).">
+        {!hs ? <div style={{ fontSize: 12, color: "var(--t3)" }}>Loading…</div> : !hs.length ? <div style={{ fontSize: 12, color: "var(--t3)" }} id="zr-hs-empty">No hand-offs yet.</div>
+          : <div style={{ maxHeight: 420, overflow: "auto", border: "1px solid var(--b1)", borderRadius: 8 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} id="zr-hs"><thead><tr><th style={cell}>When</th><th style={cell}>Customer</th><th style={cell}>From</th><th style={cell}>Orders</th><th style={cell}>Tag</th><th style={cell}>Status</th></tr></thead>
+              <tbody>{hs.map(h => <tr key={h.id}>
+                <td style={{ ...cell, whiteSpace: "nowrap" }}>{fmtDT(h.created_at)}</td>
+                <td style={cell}>{h.name}<div style={{ color: "var(--t3)" }}>{h.email}</div></td>
+                <td style={cell}>{h.source}{h.parts > 1 ? ` · ${h.part}/${h.parts}` : ""}</td>
+                <td style={{ ...cell, color: "var(--t2)" }}>{(h.lines || []).map(l => `${l.side === "SELL" ? "Sell" : "Buy"} ${l.k} ${l.qty} @ ${l.price}`).join(" · ") || "—"}</td>
+                <td style={{ ...cell, fontFamily: "monospace" }}>{h.tag}</td>
+                <td style={cell}>{ZR_HS[h.status] || h.status}{h.said ? <div style={{ color: "var(--t3)" }}>Kite said: {h.said}</div> : null}
+                  {h.checkin ? <div style={{ color: "var(--t2)" }}>Checked in: {h.checkin.status.replace("_", " ")}</div> : null}</td></tr>)}</tbody></table></div>}
+      </FocusCard>
+    </div>);
+}
+
 function AdminArea({ snaps, notify, ...adminProps }) {
   const [sub, setSub] = useState(() => pref("hp_admin_sub", "system"));
   const [pending, setPending] = useState(0);
@@ -1000,11 +1076,13 @@ function AdminArea({ snaps, notify, ...adminProps }) {
         {tab("activity", "📈 Adoption")}
         {tab("access", "🔐 Access manager")}
         {tab("portfolios", "📂 Shared portfolios")}
+        {tab("zerodha", "🔗 Zerodha")}
       </div>
       {sub === "customers" ? <CustomersTab snaps={snaps} notify={notify} />
         : sub === "activity" ? <AdoptionTab api={api} notify={notify} />
         : sub === "access" ? <AccessTab api={api} notify={notify} />
         : sub === "portfolios" ? <PortfoliosTab api={api} notify={notify} />
+        : sub === "zerodha" ? <ZerodhaTab notify={notify} />
         : <AdminTab snaps={snaps} notify={notify} {...adminProps} />}
     </div>
   );

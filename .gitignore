@@ -1,6 +1,7 @@
 # secrets and server data — never commit these
 config.ini
 .env
+secrets/
 data/
 backups/
 

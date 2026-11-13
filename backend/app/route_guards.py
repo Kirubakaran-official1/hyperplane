@@ -17,7 +17,10 @@ PUBLIC = {"/api/login", "/api/logout", "/api/health",
           # sign-up screening (round 17): the emailed confirmation link and "send it again"
           "/app/api/signup/verify", "/app/api/signup/resend",
           # a public saved portfolio by its 12-character ID: read only, no session, rate-limited per address (owner 2026-11-07)
-          "/app/api/public/portfolio/{code}", "/app/api/public/portfolio/{code}/track"}
+          "/app/api/public/portfolio/{code}", "/app/api/public/portfolio/{code}/track",
+          # Buy on Zerodha (round 20): Kite's redirect back — the sign-in cookie (SameSite=Strict) does not come with it; it only
+          # forwards a status word to the app, which records the return as the signed-in customer (POST /app/api/zerodha/returned)
+          "/app/api/zerodha/return"}
 # the check runs inside the function (the permission depends on a query value): name the check here
 INSIDE = {"/app/api/detail/{symbol}": "need_perm(f'{app_key}:detail') + row-level security on stock_detail"}
 # what a route under each prefix must run

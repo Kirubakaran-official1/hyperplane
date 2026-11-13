@@ -66,6 +66,10 @@ ETF_STYLES = ("focus", "standard", "diverse")
 ETF_OPTS_DEFAULT = {"gold": 10, "caps": {"Large": 55, "Mid": 25, "Small": 20}, "style": "standard"}
 STYLE_EXTRA = {"focus": (8, 0.15), "standard": (5, EXTRA_CAP), "diverse": (10, EXTRA_CAP)}   # most extra ETFs, most of the index money in one
 EASY = ("Very high", "High", "Moderate")
+# round 20 (owner 2026-11-13: "if the diversified is chosen, add the important momentum foreign ETFs"): More diversified puts the
+# INTL_MAX strongest international ETFs in a long-term uptrend first among its extras — easy to trade, one per market, even when
+# their trading is uneven (then not "Recommended" in the ETF Analyser; the order is a limit order) — at most EXTRA_CAP each
+INTL_MAX = 2
 # AI Momentum SIP (stocks only)
 MSIP_COUNTS = (10, 12, 15, 20, 25, 30, 40)
 MSIP_RULE = ((10_000, 15), (25_000, 20), (50_000, 20))               # the floor: a SIP is spread wide even at ₹10,000
@@ -311,6 +315,16 @@ def _up(e):
     return e.get("rg") == 1 and e.get("st") is not None and e["st"] >= ETF_UP
 
 
+def _intl_momentum(etf_data, skip_u=()):
+    """the strongest international ETFs going up, easy to trade, the strongest of each market (More diversified, round 20)"""
+    best = {}
+    for e in _etfs(etf_data):
+        if e["k"] == "International" and _up(e) and e.get("lq") in EASY and e["u"] not in skip_u:
+            if e["u"] not in best or (e["st"], e.get("v") or 0) > (best[e["u"]]["st"], best[e["u"]].get("v") or 0):
+                best[e["u"]] = e
+    return sorted(best.values(), key=lambda e: -e["st"])[:INTL_MAX]
+
+
 def _extras(etf_data, style="standard", skip_u=()):
     """the ETFs beyond the core index, best first, one per market, easy to trade only. Every style: what is going up (a
     sector or theme, a strategy, an international or another broad index ETF in a long-term uptrend). More diversified adds,
@@ -320,14 +334,15 @@ def _extras(etf_data, style="standard", skip_u=()):
     core_u = {u for u, _, alts in CORE} | set(skip_u)
     ups = sorted([e for e in _etfs(etf_data) if e.get("r") and e["k"] in THEME_KINDS + ("Broad market",) and _up(e) and easy(e) and e["u"] not in core_u],
                  key=lambda e: -e["st"])
-    divs = steady = broad = []
+    divs = steady = broad = intl = []
     if style == "diverse":
+        intl = _intl_momentum(etf_data, core_u)                     # first, so they always fit (round 20)
         divs = [e for e in _diversifiers(etf_data, {e["s"] for e in ups}) if easy(e)]
         steady = sorted([e for e in _etfs(etf_data) if e.get("r") and e["k"] == "Sector & theme" and e.get("st") is not None and 0 < e["st"] < ETF_UP
                          and e.get("rg") == 1 and easy(e)], key=lambda e: -e["st"])
         broad = sorted([e for e in _etfs(etf_data) if e.get("r") and e["k"] == "Broad market" and e["u"] not in core_u and easy(e)], key=lambda e: -(e.get("v") or 0))
     out, seen = [], set(skip_u)
-    for e, role in [(e, "theme") for e in ups] + [(e, "diversifier") for e in divs + steady + broad]:
+    for e, role in [(e, "diversifier") for e in intl] + [(e, "theme") for e in ups] + [(e, "diversifier") for e in divs + steady + broad]:
         if e["u"] not in seen:                                      # one ETF per market
             seen.add(e["u"]); out.append((e, role))
     return out
@@ -358,12 +373,18 @@ def _units(slice_amt, price, max_every=MAX_EVERY):
 def _etf_holding(e, sl, u, etf_data, sleeve, role=None):
     peers = sorted([x for x in _etfs(etf_data) if x["k"] == e["k"] and x["u"] == e["u"] and x["s"] != e["s"]], key=lambda x: -(x.get("v") or 0))[:4]
     role = role or etf_role(e)
-    why = [e.get("why") or "Recommended ETF of its market"]
-    why.append("Another broad index: spreads the money over more companies, kept to a small share" if role == "diversifier" and e.get("k") == "Broad market"
-               else "A theme whose long-term regime is up, kept to a small share" if role == "theme" and (e.get("st") or 0) < ETF_UP
-               else {"core": "A core index: kept in every market, whatever the trend", "commodity": "Gold: steadies the portfolio, moves differently from shares",
-                     "theme": "A theme in a long-term uptrend, kept to a small share",
-                     "diversifier": "Spreads the risk: a different kind of market, not falling, kept to a small share"}[role])
+    intl = role == "diversifier" and e.get("k") == "International" and _up(e)
+    why = [e.get("why") or (f"The strongest {e['u']} ETF that is easy to trade" if intl else "Recommended ETF of its market")]
+    if intl:                                                      # round 20: international momentum (More diversified)
+        why.append(f"International momentum: {e['u']} is in a long-term uptrend — spreads the money beyond India, kept to a small share")
+        if e.get("e"):
+            why.append("Its daily trading is uneven, so buy it with a limit order")
+    else:
+        why.append("Another broad index: spreads the money over more companies, kept to a small share" if role == "diversifier" and e.get("k") == "Broad market"
+                 else "A theme whose long-term regime is up, kept to a small share" if role == "theme" and (e.get("st") or 0) < ETF_UP
+                 else {"core": "A core index: kept in every market, whatever the trend", "commodity": "Gold: steadies the portfolio, moves differently from shares",
+                       "theme": "A theme in a long-term uptrend, kept to a small share",
+                       "diversifier": "Spreads the risk: a different kind of market, not falling, kept to a small share"}[role])
     return {"kind": "etf", "sleeve": sleeve, "role": role, "s": e["s"], "n": e["n"], "grp": e["u"], "cls": e["k"], "p": e["p"], "st": e.get("st"),
             "units": u[0], "every": u[1], "slice": sl, "score": e.get("st") or 0, "why": why, "tf": e.get("tf"), "rg": e.get("rg"),
             "lq": e.get("lq"), "v": e.get("v"), "e": e.get("e"), "y": e.get("y"), "u": e["u"], "k": e["k"],

@@ -628,6 +628,80 @@ CREATE TABLE IF NOT EXISTS customer_prefs (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS module_usage_cust ON module_usage (customer_id, day);
+-- round 20c (owner: "the API key comes from the customer in the customer app, not the admin app … stored against the user, encrypted"):
+-- each customer's own Kite Publisher API key, sealed by app/vault.py (AES-256-GCM, a data key per row, sealed by the master key that
+-- only the customer service holds; bound to this customer). Round 20d: nothing of the key stays readable — key_fp is a key ID (an HMAC
+-- under the master key, vault.key_id), never characters of the key.
+DROP TABLE IF EXISTS customer_zerodha;                     -- round 20b's "ready" mark, replaced by the key itself
+CREATE TABLE IF NOT EXISTS zerodha_keys (
+    customer_id  BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+    key_ct       BYTEA NOT NULL,
+    key_nonce    BYTEA NOT NULL,
+    dek_ct       BYTEA NOT NULL,
+    dek_nonce    BYTEA NOT NULL,
+    kek_id       SMALLINT NOT NULL,
+    key_fp       TEXT,
+    saved_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE zerodha_keys ADD COLUMN IF NOT EXISTS key_fp TEXT;
+DELETE FROM zerodha_keys WHERE key_fp IS NULL;             -- round 20c rows kept the last 4 characters: the customer saves the key again
+ALTER TABLE zerodha_keys DROP COLUMN IF EXISTS key_hint;
+-- Buy on Zerodha (round 20, app/zerodha.py): Zerodha's own NSE instrument list (the official daily dump, replaced whole
+-- once a day), the admin's symbol corrections, and every hand-off to Kite (app-side record only — never an order or a fill)
+CREATE TABLE IF NOT EXISTS zerodha_instruments (
+    tradingsymbol     TEXT PRIMARY KEY,
+    name              TEXT,
+    tick_size         NUMERIC(12, 4) NOT NULL,
+    lot_size          INT  NOT NULL,
+    instrument_token  BIGINT,
+    exchange_token    BIGINT,
+    synced_on         DATE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS zerodha_symbol_map (
+    sym          TEXT PRIMARY KEY,                    -- our (ChartInk / NSE) symbol
+    kite_symbol  TEXT,                                -- NULL with status 'blocked'
+    status       TEXT NOT NULL CHECK (status IN ('verified', 'blocked')),
+    note         TEXT,
+    set_by       TEXT,
+    set_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS zerodha_handoffs (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    source       TEXT NOT NULL,                       -- sip | msip | builder | order | swap | return (a return with no hand-off)
+    sid          BIGINT,                              -- the saved plan, when there is one
+    part         SMALLINT NOT NULL DEFAULT 1,
+    parts        SMALLINT NOT NULL DEFAULT 1,
+    tag          TEXT NOT NULL,
+    lines        JSONB NOT NULL DEFAULT '[]'::jsonb,  -- the basket exactly as sent (symbol, Zerodha symbol, side, qty, limit)
+    status       TEXT NOT NULL DEFAULT 'SENT_TO_KITE',-- SENT_TO_KITE | RETURNED_UNVERIFIED | EXPIRED | NEEDS_REVIEW
+    said         TEXT,                                -- what Kite's redirect said: success | cancelled | other (not proof)
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    returned_at  TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS zerodha_handoffs_tag ON zerodha_handoffs (tag);
+CREATE INDEX IF NOT EXISTS zerodha_handoffs_cust ON zerodha_handoffs (customer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS zerodha_handoffs_at ON zerodha_handoffs (created_at DESC);
+-- round 21 (owner: "track the real orders … swap: sell first, then buy … never repeat a swap"): what a hand-off was for and the
+-- customer's own check-in (Hyperplane cannot read Zerodha). period = an instalment (2026-11 / 2026-Q4); swap_key = "<d>|<out>|<in>" of the
+-- tracker's swap log; step = sell | buy. checkin = {status: placed | partly | not_placed, lines: [{s, qty, price}]}.
+ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS period TEXT;
+ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS swap_key TEXT;
+ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS step TEXT;
+ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS checkin JSONB;
+ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS checked_at TIMESTAMPTZ;
+-- round 21b (owner: "for the swaps — all sell, then all buy, with check boxes"): a basket can carry several swaps (one line each)
+ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS swap_keys TEXT[];
+CREATE INDEX IF NOT EXISTS zerodha_handoffs_plan ON zerodha_handoffs (customer_id, sid, created_at DESC);
+-- round 21: "remind me on day N of every month" for a saved SIP (1 … 28; NULL = off)
+ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS reminder_day SMALLINT;
+-- round 21: All Portfolios — every saved portfolio of every application, in one place (every role; never pinned by default)
+INSERT INTO app_modules (key, name, description, sort) VALUES
+    ('portfolios', 'All Portfolios', 'Every portfolio you saved — SIPs, Builder portfolios and Analyser lists — with their value, returns and Zerodha orders', 8)
+ON CONFLICT (key) DO NOTHING;
+-- round 20c: the admin-wide Publisher key is gone (each customer saves their own)
+DROP FUNCTION IF EXISTS portal_zerodha();
+DELETE FROM portal_config WHERE key = 'zerodha';
 """
 
 # The customer service logs in as this role: it can read the published view and its own customer rows, nothing else.
@@ -680,6 +754,8 @@ def init_db():
         perms.migrate_history_perm(c)                          # past data = a permission, Customer Admin (owner 2026-11-07, round 16)                             # …then every role that opens the app (owner 2026-11-07, round 15)
         inbox.consolidate(c)                                   # one open "stocks to change" item per portfolio (round 19k)
         perms.migrate_msip_detail(c)                           # the Momentum SIP's detail view, Customer Admin (round 19k)
+        perms.migrate_zerodha(c)                               # Buy on Zerodha, Customer Admin first (round 20)
+        perms.migrate_all_portfolios(c)                        # All Portfolios for every role (round 21)
         perms.migrate_pins8(c)                                 # 8 pins: the AI Momentum SIP joins saved pins (owner 2026-11-06)
         perms.migrate_msip_levels(c)                           # Momentum SIP Customer / Admin levels (owner 2026-11-06 r6)
         perms.rename_builder_levels(c)
@@ -757,7 +833,7 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, symbols, updated_at, alerts), UPDATE (symbols, updated_at, alerts, alert_state) ON customer_portfolio TO {}").format(role))
     # saved SIPs: the same "own rows only" rule as the Analyser list
     c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, name, inputs, holdings, kind, alerts, saved_on, versions), "
-                      "UPDATE (refreshed_at, alerts, holdings, state, name, versions, visibility), DELETE ON customer_sips TO {}").format(role))
+                      "UPDATE (refreshed_at, alerts, holdings, state, name, versions, visibility, reminder_day), DELETE ON customer_sips TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION shared_portfolio(TEXT) TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION shared_portfolio_seen(TEXT) TO {}").format(role))
     c.execute(sql.SQL("GRANT SELECT ON price_hist, price_adj TO {}").format(role))     # market prices for tracking
@@ -856,8 +932,26 @@ def _setup_portal_role(c):
         c.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
         c.execute(f"DROP POLICY IF EXISTS {name} ON {table}")
         c.execute(sql.SQL(f"CREATE POLICY {name} ON {table} FOR {cmd} TO {{}} {rule}").format(role))
+    # Buy on Zerodha (round 20): the instrument list and the admin's corrections are read-only; a hand-off is written only
+    # as the signed-in customer, and only its return mark can change afterwards
+    for stmt in (
+        "GRANT SELECT ON zerodha_instruments, zerodha_symbol_map TO {}",
+        "GRANT SELECT, INSERT (customer_id, source, sid, part, parts, tag, lines, status, said, returned_at, period, swap_key, swap_keys, step), "
+        "UPDATE (status, said, returned_at, checkin, checked_at) ON zerodha_handoffs TO {}",
+    ):
+        c.execute(sql.SQL(stmt).format(role))
+    # each customer's sealed Publisher key: only their own row (row-level security), and only sealed bytes ever reach the database
+    c.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE (key_ct, key_nonce, dek_ct, dek_nonce, kek_id, key_fp, saved_at), DELETE ON zerodha_keys TO {}").format(role))
+    c.execute("ALTER TABLE zerodha_keys ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON zerodha_keys")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON zerodha_keys TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
+                      "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
+    c.execute("ALTER TABLE zerodha_handoffs ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON zerodha_handoffs")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON zerodha_handoffs TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
+                      "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     own = "(owner_kind = 'customer' AND owner_id = current_setting('hp.cid', true))"
-    in_own = "EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = ticket_id)"        # hd_tickets' own policy applies here
+    in_own ="EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = ticket_id)"        # hd_tickets' own policy applies here
     policies = {
         "hd_tickets": (own, own),
         "hd_messages": (in_own, f"side = 'owner' AND author_kind IN ('customer', 'system') AND {in_own}"),

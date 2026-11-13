@@ -12,6 +12,7 @@ to the activity log, which this service can write but never read.
 import gzip
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -24,7 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 import psycopg
 from psycopg.rows import dict_row
@@ -43,6 +44,8 @@ from . import tracking
 from . import helpdesk as hd
 from . import inbox
 from . import community as cm
+from . import zerodha as zr
+from . import vault
 from .detail import DETAIL_DAYS
 from .security import DUMMY_HASH, hash_password, verify_password
 
@@ -592,8 +595,11 @@ def me(c=Depends(customer)):
                                         "WHERE g.customer_id = %s AND (g.expires_on IS NULL OR g.expires_on >= (now() AT TIME ZONE "
                                         "'Asia/Kolkata')::date) ORDER BY m.sort, p.sort", (c["id"],)).fetchall()]
         pins = _pins(conn, c)
+        zr_key = conn.execute("SELECT key_fp, saved_at FROM zerodha_keys WHERE customer_id = %s", (c["id"],)).fetchone() \
+            if any(p.endswith(":zerodha") for p in c["perms"]) else None
     return {"name": c["name"], "email": c["email"], "expires_on": c["expires_on"].isoformat() if c["expires_on"] else None,
-            "apps": [dict(a) for a in c["apps"]], "roles": roles, "grants": grants, "perms": sorted(c["perms"]), "pins": pins, "max_pins": MAX_PINS}
+            "apps": [dict(a) for a in c["apps"]], "roles": roles, "grants": grants, "perms": sorted(c["perms"]), "pins": pins, "max_pins": MAX_PINS,
+            "zerodha": {"id": zr_key["key_fp"], "saved": zr_key["saved_at"].isoformat()} if zr_key else None}
 
 
 class PinsIn(SafeModel):
@@ -942,6 +948,7 @@ class SavedPatch(SafeModel):
     alerts: bool | None = None
     name: str | None = None
     visibility: str | None = None                                # private | public (public needs the application's :share permission)
+    reminder_day: int | None = Field(None, ge=0, le=28)          # round 21: a SIP's monthly reminder day (0 = off)
 
 
 @app.get("/app/api/sip/info")
@@ -995,7 +1002,7 @@ def sip_build(body: SipIn, c=Depends(need("sip"))):
 # ── saved plans: Momentum SIPs and Portfolio Builder portfolios (owner 2026-11-06: save, check, adjust, alerts) ──
 SAVED_KINDS = {"sip": "sip", "msip": "msip", "builder": "builder", "analyser": "portfolio"}   # kind → the application it needs
 SAVED_TAG = {"sip": "AI ETF SIP Builder", "msip": "AI Momentum SIP Builder", "builder": "Portfolio Builder", "analyser": "AI Portfolio Analyser"}
-SAVED_COLS = "id, kind, name, inputs, holdings, alerts, state, created_at, refreshed_at, saved_on, versions, share_id, visibility"
+SAVED_COLS = "id, kind, name, inputs, holdings, alerts, state, created_at, refreshed_at, saved_on, versions, share_id, visibility, reminder_day"
 SHARE_PERM = {"sip": "sip:share", "msip": "msip:share", "builder": "builder:share", "analyser": "portfolio:share"}   # who may make one public
 SHARE_CODE = re.compile(r"^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$")       # db.hp_share_id()
 SAVED_KEEP = ("kind", "sleeve", "role", "s", "n", "grp", "cap", "sec", "k", "u", "units", "every", "slice", "p", "amt", "qty")
@@ -1063,7 +1070,7 @@ def _saved_out(r, c=None):
     return {"id": r["id"], "kind": r["kind"], "tag": SAVED_TAG.get(r["kind"]), "name": r["name"], "inputs": r["inputs"], "holdings": r["holdings"],
             "code": r["share_id"], "visibility": r["visibility"],
             "can_share": bool(c) and SHARE_PERM.get(r["kind"]) in c["perms"],
-            "alerts": r["alerts"], "created_at": r["created_at"].isoformat(), "saved_on": r["saved_on"].isoformat() if r["saved_on"] else None,
+            "alerts": r["alerts"], "reminder_day": r.get("reminder_day"), "created_at": r["created_at"].isoformat(), "saved_on": r["saved_on"].isoformat() if r["saved_on"] else None,
             "changes": max(0, len(r["versions"] or []) - 1),
             "refreshed_at": r["refreshed_at"].isoformat() if r["refreshed_at"] else None}
 
@@ -1169,6 +1176,10 @@ def saved_patch(sid: int, body: SavedPatch, c=Depends(customer)):
             if body.visibility == "public" and SHARE_PERM.get(r["kind"]) not in c["perms"]:
                 raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
             conn.execute("UPDATE customer_sips SET visibility = %s WHERE id = %s AND customer_id = %s", (body.visibility, sid, c["id"]))
+        if body.reminder_day is not None:                        # round 21: SIPs only
+            if r["kind"] not in ("sip", "msip"):
+                raise HTTPException(422, "Reminders are for SIPs")
+            conn.execute("UPDATE customer_sips SET reminder_day = %s WHERE id = %s AND customer_id = %s", (body.reminder_day or None, sid, c["id"]))
         return _saved_out(_saved_row(conn, c, sid), c)
 
 
@@ -1773,3 +1784,518 @@ def cm_rules(a=Depends(cm_customer)):
 def cm_image(iid: int, a=Depends(cm_customer)):
     with _cm(a) as c:
         return cm.image(c, a, iid)
+
+
+# ── Buy on Zerodha (round 20, app/zerodha.py) ──
+# Kite Publisher offsite basket: this service only checks the lines and records the hand-off; the customer's browser posts the basket to
+# Kite, where they sign in and confirm. Nothing here places, reads or confirms an order, and no Zerodha token is ever kept.
+class _NoTokenLog(logging.Filter):
+    """Kite's redirect carries a request token in the query: the access log keeps the path only"""
+    def filter(self, rec):
+        a = rec.args
+        if isinstance(a, tuple) and len(a) >= 3 and isinstance(a[2], str) and a[2].split("?")[0] == "/app/api/zerodha/return":
+            rec.args = (*a[:2], "/app/api/zerodha/return", *a[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_NoTokenLog())
+ZR_RETURN_HOURS = 2                                              # a hand-off older than this is not matched to a return
+
+
+class ZrIn(SafeModel):
+    source: str                                                  # sip | msip | builder (a result) · order (a saved SIP's instalment) · swap
+    sid: int | None = None                                       # the saved plan (order / swap; optional for the others)
+    lines: list = []                                             # [{s, qty, side}] — symbols and quantities only
+    swap_out: str | None = None                                  # swap: the stock that left the plan …
+    swap_in: str | None = None                                   # … and the one that took its place
+    step: str | None = None                                      # round 21: a swap is two baskets — sell, then buy
+    swaps: list = []                                             # round 21b: several swaps at once — [{out, in}], all sells, then all buys
+    again: bool = False                                          # round 21: send this instalment again although it was checked in as placed
+    part: int = 1
+    parts: int = 1
+
+
+class ZrReturnIn(SafeModel):
+    status: str = "other"
+
+
+# round 20c (owner: "the API key comes from the customer, in the customer app … stored against the user, encrypted with high-end security"):
+# each customer's own Kite Publisher API key, sealed by app/vault.py (AES-256-GCM envelope, bound to the customer). It is opened only
+# inside prepare, to go into that customer's own form to Kite; it is never logged and never shown again — not even in part (round 20d):
+# the customer sees a key ID (vault.key_id), which reveals nothing of the key.
+ZR_KEY_RE = re.compile(r"^[A-Za-z0-9]{8,40}$")
+
+
+class ZrKeyIn(SafeModel):
+    key: str = Field(..., max_length=80)
+
+
+def _zr_key_row(conn, c):
+    return conn.execute("SELECT key_ct, key_nonce, dek_ct, dek_nonce, kek_id, key_fp, saved_at FROM zerodha_keys WHERE customer_id = %s",
+                        (c["id"],)).fetchone()
+
+
+def _zr_redirect(request):
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    return f"https://{host}/app/api/zerodha/return" if re.fullmatch(r"[A-Za-z0-9.:-]{1,253}", host or "") else "/app/api/zerodha/return"
+
+
+def _zr_any(c):
+    if not any(p.endswith(":zerodha") for p in c["perms"]):
+        raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+
+
+def _zr_prices():
+    """our latest price, kind and name of every stock and ETF (today's data — an order never follows a past day picked)"""
+    px, kinds, names = {}, {}, {}
+    for x in _latest_view(today=True).get("stocks", []):
+        px[x["s"]], kinds[x["s"]], names[x["s"]] = x.get("p"), "stock", x.get("n")
+    for x in (_latest_etf_view(today=True) or {}).get("etfs", []):
+        px.setdefault(x["s"], x.get("p")); kinds.setdefault(x["s"], "etf"); names.setdefault(x["s"], x.get("n"))
+    return px, kinds, names
+
+
+def _zr_lines(raw, sell=False):
+    out, seen = [], set()
+    if not isinstance(raw, list) or len(raw) > 1000:
+        raise HTTPException(422, "Too many lines")
+    for x in raw:
+        if not isinstance(x, dict):
+            raise HTTPException(422, "That basket cannot be sent")
+        s, side = str(x.get("s") or "").strip().upper(), str(x.get("side") or "BUY").upper()
+        if not PF_SYM.match(s) or side not in ("BUY", "SELL"):
+            raise HTTPException(422, "That basket cannot be sent")
+        if side == "SELL" and not sell:
+            raise HTTPException(422, "Only buy orders can be sent from here")
+        if (s, side) in seen:
+            raise HTTPException(422, f"{s} is listed twice")
+        every = x.get("every") if type(x.get("every")) is int and 1 <= x.get("every") <= 12 else 1
+        seen.add((s, side)); out.append({"s": s, "qty": x.get("qty"), "side": side, "every": every})
+    return out
+
+
+def _swap_key(w):
+    return f"{w['d']}|{w['out']['s']}|{w['in']['s']}"
+
+
+ZR_SENT = ("SENT_TO_KITE", "RETURNED_UNVERIFIED", "EXPIRED")
+
+
+def _zr_runs(conn, c, sid):
+    return conn.execute("SELECT id, source, part, parts, tag, lines, status, said, created_at, period, swap_key, swap_keys, step, checkin, checked_at "
+                        "FROM zerodha_handoffs WHERE customer_id = %s AND sid = %s ORDER BY created_at", (c["id"], sid)).fetchall()
+
+
+def _ck(h):
+    return (h["checkin"] or {}).get("status")
+
+
+def _has_swap(h, key):
+    return h["swap_key"] == key or key in (h["swap_keys"] or [])
+
+
+def _line_ok(h, sym):
+    """did this checked-in basket really trade sym? (round 21b: a basket can carry several swaps — a partly check-in counts per stock)"""
+    ck = h["checkin"] or {}
+    if ck.get("status") == "skipped":
+        return True
+    if ck.get("status") not in ("placed", "partly"):
+        return False
+    ln = next((x for x in ck.get("lines") or [] if x.get("s") == sym), None)
+    return ck["status"] == "placed" if ln is None else (ln.get("qty") or 0) > 0
+
+
+def _swap_state(rows, out, inn):
+    """round 21: where a swap stands on Zerodha (from the customer's check-ins of the baskets that carried it): todo · sell_sent · sold ·
+    buy_sent · done"""
+    sells, buys = [h for h in rows if h["step"] == "sell"], [h for h in rows if h["step"] == "buy"]
+    if any(_line_ok(h, inn) for h in buys):
+        return "done"
+    if any(h["checkin"] is None for h in buys):
+        return "buy_sent"
+    if any(_line_ok(h, out) for h in sells):
+        return "sold"
+    if any(h["checkin"] is None and h["status"] != "SKIPPED" for h in sells):
+        return "sell_sent"
+    return "todo"
+
+
+def _period_done(rows, period):
+    """an instalment is placed when the last basket of a run was checked in as placed"""
+    return next((h for h in rows if h["period"] == period and _ck(h) == "placed" and h["part"] == h["parts"]), None)
+
+
+def _zr_context(conn, c, body):
+    """(application, the lines the customer's own saved plan gives, the SELL caps, meta): a saved SIP → this instalment's whole units
+    (a holding bought "1 every N months" is marked); a saved Builder portfolio → its quantities; a swap → round 21: TWO baskets, the sell
+    of the stock that left (at most what the plan's tracking holds) and, once the sell is checked in, the buy of the one that came.
+    meta = {kind, period (an instalment), swap_key + step + state (a swap)}"""
+    if body.source not in zr.SOURCES:
+        raise HTTPException(422, "Unknown source")
+    row = _saved_row(conn, c, body.sid) if body.sid else None
+    if body.source in ("order", "swap", "swaps") and not row:
+        raise HTTPException(422, "Open the saved plan first")
+    if row and body.source in ("sip", "msip", "builder") and row["kind"] != body.source:
+        raise HTTPException(422, "That saved plan belongs to another application")
+    if body.source == "order" and row["kind"] not in ("sip", "msip"):
+        raise HTTPException(422, "Only a SIP has instalment orders")
+    app_ = zr.APP_OF[row["kind"]] if row else body.source
+    if f"{app_}:zerodha" not in c["perms"]:
+        raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+    meta = {"kind": row["kind"] if row else None, "period": None, "swap_key": None, "step": None, "state": None}
+    if body.source == "swaps":                                   # round 21b: several swaps, one step — all the sells, or all the buys
+        if body.step not in ("sell", "buy") or not isinstance(body.swaps, list) or not 1 <= len(body.swaps) <= 50:
+            raise HTTPException(422, "Pick the swaps, and sell or buy")
+        t = tracking.track(conn, row)
+        runs = _zr_runs(conn, c, row["id"])
+        lines, caps, smap, items = [], {}, {}, []
+        for x in body.swaps:
+            out, inn = str((x or {}).get("out") or ""), str((x or {}).get("in") or "")
+            w = next((w for w in t.get("swaps") or [] if (w.get("out") or {}).get("s") == out and (w.get("in") or {}).get("s") == inn), None) if PF_SYM.match(out) and PF_SYM.match(inn) else None
+            if not w:
+                raise HTTPException(422, f"{out} → {inn} is not a swap of this portfolio")
+            key = _swap_key(w)
+            st_ = _swap_state([h for h in runs if _has_swap(h, key)], out, inn)
+            ok = st_ == "todo" if body.step == "sell" else st_ == "sold"
+            items.append({"out": out, "in": inn, "state": st_, "ok": ok})
+            sym = out if body.step == "sell" else inn
+            if not ok or sym in smap:
+                continue
+            smap[sym] = key
+            o, i = w["out"], w["in"]
+            if row["kind"] == "analyser":
+                held, cap, buy = 1, zr.QTY_MAX, 1
+            else:
+                held = cap = int(o.get("qty") or 0)
+                h = next((h for h in row["holdings"] or [] if h.get("s") == inn), None) or {}
+                buy = int(i.get("qty") or 0) or int(h.get("qty") or 0) or (int(held * (o.get("now") or 0) // i["now"]) if i.get("now") else 0)
+            if body.step == "sell":
+                lines.append({"s": out, "qty": held or None, "side": "SELL"}); caps[out] = cap
+            else:
+                lines.append({"s": inn, "qty": buy or None, "side": "BUY"})
+        meta.update(step=body.step, swap_map=smap, items=items)
+        return app_, lines, caps, meta
+    if body.source != "swap":
+        if not row:
+            return app_, None, None, meta
+        if row["kind"] in ("sip", "msip"):
+            meta["period"] = monitor._period((row["inputs"] or {}).get("freq", "month"), datetime.now(IST))
+        q = "units" if row["kind"] in ("sip", "msip") else "qty"
+        return app_, [{"s": h["s"], "qty": int(h.get(q) or 0) or None, "side": "BUY", "every": int(h.get("every") or 1)}
+                      for h in row["holdings"] or [] if h.get("s")], None, meta
+    if not (body.swap_out and body.swap_in and PF_SYM.match(body.swap_out) and PF_SYM.match(body.swap_in)):
+        raise HTTPException(422, "Name the swap")
+    t = tracking.track(conn, row)
+    w = next((w for w in t.get("swaps") or [] if (w.get("out") or {}).get("s") == body.swap_out and (w.get("in") or {}).get("s") == body.swap_in), None)
+    if not w:
+        raise HTTPException(422, "That swap is not in this portfolio")
+    o, i = w["out"], w["in"]
+    if row["kind"] == "analyser":                                # the Analyser list has no quantities: the customer enters theirs
+        held, cap, buy = 1, zr.QTY_MAX, 1
+    else:
+        held = int(o.get("qty") or 0)
+        cap = held
+        h = next((h for h in row["holdings"] or [] if h.get("s") == body.swap_in), None) or {}
+        buy = int(i.get("qty") or 0) or int(h.get("qty") or 0) or (int(held * (o.get("now") or 0) // i["now"]) if i.get("now") else 0)
+    key = _swap_key(w)
+    state = _swap_state([h for h in _zr_runs(conn, c, row["id"]) if _has_swap(h, key)], body.swap_out, body.swap_in)
+    step = body.step if body.step in ("sell", "buy") else ("buy" if state in ("sold", "buy_sent") else "sell")
+    meta.update(swap_key=key, step=step, state=state)
+    lines = [{"s": body.swap_out, "qty": held or None, "side": "SELL"}] if step == "sell" else [{"s": body.swap_in, "qty": buy or None, "side": "BUY"}]
+    return app_, lines, {body.swap_out: cap}, meta
+
+
+def _zr_stale(d):
+    return d is None or d < datetime.now(IST).date() - timedelta(days=zr.STALE_DAYS)
+
+
+@app.put("/app/api/zerodha/key")
+def zerodha_key_save(body: ZrKeyIn, request: Request, c=Depends(customer)):
+    """save (or replace) this customer's own Publisher API key — sealed before it reaches the database; the answer never repeats it"""
+    _zr_any(c)
+    _rate("zerodha-key", str(c["id"]), 10, 3600)
+    if not vault.ready():
+        raise HTTPException(503, "Connecting Zerodha is not available yet — please try again later")
+    key = body.key.strip()
+    if not ZR_KEY_RE.match(key):
+        raise HTTPException(422, "That does not look like a Kite API key: copy the “API key” of your Publisher app (letters and digits). "
+                                 "Never paste the API secret or your Zerodha password.")
+    sealed, kid = vault.seal(key, c["id"]), vault.key_id(key)
+    del key
+    with _own(c) as conn:
+        # one statement: a changed key replaces the old one only when the new one is sealed and stored (never a moment without a key)
+        conn.execute("INSERT INTO zerodha_keys (customer_id, key_ct, key_nonce, dek_ct, dek_nonce, kek_id, key_fp, saved_at) "
+                     "VALUES (%(c)s, %(key_ct)s, %(key_nonce)s, %(dek_ct)s, %(dek_nonce)s, %(kek_id)s, %(fp)s, now()) "
+                     "ON CONFLICT (customer_id) DO UPDATE SET key_ct = EXCLUDED.key_ct, key_nonce = EXCLUDED.key_nonce, dek_ct = EXCLUDED.dek_ct, "
+                     "dek_nonce = EXCLUDED.dek_nonce, kek_id = EXCLUDED.kek_id, key_fp = EXCLUDED.key_fp, saved_at = now()",
+                     {"c": c["id"], "fp": kid, **sealed})
+        act.log(conn, actor_kind="customer", actor_id=c["id"], actor_name=c["name"], session_id=c["sid"], device_id=c["device_id"],
+                device=act.device_label(_ua(request)), ip=_ip(request), app="customer", event="zerodha_key_saved", detail={"key_id": kid})
+        r = _zr_key_row(conn, c)
+    return {"id": r["key_fp"], "saved": r["saved_at"].isoformat()}
+
+
+@app.delete("/app/api/zerodha/key")
+def zerodha_key_remove(request: Request, c=Depends(customer)):
+    _zr_any(c)
+    with _own(c) as conn:
+        n = conn.execute("DELETE FROM zerodha_keys WHERE customer_id = %s", (c["id"],)).rowcount
+        if n:
+            act.log(conn, actor_kind="customer", actor_id=c["id"], actor_name=c["name"], session_id=c["sid"], device_id=c["device_id"],
+                    device=act.device_label(_ua(request)), ip=_ip(request), app="customer", event="zerodha_key_removed")
+    return {"removed": bool(n)}
+
+
+@app.get("/app/api/zerodha/status")
+def zerodha_status(request: Request, c=Depends(customer)):
+    """what the Connect Zerodha window needs: the key saved or not (its last 4), the address to paste in the Publisher app"""
+    _zr_any(c)
+    with _own(c) as conn:
+        d, k = zr.list_day(conn), _zr_key_row(conn, c)
+    return {"key": {"id": k["key_fp"], "saved": k["saved_at"].isoformat()} if k else None, "available": vault.ready(),
+            "redirect": _zr_redirect(request), "list": d.isoformat() if d else None, "stale": _zr_stale(d), "max": zr.MAX_LINES}
+
+
+@app.post("/app/api/zerodha/check")
+def zerodha_check(body: ZrIn, c=Depends(customer)):
+    """the preview: every line with its Zerodha symbol (✓ / ⚠ / ✗), lot, our price → the limit, the value; round 21: where this instalment
+    or this swap stands (placed already? which step of the swap?)"""
+    _rate("zerodha-check", str(c["id"]), 60, 600)
+    px, kinds, names = _zr_prices()
+    with _own(c) as conn:
+        app_, own, caps, meta = _zr_context(conn, c, body)
+        lines = own if own is not None and (body.source in ("swap", "swaps") or not body.lines) else _zr_lines(body.lines)
+        found = zr.resolve(conn, [x["s"] for x in lines])
+        for x in lines:                                          # a suggestion in whole lots (the customer can change it)
+            lot = (found.get(x["s"]) or {}).get("lot", 1)
+            if zr.whole(x.get("qty")) and lot > 1:
+                x["qty"] = zr.lots(x["qty"], lot) or None
+        res = zr.check(conn, lines, px, caps, kinds)
+        d = zr.list_day(conn)
+        runs = _zr_runs(conn, c, body.sid) if body.sid else []
+        done = _period_done(runs, meta["period"]) if meta["period"] else None
+        # a basket of this instalment / this swap step sent in the last week and not checked in yet: the window starts with its check-in
+        week = datetime.now(timezone.utc) - timedelta(days=7)
+        pend = next((h for h in reversed(runs) if h["checkin"] is None and h["status"] != "SKIPPED" and h["created_at"] > week
+                     and ((meta["period"] and h["period"] == meta["period"]) or (meta["swap_key"] and _has_swap(h, meta["swap_key"]))
+                          or (body.source == "swaps" and h["step"] == meta["step"] and set(h["swap_keys"] or []) & {_k for _k in (meta.get("swap_map") or {}).values()}))), None)
+    for x in res:
+        x["n"] = names.get(x["s"])
+    return {"list": d.isoformat() if d else None, "stale": _zr_stale(d), "max": zr.MAX_LINES, "app": app_,
+            "swap": body.source in ("swap", "swaps"), "caps": caps or {}, "lines": res, "period": meta["period"], "step": meta["step"],
+            "state": meta["state"], "placed": done["checked_at"].isoformat() if done and done["checked_at"] else None, "swaps": meta.get("items"),
+            "pending": {"id": str(pend["id"]), "tag": pend["tag"], "part": pend["part"], "parts": pend["parts"], "step": pend["step"],
+                        "lines": pend["lines"], "at": pend["created_at"].isoformat()} if pend else None}
+
+
+@app.post("/app/api/zerodha/prepare")
+def zerodha_prepare(body: ZrIn, request: Request, c=Depends(customer)):
+    """one basket (≤ 10 lines), checked again on the server, recorded, and handed back for the customer's browser to post to Kite"""
+    _rate("zerodha-prepare", str(c["id"]), 30, 3600)
+    if not 1 <= body.part <= body.parts <= 100:
+        raise HTTPException(422, "That basket cannot be sent")
+    px, kinds, _ = _zr_prices()
+    with _own(c) as conn:
+        app_, own, caps, meta = _zr_context(conn, c, body)
+        lines = _zr_lines(body.lines, sell=body.source in ("swap", "swaps"))
+        if body.source == "swaps":                               # round 21b: only the chosen swaps that are at this step
+            allowed = {(x["s"], x["side"]) for x in own}
+            if any((x["s"], x["side"]) not in allowed for x in lines):
+                raise HTTPException(422, "Only the " + ("sells of the swaps not sold yet" if meta["step"] == "sell" else "buys of the swaps already sold") + " can go in this basket")
+        if body.source == "swap":                                # round 21: one step at a time — the sell, then (checked in) the buy
+            st_ = meta["state"]
+            if st_ == "done":
+                raise HTTPException(409, "This swap is already done on Zerodha (you checked it in)")
+            if meta["step"] == "sell" and st_ in ("sold", "buy_sent"):
+                raise HTTPException(409, "The sell of this swap is already checked in — the next step is the buy")
+            if meta["step"] == "buy" and st_ not in ("sold", "buy_sent"):
+                raise HTTPException(409, "Sell first: check in the sell of the old stock, then buy the new one")
+            allowed = {(x["s"], x["side"]) for x in own}
+            if any((x["s"], x["side"]) not in allowed for x in lines):
+                raise HTTPException(422, "This step of the swap holds only " + ("the sell of the stock that left" if meta["step"] == "sell" else "the buy of the new stock"))
+        if meta["period"] and not body.again and body.part == 1:
+            done = _period_done(_zr_runs(conn, c, body.sid), meta["period"])
+            if done:
+                raise HTTPException(409, f"This instalment was already placed on Zerodha (you checked it in on {done['checked_at'].astimezone(IST):%d %b}). Send it again only if you mean to buy it twice.")
+        if not lines:
+            raise HTTPException(422, "Pick at least one stock")
+        if len(lines) > zr.MAX_LINES:
+            raise HTTPException(422, f"At most {zr.MAX_LINES} orders in one Zerodha basket")
+        k = _zr_key_row(conn, c)
+        if not k:
+            raise HTTPException(409, "Connect Zerodha first: save your Publisher API key")
+        try:
+            api_key = vault.unseal(k, c["id"])
+        except vault.VaultError:
+            raise HTTPException(409, "Your saved Zerodha key could not be opened — please save it again (Connect Zerodha)")
+        if _zr_stale(zr.list_day(conn)):
+            raise HTTPException(409, "Zerodha's symbol list is out of date — please try again later")
+        res = zr.check(conn, lines, px, caps, kinds)
+        bad = next((x for x in res if not x["ok"]), None)
+        if bad:
+            raise HTTPException(422, f"{bad['s']}: {bad.get('why') or bad.get('note') or 'cannot be sent to Zerodha'}")
+        snap = [{k: x.get(k) for k in ("s", "k", "side", "qty", "price", "lot", "st")} for x in res]
+        hid = tag = None
+        for _ in range(5):                                       # the tag is unique (36^8 tags — a clash is all but impossible)
+            tag = zr.new_tag()
+            try:
+                with conn.transaction():
+                    keys = [meta["swap_map"][x["s"]] for x in snap] if body.source == "swaps" else ([meta["swap_key"]] if meta["swap_key"] else None)
+                    hid = conn.execute("INSERT INTO zerodha_handoffs (customer_id, source, sid, part, parts, tag, lines, status, period, swap_key, swap_keys, step) "
+                                       "VALUES (%s, %s, %s, %s, %s, %s, %s, 'SENT_TO_KITE', %s, %s, %s, %s) RETURNING id",
+                                       (c["id"], body.source, body.sid, body.part, body.parts, tag, json.dumps(snap),
+                                        meta["period"], meta["swap_key"], keys, meta["step"])).fetchone()["id"]
+                break
+            except psycopg.errors.UniqueViolation:
+                continue
+        if hid is None:
+            raise HTTPException(503, "Please try again")
+        act.log(conn, actor_kind="customer", actor_id=c["id"], actor_name=c["name"], session_id=c["sid"], device_id=c["device_id"],
+                device=act.device_label(_ua(request)), ip=_ip(request), app="customer", module=app_, event="zerodha_handoff",
+                detail={"source": body.source, "lines": len(snap), "tag": tag, "part": body.part, "parts": body.parts})
+    return {"id": str(hid), "tag": tag, "action": zr.BASKET_URL, "api_key": api_key, "data": zr.basket(res, tag), "lines": snap}
+
+
+class ZrCheckIn(SafeModel):
+    status: str                                                  # placed | partly | not_placed
+    lines: list = []                                             # [{s, qty, price}] — what was bought / sold (prefilled with the plan)
+
+
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+@app.post("/app/api/zerodha/handoffs/{hid}/checkin")
+def zerodha_checkin(hid: str, body: ZrCheckIn, c=Depends(customer)):
+    """round 21 (owner: "track the real order … the system doesn't know whether the previous order is done"): the customer says what
+    happened on Kite — placed as planned, partly (their quantities / prices), or not placed. Their own hand-off only (row-level security);
+    it can be changed later. A placed instalment (its last basket) closes its Inbox item."""
+    _zr_any(c)
+    _rate("zerodha-checkin", str(c["id"]), 60, 600)
+    if not UUID_RE.match(hid or "") or body.status not in ("placed", "partly", "not_placed"):
+        raise HTTPException(422, "That check-in cannot be saved")
+    with _own(c) as conn:
+        h = conn.execute("SELECT id, sid, part, parts, lines, period, swap_key, step FROM zerodha_handoffs WHERE id = %s AND customer_id = %s",
+                         (hid, c["id"])).fetchone()
+        if not h:
+            raise HTTPException(404, "That basket was not found")
+        plan = {x["s"]: x for x in h["lines"] or []}
+        given = {}
+        for x in body.lines if isinstance(body.lines, list) else []:
+            if not isinstance(x, dict) or str(x.get("s")) not in plan:
+                raise HTTPException(422, "A check-in can only name the stocks of that basket")
+            p_ = plan[x["s"]]
+            q, pr = x.get("qty"), x.get("price")
+            if type(q) is not int or not 0 <= q <= max(1, (p_.get("qty") or 0)) * 10:
+                raise HTTPException(422, f"{x['s']}: enter the whole number of shares")
+            if not isinstance(pr, (int, float)) or isinstance(pr, bool) or not math.isfinite(pr) or not 0 < pr <= (p_.get("price") or 0) * 10:
+                raise HTTPException(422, f"{x['s']}: enter the price you got")
+            given[x["s"]] = {"qty": q, "price": round(float(pr), 2)}
+        out = []
+        for sym, p_ in plan.items():
+            g = given.get(sym) or {"qty": p_.get("qty") or 0, "price": p_.get("price")}
+            if body.status == "not_placed":
+                g = {"qty": 0, "price": p_.get("price")}
+            out.append({"s": sym, "k": p_.get("k"), "side": p_.get("side"), "plan": p_.get("qty"), "qty": g["qty"], "price": g["price"]})
+        conn.execute("UPDATE zerodha_handoffs SET checkin = %s, checked_at = now() WHERE id = %s",
+                     (json.dumps({"status": body.status, "lines": out}), hid))
+        if h["period"] and h["sid"] and body.status == "placed" and h["part"] == h["parts"]:
+            r = conn.execute("SELECT kind FROM customer_sips WHERE id = %s AND customer_id = %s", (h["sid"], c["id"])).fetchone()
+            if r:
+                inbox.settle_order(conn, c["id"], r["kind"], h["sid"], f"Placed on Zerodha — you checked it in on {datetime.now(IST):%d %b}")
+    return {"id": hid, "status": body.status, "lines": out}
+
+
+class ZrSkipIn(SafeModel):
+    sid: int
+    swap_out: str
+    swap_in: str
+
+
+@app.post("/app/api/zerodha/swap/skip-sell")
+def zerodha_swap_skip_sell(body: ZrSkipIn, c=Depends(customer)):
+    """round 21: "I don't hold it / I sold it already" — the swap moves on to its buy without a sell basket (recorded, never sent)"""
+    _zr_any(c)
+    _rate("zerodha-prepare", str(c["id"]), 30, 3600)
+    with _own(c) as conn:
+        app_, own, caps, meta = _zr_context(conn, c, ZrIn(source="swap", sid=body.sid, swap_out=body.swap_out, swap_in=body.swap_in, step="sell"))
+        if meta["state"] not in ("todo", "sell_sent"):
+            raise HTTPException(409, "The sell of this swap is already checked in")
+        conn.execute("INSERT INTO zerodha_handoffs (customer_id, source, sid, tag, lines, status, swap_key, step, checkin, checked_at) "
+                     "VALUES (%s, 'swap', %s, %s, '[]', 'SKIPPED', %s, 'sell', %s, now())",
+                     (c["id"], body.sid, zr.new_tag(), meta["swap_key"], json.dumps({"status": "skipped", "lines": []})))
+    return {"state": "sold"}
+
+
+@app.get("/app/api/saved/{sid}/zerodha")
+def saved_zerodha(sid: int, c=Depends(customer)):
+    """round 21: this plan on Zerodha, as the customer checked it in — each instalment planned vs placed, each swap's step, the baskets
+    waiting for a check-in, and the holdings their check-ins add up to (quantity, average cost). Side by side with the model tracking."""
+    _rate("saved-track", str(c["id"]), 60, 60)
+    with _own(c) as conn:
+        r = _saved_row(conn, c, sid)
+        rows = _zr_runs(conn, c, sid)
+        swaps = []
+        if any(f"{a}:zerodha" in c["perms"] for a in (zr.APP_OF.get(r["kind"]),)):
+            for w in tracking.track(conn, r).get("swaps") or []:
+                if w.get("out") and w.get("in"):
+                    k = _swap_key(w)
+                    swaps.append({"key": k, "d": w["d"], "out": w["out"]["s"], "in": w["in"]["s"],
+                                  "state": _swap_state([h for h in rows if _has_swap(h, k)], w["out"]["s"], w["in"]["s"])})
+    sent = [h for h in rows if h["source"] != "return"]
+    one = lambda h: {"id": str(h["id"]), "part": h["part"], "parts": h["parts"], "tag": h["tag"], "at": h["created_at"].isoformat(), "step": h["step"],
+                     "lines": h["lines"], "checkin": h["checkin"], "checked_at": h["checked_at"] and h["checked_at"].isoformat(), "status": h["status"]}
+    periods = {}
+    for h in sent:
+        if h["period"]:
+            periods.setdefault(h["period"], []).append(h)
+    per = []
+    for k, hs in sorted(periods.items(), reverse=True):
+        cks = [_ck(h) for h in hs]
+        st_ = "placed" if _period_done(hs, k) else "partly" if any(x in ("placed", "partly") for x in cks) else "waiting" if any(x is None for x in cks) else "not_placed"
+        per.append({"period": k, "status": st_, "baskets": [one(h) for h in hs]})
+    hold = {}
+    for h in sent:
+        for x in ((h["checkin"] or {}).get("lines") or []):
+            if not x.get("qty"):
+                continue
+            a = hold.setdefault(x["s"], {"s": x["s"], "k": x.get("k"), "qty": 0, "cost": 0.0})
+            if x.get("side") == "SELL":
+                if a["qty"]:
+                    a["cost"] -= a["cost"] / a["qty"] * min(a["qty"], x["qty"])
+                a["qty"] = max(0, a["qty"] - x["qty"])
+            else:
+                a["qty"] += x["qty"]; a["cost"] += x["qty"] * float(x.get("price") or 0)
+    holdings = [{**a, "cost": round(a["cost"], 2), "avg": round(a["cost"] / a["qty"], 2) if a["qty"] else None} for a in hold.values() if a["qty"]]
+    return {"periods": per, "swaps": swaps, "waiting": [one(h) for h in sent if h["checkin"] is None and h["status"] != "SKIPPED"][-10:],
+            "holdings": sorted(holdings, key=lambda a: a["s"]), "reminder_day": r.get("reminder_day")}
+
+
+@app.get("/app/api/zerodha/return")
+def zerodha_return(request: Request):
+    """the redirect URL registered on the Publisher app. Kite's query (status + a request token) is not trusted and not kept: only
+    the status word travels on, and the app records the return as the signed-in customer (POST …/returned)"""
+    _rate("zerodha-return", _ip(request), 30, 600)
+    s = (request.query_params.get("status") or "").strip().lower()
+    word = "success" if s == "success" else "cancelled" if s in ("cancelled", "canceled", "cancel") else "other"
+    return RedirectResponse(f"/app/#zerodha={word}", status_code=303, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.post("/app/api/zerodha/returned")
+def zerodha_returned(body: ZrReturnIn, c=Depends(customer)):
+    """back from Kite: the newest open hand-off of THIS customer (last 2 hours) is marked "returned — not verified". A return with
+    none (another tab, a replayed or hand-made link) is kept for review and changes nothing else."""
+    _zr_any(c)
+    _rate("zerodha-returned", str(c["id"]), 10, 3600)
+    word = body.status if body.status in ("success", "cancelled") else "other"
+    with _own(c) as conn:
+        r = conn.execute("SELECT id, tag, source, sid, part, parts, lines FROM zerodha_handoffs WHERE customer_id = %s AND status = 'SENT_TO_KITE' "
+                         "AND created_at > now() - make_interval(hours => %s) ORDER BY created_at DESC LIMIT 1", (c["id"], ZR_RETURN_HOURS)).fetchone()
+        if r:
+            conn.execute("UPDATE zerodha_handoffs SET status = 'RETURNED_UNVERIFIED', said = %s, returned_at = now() WHERE id = %s", (word, r["id"]))
+        else:
+            conn.execute("INSERT INTO zerodha_handoffs (customer_id, source, tag, status, said, returned_at) VALUES (%s, 'return', %s, 'NEEDS_REVIEW', %s, now())",
+                         (c["id"], zr.new_tag(), word))
+    if not r:
+        return {"found": False, "said": word}
+    return {"found": True, "said": word, "id": str(r["id"]), "tag": r["tag"], "source": r["source"], "sid": r["sid"], "part": r["part"], "parts": r["parts"],
+            "lines": r["lines"] or []}

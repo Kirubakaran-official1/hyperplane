@@ -66,6 +66,10 @@ services:
       PORTAL_DATABASE_URL: postgresql://hp_portal:${PORTAL_DB_PASSWORD}@db:5432/hyperplane
       PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY}
       TZ: Asia/Kolkata
+    # Buy on Zerodha (round 20c): secrets/zerodha_kek = the master key that seals each customer's Publisher API key — mounted
+    # read-only into THIS service only (not api / worker, which load .env)
+    volumes:
+      - ./secrets:/run/hp-secrets:ro
     depends_on:
       db:
         condition: service_healthy
