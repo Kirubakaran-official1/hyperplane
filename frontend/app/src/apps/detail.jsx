@@ -87,12 +87,38 @@ function StockChecks({ d }) {
     </div>);
 }
 
+// round 25: the zone ladder (Admin → Scoring, when it is the live model) — each item in plain words
+const LTF = { W: ["week", "weekly"], M: ["month", "monthly"], Q: ["quarter", "quarterly"], Y: ["year", "yearly"] };
+const LWHERE = { upper: "sits in the upper part of", break_top: "is breaking above", above: "is fully above", break_bottom: "is breaking below", below: "is fully below" };
+export const ladderWords = code => {
+  const c = /^consol_W([MQY])$/.exec(code), g = /^gate_([MQ])$/.exec(code);
+  if (c) return `The weekly and ${LTF[c[1]][1]} candles closed opposite ways — a consolidation, so no marks either way`;
+  if (g) return `The price is below the ${LTF[g[1]][1]} zone but no ${LTF[g[1]][0]} has closed there yet — not green until it does`;
+  const m = /^(up|down)_([WMQY])$/.exec(code);
+  if (m) return `The last ${LTF[m[2]][0]} closed ${m[1] === "up" ? "above" : "below"} the ${LTF[m[2]][1]} zone`;
+  const [pair, ...w] = code.split("_");
+  return `The ${LTF[pair[0]][1]} zone ${LWHERE[w.join("_")] || w.join(" ")} the ${LTF[pair[1]][1]} zone`;
+};
+function Ladder({ d }) {
+  if (!d.ladder) return null;
+  return (
+    <div className="dt-build" id="dt-ladder">
+      <div className="db-row"><span className="db-l">Zone ladder<small>confirmed breakouts and where the zones sit in each other</small></span></div>
+      {!d.ladder.items.length ? <div className="dt-mut">No breakout confirmed and no zone placement that counts — adds nothing.</div>
+        : d.ladder.items.map(([code, m]) => (
+          <div key={code} className="db-row" data-ladder={code}>
+            <span className="db-l"><Icon name={m > 0 ? "check" : m < 0 ? "x" : "info"} size={12}/> {ladderWords(code)}</span><span/>
+            <b className={m > 0 ? "up" : m < 0 ? "down" : ""}>{m > 0 ? `adds ${m}` : m < 0 ? `takes away ${-m}` : "no marks"}</b></div>))}
+    </div>);
+}
+
 // ─── how the score adds up (already calculated: no sums left to the reader) ─────────────────────────────────────────
 function ScoreBuild({ d, held }) {
   const rows = TFS3.map(([tf, name]) => ({ tf, name, v: afterRegime(d.tf[tf] || {}, held.includes(tf), d.squeeze), w: d.weights[tf] }))
     .filter(r => r.v != null);
   const tw = rows.reduce((a, r) => a + r.w, 0);
-  const total = tw ? pyRound(rows.reduce((a, r) => a + r.w * r.v, 0) / tw) : null;
+  const lad = d.final && d.final.length > 5 ? d.final[5] : null;      // round 25: the zone ladder's marks (after the regime)
+  const total = tw ? Math.max(-100, Math.min(100, pyRound(rows.reduce((a, r) => a + r.w * r.v, 0) / tw) + (lad || 0))) : null;
   const final = d.final ? d.final[1] : null;
   return (
     <div className="dt-build" id="dt-build">
@@ -102,6 +128,10 @@ function ScoreBuild({ d, held }) {
           <span className="db-bar"><i className={share >= 0 ? "pos" : "neg"} style={{ width: `${Math.min(50, Math.abs(share) / 2)}%`, [share >= 0 ? "left" : "right"]: "50%" }}/></span>
           <b className={share >= 0 ? "up" : "down"}>{share >= 0 ? "adds " : "takes away "}{Math.abs(share).toFixed(1)}</b>
         </div>); })}
+      {lad != null && <div className="db-row" id="db-ladder">
+        <span className="db-l">Zone ladder<small>breakouts and zone placement</small></span>
+        <span className="db-bar"><i className={lad >= 0 ? "pos" : "neg"} style={{ width: `${Math.min(50, Math.abs(lad) / 2)}%`, [lad >= 0 ? "left" : "right"]: "50%" }}/></span>
+        <b className={lad >= 0 ? "up" : "down"}>{lad >= 0 ? "adds " : "takes away "}{Math.abs(lad)}</b></div>}
       <div className="db-total">
         <span>Final score</span><b className={tone(final)}>{plus(final)}</b>
         <span className="dt-mut">{final != null ? `${levelOf(final)} ${dirWord(final).toLowerCase()}` : "No long-term view"}{total != null && total !== final ? <> · <Icon name="alert" size={12}/> the parts add up to {plus(total)}</> : ""}</span>
@@ -248,7 +278,8 @@ function Numbers({ d, meta, held }) {
           <tr key={tf}><td><b>{name}</b></td><td>{f2(t.T)}</td><td>{f2(t.P)}</td><td>{f2(t.zone_points)}</td>
             <td>{!t.nr ? "—" : `${Math.abs(t.nr)} candles ${t.nr > 0 ? "up" : "down"} ${t.nr_points == null ? "(no zone)" : f2(t.nr_points)}`}</td>
             <td>{plus(t.strength)}</td><td>{t.strength == null ? "—" : held.includes(tf) ? plus(pyRound(t.strength * meta.squeeze)) : "same"}</td><td>{meta.tf_weight[tf]}</td></tr>); })}</tbody></table></div>
-      <p className="dt-mut">Timeframe strength = 100 × ({meta.trend_w} × zone trend + {meta.pos_w} × price place) + mother candle points; against the regime × {meta.squeeze}. The zone trend weighs the last 4 zone moves {meta.recency.map(r => `${Math.round(r * 100)}%`).join(" / ")}.</p>
+      <p className="dt-mut">{meta.model === "ladder" ? <>Timeframe strength = 100 × {meta.trend_w} × zone trend + mother candle points (the zone ladder model: the price place earns nothing; the ladder's marks are added to the final score)</>
+        : <>Timeframe strength = 100 × ({meta.trend_w} × zone trend + {meta.pos_w} × price place) + mother candle points</>}; against the regime × {meta.squeeze}. The zone trend weighs the last 4 zone moves {meta.recency.map(r => `${Math.round(r * 100)}%`).join(" / ")}.</p>
       <div className="dt-tw"><table className="dt-t" id="dt-dw"><thead><tr><th></th><th>Bottom</th><th>Bottom band ends</th><th>Top band starts</th><th>Top</th></tr></thead>
         <tbody>{[["D", "Daily"], ["W", "Weekly"], ["M", "Monthly"], ["Q", "Quarterly"], ["Y", "Yearly"]].map(([k, l]) => { const z = (d.tf[k] || {}).zone; return (
           <tr key={k}><td><b>{l}</b></td><td>{n2(z && z.bottom)}</td><td>{n2(z && z.bottom_near)}</td><td>{n2(z && z.top_near)}</td><td>{n2(z && z.top)}</td></tr>); })}</tbody></table></div>
@@ -272,8 +303,11 @@ function Verdict({ d, held }) {
   if (down.length) bad.push(`zone moving down (${names(down)})`);
   const hiP = TFS3.filter(([tf]) => ["above", "near_top", "upper"].includes((d.tf[tf] || {}).place));
   const loP = TFS3.filter(([tf]) => ["lower", "near_bottom", "below"].includes((d.tf[tf] || {}).place));
-  if (hiP.length) good.push(`price in the upper part (${names(hiP)})`);
-  if (loP.length) bad.push(`price in the lower part (${names(loP)})`);
+  if (d.ladder) d.ladder.items.forEach(([code, m]) => (m > 0 ? good : bad).push(ladderWords(code).replace(/^The /, "the ")));   // round 25: the zone ladder model
+  else {                                                 // the default model: where the price sits in each zone counts
+    if (hiP.length) good.push(`price in the upper part (${names(hiP)})`);
+    if (loP.length) bad.push(`price in the lower part (${names(loP)})`);
+  }
   TFS3.forEach(([tf, n]) => { const t = d.tf[tf] || {}; if (t.nr && t.place) (t.nr > 0 ? good : bad).push(`${n.toLowerCase()} mother candle ${t.nr > 0 ? "broke out upward" : "broke down"}`); });
   if (held) bad.push(`against the regime (${held.split("").map(k => ({ M: "monthly", Q: "quarterly", Y: "yearly" })[k]).join(", ")})`);
   return (
@@ -307,7 +341,7 @@ export default function StockDetail({ req, onClose, onOut = () => {}, inline = f
     return () => { window.removeEventListener("keydown", k); document.body.classList.remove("dt-lock"); };
   }, []);
   const meta = res && res.meta;
-  const d = res && { ...res.stock, weights: meta.tf_weight, squeeze: meta.squeeze };
+  const d = res && { ...res.stock, weights: meta.tf_weight, squeeze: meta.squeeze, model: meta.model };
   const held = d ? d.regime.long_held || "" : "";
   return (
     <Wrap inline={inline} onClose={onClose}>
@@ -331,6 +365,7 @@ export default function StockDetail({ req, onClose, onOut = () => {}, inline = f
             <StockChecks d={d}/>
             <h4 className="dt-h">How the final score adds up</h4>
             <ScoreBuild d={d} held={held}/>
+            {d.ladder && <><h4 className="dt-h">Zone ladder — each item</h4><Ladder d={d}/></>}
             <div className="dt-hrow"><h4 className="dt-h">Where the price is in each zone</h4>
               <button type="button" className="dt-replay" onClick={() => setPlay(p => p + 1)} id="dt-replay">↻ Play again</button></div>
             <div className="zp-grid" id="dt-pictures" key={`${req.n}-${play}`}>

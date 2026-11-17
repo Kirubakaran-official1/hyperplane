@@ -262,8 +262,11 @@ addCss("saved", `
 `);
 
 const WORD = { month: "month", quarter: "quarter" };
-const KIND_OF_APP = { sip: "sip", msip: "msip", builder: "builder", portfolio: "analyser", portfolios: "all" };   // portfolios = All Portfolios (round 21)
-const TAGS = [["analyser", "AI Portfolio Analyser"], ["builder", "Portfolio Builder"], ["sip", "AI ETF SIP Builder"], ["msip", "AI Momentum SIP Builder"]];
+const KIND_OF_APP = { sip: "sip", msip: "msip", builder: "builder", portfolio: "analyser", portfolios: "all", etf: "etf" };   // portfolios = All Portfolios (round 21)
+const TAGS = [["analyser", "AI Portfolio Analyser"], ["builder", "Portfolio Builder"], ["sip", "AI ETF SIP Builder"], ["msip", "AI Momentum SIP Builder"], ["etf", "ETF Analyser"]];
+// round 23: the ETF Analyser's tag holds its ETF portfolios and the SIPs made from its basket (kind sip, inputs.src etf)
+const ofTag = (x, k) => x.kind === k || (k === "etf" && x.kind === "sip" && (x.inputs || {}).src === "etf");
+const NO_WATCH = ["sip", "etf"];                                  // the AI watch reads stocks only
 const GROUP_NAME = { Large: "Large cap", Mid: "Mid cap", Small: "Small cap", ETF: "ETFs", Other: "Other" };
 const GROUP_COL = { Large: "var(--mx-l)", Mid: "var(--mx-m)", Small: "var(--mx-s)", ETF: "var(--ch-etf)", Other: "var(--mx-c)" };
 const PERIODS = [["1W", 7], ["1M", 31], ["3M", 92], ["6M", 183], ["1Y", 366], ["All", 0]];
@@ -293,7 +296,7 @@ export const SizeTags = ({ x }) => <span className="tk-sz"><span className="pr" 
   <span title="Market value of the company">{crore(x.mcap)}</span>{x.cap && <span>{x.cap} cap</span>}</span>;
 export const DETAIL_APP = { analyser: "portfolio", portfolio: "portfolio", builder: "builder", msip: "msip" };
 // Buy on Zerodha (round 20): which application's "<app>:zerodha" permission a saved portfolio uses
-export const ZR_APP = { sip: "sip", msip: "msip", builder: "builder", analyser: "portfolio" };
+export const ZR_APP = { sip: "sip", msip: "msip", builder: "builder", analyser: "portfolio", etf: "etf" };
 const zrSwapReq = (it, out, inn, onClosed) => ({ app: ZR_APP[it.kind], source: "swap", sid: it.id, swap_out: out, swap_in: inn, title: `Swap ${out} → ${inn} · ${it.name}`, onClosed });
 // round 21: where a swap stands on Zerodha (the customer's check-ins) → the next step's button, or "done"
 const SWAP_NEXT = { todo: "Sell on Zerodha", sell_sent: "Check in the sell", sold: "Buy on Zerodha", buy_sent: "Check in the buy" };
@@ -519,7 +522,7 @@ function PlanCard({ it, step }) {
     <section className="px-card tk-card pln" id="svp-plan">
       <div className="tk-ch"><h3>The plan<small>{isSip ? `what is bought every ${w}` : "the shares bought"}</small></h3></div>
       <div className="pln-k">
-        <div><span className="px-label">{isSip ? `Every ${w}` : "Amount"}</span><b>{inr(isSip ? total : i.amount || total)}</b><small>{isSip ? (i.freq === "quarter" ? "quarterly SIP" : "monthly SIP") : `${hs.length} stocks`}</small></div>
+        <div><span className="px-label">{isSip ? `Every ${w}` : "Amount"}</span><b>{inr(isSip ? total : i.amount || total)}</b><small>{isSip ? (i.freq === "quarter" ? "quarterly SIP" : "monthly SIP") : `${hs.length} ${it.kind === "etf" ? "ETFs" : "stocks"}`}</small></div>
         <div><span className="px-label">Holdings</span><b>{hs.length}</b><small>{it.tag}{i.opts && i.opts.style ? ` · ${STYLE_NAME[i.opts.style] || ""}` : ""}</small></div>
         {isSip && <div><span className="px-label">Plan</span><b>{years} years</b><small>{inrShort(putIn)} put in{step ? ` with +${step}% a year` : ""}</small></div>}
         {isSip && <div><span className="px-label">Step-up</span><b>{step ? `+${step}% a year` : "None"}</b><small>{ladder.length > 1 ? ladder.slice(1, 4).map(([y, v]) => `year ${y}: ${inrShort(v)}`).join(" · ") : "same amount each time"}</small></div>}
@@ -648,11 +651,11 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
           {isSip && <label className="tk-sel">Step-up <select value={step} onChange={e => setStep(+e.target.value)} id="svp-stepup" aria-label="Yearly step-up">
             {STEPS.map(v => <option key={v} value={v}>{v ? `+${v}% a year` : "Off"}</option>)}</select><Info text="Raise the instalment every year by this %. The tracking replays your SIP with it."/></label>}
           {pub ? <CopyLink code={it.code}/> : <>
-          <label className={`hp-switch ${it.alerts ? "on" : ""}`}><input type="checkbox" checked={it.alerts} onChange={e => patch({ alerts: e.target.checked })} id="svp-alerts"/>
-            Alerts <Info text={ALERTS}/></label>
+          {it.kind !== "etf" && <label className={`hp-switch ${it.alerts ? "on" : ""}`}><input type="checkbox" checked={it.alerts} onChange={e => patch({ alerts: e.target.checked })} id="svp-alerts"/>
+            Alerts <Info text={ALERTS}/></label>}
           <Visibility it={it} onSet={v => api(`/app/api/saved/${it.id}`, { method: "PATCH", json: { visibility: v } }).then(r => { setIt(r); onChanged(); })}/>
           <CopyLink code={it.code}/>
-          {(isSip || it.kind === "builder") && <ZerodhaButton id="svp-zr" req={{ app: ZR_APP[it.kind], source: isSip ? "order" : "builder", sid: it.id,
+          {(isSip || it.kind === "builder" || it.kind === "etf") && <ZerodhaButton id="svp-zr" req={{ app: ZR_APP[it.kind], source: isSip ? "order" : it.kind, sid: it.id,
             title: isSip ? `This instalment · ${it.name}` : it.name, onClosed: zReload }}/>}
           <button type="button" className="px-btn primary" onClick={check} id="svp-check"><AiSpark/> Momentum check</button>
           {confirmDel ? <><button type="button" className="px-btn danger" onClick={del} id="svp-del-yes">Delete</button><button type="button" className="px-btn" onClick={() => setConfirmDel(false)}>Keep</button></>
@@ -742,7 +745,7 @@ export function Tracker({ item, onBack, onOut, onChanged, pub = null }) {
             <tbody>{gone.map(h => <tr key={h.s}><td><span className="sym">{h.s}</span><span className="sub">{GROUP_NAME[h.grp] || h.grp}</span></td><td className="num">{inr(h.cost)}</td><td className={`num ${tone(h.gain)}`}>{money(h.gain)}</td><td className={`num ${tone(h.ret)}`}>{pctTxt(h.ret)}</td></tr>)}</tbody>
           </table></div></details>}
           <div className="tk-foot">{pub ? "" : flagged.length ? "Swap shows only when a stock's long-term regime turns down — not for ordinary pullbacks. " : "No stock needs a swap: every long-term regime is still up. "}
-            {it.kind === "analyser" ? "Tracked as 1 share of each stock." : isSip ? `The same money every ${WORD[it.inputs.freq]}; whole units at that day's price, the rest waits for the next instalment.` : "Your saved quantities."} Prices: last close of each day.</div>
+            {it.kind === "analyser" ? "Tracked as 1 share of each stock." : it.kind === "etf" ? "Tracked as 1 unit of each ETF." : isSip ? `The same money every ${WORD[it.inputs.freq]}; whole units at that day's price, the rest waits for the next instalment.` : "Your saved quantities."} Prices: last close of each day.</div>
         </section>
         <SwapHistory swaps={t.swaps} isSip={isSip} zr={canZr ? w => ({ req: zrSwapReq(it, w.out.s, w.in.s, zReload), state: swapState(w) }) : null}
           zrBulk={canZr ? (ws, step, done) => ({ app: ZR_APP[it.kind], source: "swaps", sid: it.id, step, swaps: ws.map(w => ({ out: w.out.s, in: w.in.s })),
@@ -768,7 +771,7 @@ export function MyPortfolios({ app, onOut, onCount }) {
   const here = KIND_OF_APP[app];
   const [list, setList] = useState(null), [msg, setMsg] = useState(""), [tagSel, setTagSel] = useState(here), [open, setOpen] = useState(null), [shared, setShared] = useState(null);
   const [watch, setWatch] = useState(null);
-  const load = () => api("/app/api/saved?kind=all&spark=1").then(r => { setList(r); onCount && onCount(r.filter(x => x.kind === here).length); return r; })
+  const load = () => api("/app/api/saved?kind=all&spark=1").then(r => { setList(r); onCount && onCount(r.filter(x => ofTag(x, here)).length); return r; })
     .catch(e => { if (e.status === 401) onOut(e.message); else setMsg(e.message); });
   useEffect(() => {
     const take = () => { try { const r = JSON.parse(sessionStorage.getItem(`hp_open_${app}`) || "null"); sessionStorage.removeItem(`hp_open_${app}`); return r; } catch { return null; } };
@@ -787,14 +790,14 @@ export function MyPortfolios({ app, onOut, onCount }) {
   }, []);
   if (open) return <Tracker item={open} onBack={() => { setOpen(null); load(); goPath(`/app/${APP_SLUG[app] || ""}`); }} onOut={onOut} onChanged={load}/>;
   if (!list) return <div className="card svp-empty">{msg || "Loading…"}</div>;
-  const kinds = TAGS.filter(([k]) => list.some(x => x.kind === k) || k === here);
-  const shown = tagSel === "all" ? list : list.filter(x => x.kind === tagSel);
+  const kinds = TAGS.filter(([k]) => list.some(x => ofTag(x, k)) || k === here);
+  const shown = tagSel === "all" ? list : list.filter(x => ofTag(x, tagSel));
   return (
     <div className="svp" id={`saved-${here}`}>
       {msg && <div className="px-card svp-msg" role="status"><span>{msg}</span></div>}
       {shared && <SharedView code={shared} onClose={() => setShared(null)}/>}
       {watch && <AiWatch list={watch} onClose={() => setWatch(null)} onChanged={load} onOpen={p => { setWatch(null); setOpen(p); }}/>}
-      {(() => { const w = list.filter(x => x.kind !== "sip"), n = w.reduce((a, x) => a + (x.watch || 0), 0), np = w.filter(x => x.watch).length;
+      {(() => { const w = list.filter(x => !NO_WATCH.includes(x.kind)), n = w.reduce((a, x) => a + (x.watch || 0), 0), np = w.filter(x => x.watch).length;
         return w.length > 0 && <button type="button" className={`svp-aiall ${n ? "hot" : ""}`} onClick={() => setWatch(w)} id="svp-aiall" data-watch={n}>
           <span className="aw-mini"><AiSpark/></span>
           <span><b>Hyperplane AI watch · all portfolios</b><small>{w.length} portfolio{w.length === 1 ? "" : "s"} · {w.reduce((a, x) => a + x.holdings.filter(h => (h.kind || "stock") === "stock").length, 0)} stocks checked after every update</small></span>
@@ -802,7 +805,7 @@ export function MyPortfolios({ app, onOut, onCount }) {
       <OpenById onOpen={setShared}/>
       <div className="svp-tags" role="group" aria-label="Show">
         <button type="button" className={tagSel === "all" ? "on" : ""} onClick={() => setTagSel("all")}>All · {list.length}</button>
-        {kinds.map(([k, l]) => <button key={k} type="button" className={tagSel === k ? "on" : ""} onClick={() => setTagSel(k)} data-tag={k}>{l} · {list.filter(x => x.kind === k).length}</button>)}
+        {kinds.map(([k, l]) => <button key={k} type="button" className={tagSel === k ? "on" : ""} onClick={() => setTagSel(k)} data-tag={k}>{l} · {list.filter(x => ofTag(x, k)).length}</button>)}
       </div>
       {!shown.length ? <div className="card svp-empty"><Icon name="info" size={16}/>No saved portfolio here yet. Build or analyse one and press <b>&nbsp;Save</b>.</div> : (
         <div className="svp-grid">{shown.map(s => { const tr = s.track || {}; return (
@@ -812,7 +815,7 @@ export function MyPortfolios({ app, onOut, onCount }) {
             <div className="svp-cf"><span className={s.alerts ? "al" : ""}><Icon name="bell" size={12}/> Alerts {s.alerts ? "on" : "off"}</span>{s.changes ? <span>{s.changes} change{s.changes === 1 ? "" : "s"}</span> : null}
               <span className={`svp-vis ${s.visibility}`}><Icon name={s.visibility === "public" ? "globe" : "lock"} size={12}/> {s.visibility === "public" ? "Public" : "Private"}</span>
               <span className="svp-cid" title="Portfolio ID">{s.code}</span></div>
-            {s.kind !== "sip" && <button type="button" className={`svp-aiw ${s.watch ? "hot" : ""}`} onClick={e => { e.stopPropagation(); setWatch([s]); }} data-watch={s.watch} id={`svp-aiw-${s.id}`}>
+            {!NO_WATCH.includes(s.kind) && <button type="button" className={`svp-aiw ${s.watch ? "hot" : ""}`} onClick={e => { e.stopPropagation(); setWatch([s]); }} data-watch={s.watch} id={`svp-aiw-${s.id}`}>
               <AiSpark/><span><b>Hyperplane AI watch</b><small>{s.watch ? `${s.watch} stock${s.watch === 1 ? "" : "s"} to change — see the swaps` : "Every long-term regime is still up"}</small></span>
               <i>{s.watch || <Icon name="check" size={13}/>}</i></button>}
           </div>); })}</div>)}
@@ -846,7 +849,7 @@ function SectionTabs({ tabs }) {
 // the money in one holding of a saved portfolio (a lump: shares × price; a SIP: the instalment; the Analyser: 1 share)
 const amountOf = (p, x) => {
   const h = p.holdings.find(y => y.s === x.s) || {};
-  return p.kind === "sip" || p.kind === "msip" ? { amount: h.amt, per: `a ${WORD[p.inputs.freq] || "month"}` } : p.kind === "analyser" ? { amount: x.p } : { amount: (h.qty || 0) * (h.p || x.p || 0) };
+  return p.kind === "sip" || p.kind === "msip" ? { amount: h.amt, per: `a ${WORD[p.inputs.freq] || "month"}` } : p.kind === "analyser" || p.kind === "etf" ? { amount: x.p } : { amount: (h.qty || 0) * (h.p || x.p || 0) };
 };
 function AiWatch({ list, onClose, onChanged, onOpen }) {
   const all = list.length > 1;

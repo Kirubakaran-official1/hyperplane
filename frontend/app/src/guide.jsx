@@ -341,8 +341,8 @@ const ALL_SECTIONS = [
       <li><b>Holdings</b>: one card per stock with its status, strength, monthly, quarterly and yearly strength (0% is shown as
         Sideways), its reliability and the reasons in plain words, always open. Show one colour at a time, or sort
         weakest first or best first. To remove a stock, use <b>Edit list</b>.</li>
-      <li><b>Download report</b>: a PDF with a cover page, the summary, the gauge, the colour groups, the Trend map and every stock
-        with its reasons. It is made on your own device; your list is not sent anywhere to make it.</li>
+      <li><b>Download report</b>: <b>PDF</b>, <b>Word</b> or <b>Markdown</b> — a cover page, the summary, the gauge, the colour groups, the Trend map and
+        every stock with its reasons. It is made on your own device; your list is not sent anywhere to make it.</li>
       <li><b>Hyperplane AI watch</b>: the stocks of your list that need a look today, each with a better alternative and a
         <b> Swap</b> button. Turn <b>Alerts</b> on and the <Icon name="bell" size={14}/> bell tells you when a stock turns weak.</li>
     </ul>
@@ -410,7 +410,7 @@ const ALL_SECTIONS = [
         can be sold later without trouble. When a stock would take a large part of its free float, its details say so; with
         <b> Size by free float</b> (More options), no stock gets more than 1% of its free float.</li>
     </ul>
-    <p><b>Download (Excel)</b> saves the list and <b>Ticker copy</b> copies the tickers for TradingView. <b>Send to AI Portfolio
+    <p><b>PDF</b>, <b>Word</b> and <b>Markdown</b> download the whole portfolio as a report; <b>Excel</b> saves the list; <b>Ticker copy</b> copies the tickers for TradingView. <b>Send to AI Portfolio
       Analyser</b> puts the stocks in your Analyser list so you can follow them: choose <b>Add to my list</b> to keep the stocks
       already there, or <b>Replace my list</b> to start again with only these.</p>
     <p><b>Save + alerts</b> keeps the portfolio in <b>My portfolios</b>. There, <b>Momentum check</b> re-checks every stock on the
@@ -455,10 +455,45 @@ const ALL_SECTIONS = [
     <ul>
       <li><b>Strength</b> is the long-term trend of the ETF on the same −100 to +100 scale as the stocks: above zero and green is an
         uptrend, around zero is sideways, red is a downtrend.</li>
-      <li>ETFs are grouped by what they follow (for example every gold ETF sits under <b>Gold</b>). In each group the
-        <b> Recommended</b> ETF comes first: the one traded the most every day, with a long history — the easiest to buy and to sell.</li>
-      <li>Use the type buttons, the search box or <b>Recommended only</b> to find what you want.</li>
+      <li>It opens on <b>Best in segment</b>: one row for each market with its <b>Recommended</b> ETF — the one traded the most every day,
+        with a long history, the easiest to buy and to sell. Press the button again to see every ETF.</li>
+      <li>Use the type cards, the trend buttons or the search box to find what you want. A row opens the ETF's card.</li>
     </ul>
+    <ol className="g-steps">
+      <li><b>Basket</b>: press <b>+</b> on any ETF (or <b>Add to basket</b> on its card) — up to 30. The bar at the bottom shows your basket;
+        click it to see the list, remove one, or empty it. Your basket is saved to your account.</li>
+      <li><b>Analyse basket</b> reads it like the AI Portfolio Analyser: the strength of the basket, a summary, the trend map, and a card for
+        each ETF. The <b>AI check</b> shows when an easier ETF follows the same market, or when two ETFs follow the same market.</li>
+      <li><b>Save portfolio</b> keeps the basket in <b>My portfolios</b>, tracked from that day as 1 unit of each ETF.
+        <b> Download report</b> gives it as a PDF, a Word document or Markdown.</li>
+      <li><b>Make it a SIP</b>: the amount, monthly or quarterly, the years and the split (equal, or your own %). You get the same page as the
+        AI ETF SIP Builder — save it to track it, set a monthly reminder and send each instalment to Zerodha.</li>
+      <li><b>Buy on Zerodha</b>: one time — enter the amount, check the units of each ETF, then confirm on Kite.</li>
+    </ol>
+  </> },
+
+  { id: "planner", app: "planner", t: "Hyperplane Planner", body: <>
+    <p>One place for your to-dos, notes and plans. Everything you write is private to your account.</p>
+    <ol className="g-steps">
+      <li><b>Notebooks</b> are on the left (Trading journal to start with): <b>+</b> adds one; the three dots beside a notebook rename it, change its colour or
+        delete it. Below them are the <b>views</b>: <b>Dashboard</b>, <b>To-do</b>, <b>Planner</b> and <b>Notes</b>. The panel button folds the side into a strip
+        of icons when you want more room.</li>
+      <li>The <b>Dashboard</b> shows To-do, Planner and Notes on one screen, each with its own scroll bar and a <b>maximise</b> button. <b>Calendar</b> at the top
+        shows your to-dos and dated notes by day (Month), or by the hour (Week).</li>
+      <li><b>To-do</b>: type and press Enter — it goes on today. Click the date for Today / Tomorrow / Next week or any day; the clock for a time (24-hour) and a
+        length; the three dots to make it repeat. The ring marks it <b>done</b>; the calendar-cross marks it <b>missed</b>. Done and missed to-dos leave the list —
+        see them in the Done and Missed tabs. <b>Clear</b> only takes them off the dashboard; they stay in the calendar and the To-do view. A repeating to-do is
+        one line: the next one comes when you finish (or miss) this one; the calendar shows its coming days faintly.</li>
+      <li><b>Planner</b>: as many planners as you like in a notebook — one per project, study plan or fitness block. Each is a table with <b>Start</b>, <b>End</b>,
+        <b> Progress</b> (a slider) and <b>Status</b>. Enter adds the next row, Tab puts a row under the one above, Shift + Tab brings it back. It also works like
+        Excel: pick cells, drag the small square to fill down, Ctrl + C to copy into Excel, Ctrl + V to paste rows from Excel. A row with rows under it shows their
+        average progress. The eye hides finished rows; one button expands or collapses everything.</li>
+      <li><b>Notes</b>: <b>New</b> → a common note or a note for today; give any note a date in the note. Type <b>/</b> for headings, lists, tables, formulas and
+        more; paste pictures, formulas from ChatGPT or Claude, and cells from Excel (they become a table); type <b>[[</b> to link notes — <b>Graph</b> shows how they connect.</li>
+      <li><b>Search</b> (Ctrl K) finds any word in notes, to-dos and plans. Filter by topic or dates — including <b>This FY</b> / <b>Last FY</b>.</li>
+      <li><b>Download</b> notes as a PDF, a Word document or Markdown. The PDF prints English letters, numbers and common signs; for other scripts choose Word.</li>
+      <li>Each morning the <b>Inbox</b> lists what is due and late (switch it off at the bottom of the side panel). Deleted notes stay in the <b>Trash</b> for 30 days.</li>
+    </ol>
   </> },
 
   { id: "helpdesk", t: "Helpdesk & notifications", body: <>

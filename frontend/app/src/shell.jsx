@@ -506,6 +506,7 @@ const APP_MODULES = {
   sip: lazy(() => loadChunk(() => import("./apps/sip.jsx"))),                     // AI ETF SIP Builder (ETFs, reliable)
   msip: lazy(() => loadChunk(() => import("./apps/msip.jsx"))),
   portfolios: lazy(() => loadChunk(() => import("./apps/allportfolios.jsx"))),      // All Portfolios (round 21): every saved portfolio                   // AI Momentum SIP (stocks, risk)
+  planner: lazy(() => loadChunk(() => import("./apps/planner.jsx"))),             // Hyperplane Planner (round 22): notes, journal, tasks, calendar
 };
 const Guide = lazy(() => loadChunk(() => import("./guide.jsx")));
 const Inbox = lazy(() => loadChunk(() => import("./inbox.jsx")));            // the Unified Inbox (round 19)
@@ -700,11 +701,12 @@ function Home({ me, onOut, reloadMe }) {
   const app = k => {
     if (k === "research") return <APP_MODULES.research data={data} err={err} sel={sel} mode={mode} setMode={setMode}/>;
     // the applications with their own server data start again on that day when the day changes (key)
-    if (k === "etf") return <APP_MODULES.etf key={dayKey} onOut={onOut}/>;
+    if (k === "etf") return <APP_MODULES.etf key={dayKey} apps={apps} me={me} onOut={onOut}/>;
     if (k === "sip") return <APP_MODULES.sip key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
     if (k === "msip") return <APP_MODULES.msip key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
     if (k === "builder") return <APP_MODULES.builder key={dayKey} apps={apps} onAddToPortfolio={addToPf} onOpenApp={setFace} onOut={onOut} onHelpdesk={openHelpdesk}/>;
     if (k === "portfolios") return <APP_MODULES.portfolios key={dayKey} onOut={onOut}/>;
+    if (k === "planner") return <APP_MODULES.planner onOut={onOut}/>;                // never remounted on a new day: an open note keeps its words
     if (!data) return <Waiting text={err || "Loading…"}/>;
     if (k === "simple") return <APP_MODULES.simple data={data} mode={mode} setMode={setMode} sym={simpleSym} setSym={setSimpleSym}/>;
     if (k === "portfolio") return pf != null ? <APP_MODULES.portfolio data={data} symbols={pf} setSymbols={setPf} status={pfStatus} me={me} sent={pfSent} onOut={onOut}/> : <Waiting/>;

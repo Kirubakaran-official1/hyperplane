@@ -1,6 +1,6 @@
 // Hyperplane AI Portfolio Builder — a lazily loaded application module.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AiSpark, BrandBand, Icon, addCss, useAsOf } from "../core.jsx";
+import { AiSpark, BrandBand, Icon, addCss, loadChunk, useAsOf } from "../core.jsx";
 import { CopyBtns, HD_LIMIT_SUBJECT, Info, MultiSelect, RELIABILITY, StockLink, ZerodhaButton, api, colorOf, fmtDT, signed, tc, trackAction, trendWordOf } from "../core.jsx";
 import { CSS } from "./builder.css.js";
 import { MyPortfolios, SaveBar, SavedNote } from "../saved.jsx";
@@ -629,6 +629,9 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut, onHelpdesk }) {
       document.body.appendChild(el); el.click(); el.remove(); setTimeout(() => URL.revokeObjectURL(el.href), 1000);
       trackAction("builder", "download");
     };
+    const doc = fmt => loadChunk(() => import("../doc-export.js"))
+      .then(({ downloadDoc, docFromBuilder }) => downloadDoc(docFromBuilder(res, { asOf: fmtDT(res.as_of), names: B_NAME, rel: RELIABILITY, vStatus: V_STATUS }), fmt))
+      .then(() => trackAction("builder", "download")).catch(() => {});
     const ask = () => { setAdded("ask"); setPfNow(null); api("/app/api/portfolio").then(r => setPfNow((r.symbols || []).length)).catch(() => setPfNow(0)); };
     const sendPf = mode => { setAdded("busy"); onAddToPortfolio(picks.map(p => p.s), mode).then(() => { setAdded(mode); trackAction("builder", "sent"); }).catch(e => setAdded(`Could not update the list: ${e.message}`)); };
     const done = added === "add" || added === "replace";
@@ -645,6 +648,9 @@ function BuilderView({ apps, onAddToPortfolio, onOpenApp, onOut, onHelpdesk }) {
             <button type="button" className="px-btn" id="bd-edit" onClick={() => { setRes(null); window.scrollTo(0, 0); }}><Icon name="list" size={14}/> Edit inputs</button>
             <button type="button" className="px-btn" id="bd-save" onClick={() => { setSaving(v => !v); setSaveMsg(""); }}><Icon name="star" size={14}/> Save</button>
             <span className="hp-grp" role="group" aria-label="Export">
+              <button type="button" className="px-btn" id="bd-pdf" onClick={() => doc("pdf")} title="Download as PDF"><Icon name="copy" size={14}/> PDF</button>
+              <button type="button" className="px-btn" id="bd-docx" onClick={() => doc("docx")} title="Download as Word">Word</button>
+              <button type="button" className="px-btn" id="bd-md" onClick={() => doc("md")} title="Download as Markdown">Markdown</button>
               <button type="button" className="px-btn" id="bd-csv" onClick={csv}><Icon name="table" size={14}/> Excel</button>
               <span className="tcopy"><span className="lbl">Tickers · {picks.length}</span><CopyBtns syms={picks.map(p => p.s)}/></span></span>
             {/* round 20: Kite opens with the quantities — day 1 of the buying plan when the Builder spread big buys over days */}

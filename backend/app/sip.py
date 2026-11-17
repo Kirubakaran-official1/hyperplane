@@ -267,6 +267,101 @@ def build_etf(data, etf_data, amount, freq, opts=None, years=10):
     return r
 
 
+# ── a SIP of the customer's own ETF basket (round 23, owner 2026-11-15: "make that ETF portfolio a SIP … all the options of the
+# ETF SIP portfolio"): the customer picks the ETFs in the ETF Analyser; the money is split equally, or by the % they set; the same
+# whole-unit rules as the AI ETF SIP Builder (1 unit every k ≤ MAX_EVERY instalments when a unit costs more than the share). Saved
+# as an ordinary AI ETF SIP (kind "sip", inputs.basket) — so tracking, the momentum check, reminders and Zerodha work the same.
+BASKET_MAX = 30
+
+
+def check_basket(amount, freq, years, symbols, weights=None):
+    """the basket SIP's inputs → (amount, freq, years, symbols, weights {sym: %}) — weights None = equal"""
+    amount, freq, years = _base(amount, freq, years)
+    if not isinstance(symbols, list) or not symbols:
+        raise SipError("Add at least one ETF to the basket")
+    syms = list(dict.fromkeys(str(x or "").strip().upper() for x in symbols))
+    if len(syms) > BASKET_MAX or any(not x or len(x) > 30 for x in syms):
+        raise SipError(f"A basket SIP holds up to {BASKET_MAX} ETFs")
+    if weights is None:
+        return amount, freq, years, syms, None
+    if not isinstance(weights, dict) or set(weights) != set(syms):
+        raise SipError("Give every ETF its share")
+    w = {}
+    for k in syms:
+        v = weights[k]
+        if type(v) is not int or not 1 <= v <= 100:
+            raise SipError("Each share is a whole % from 1 to 100")
+        w[k] = v
+    if sum(w.values()) != 100:
+        raise SipError("The shares must add up to 100 %")
+    return amount, freq, years, syms, w
+
+
+def build_basket(etf_data, amount, freq, years, symbols, weights=None):
+    """the basket's SIP plan, in the same shape as build_etf (the SIP result page shows it as is)"""
+    amount, freq, years, syms, w = check_basket(amount, freq, years, symbols, weights)
+    word, per_year = FREQS[freq]
+    by = {e["s"]: e for e in _etfs(etf_data)}
+    missing = [x for x in syms if x not in by]
+    if missing:
+        raise SipError(f"{missing[0]} is not in today's ETF data")
+    share = w or {x: 100 / len(syms) for x in syms}
+    notes, holdings = [], []
+    for x in syms:
+        e = by[x]
+        sl = amount * share[x] / 100
+        u = _units(sl, e["p"])
+        if not u:
+            notes.append(f"{x}: one unit costs about {_inr(e['p'])} — more than {MAX_EVERY} instalments of its {_inr(sl)} share, so it is left out. Give it a bigger share or a bigger amount.")
+            continue
+        role = etf_role(e)
+        h = _etf_holding(e, sl, u, etf_data, "commodity" if role == "commodity" else "index", role)
+        h["why"] = [f"In your basket · {share[x]:.0f}% of each {word}" if w else f"In your basket · an equal share of each {word}",
+                    {"core": "A broad index: many companies in one unit", "commodity": "Gold / silver: moves differently from shares",
+                     "theme": "A sector, theme, strategy or international market"}[role]]
+        holdings.append(h)
+    if not holdings:
+        raise SipError("No ETF of the basket can be bought with this amount — raise the amount")
+    cost = lambda h: h["units"] * h["p"] / h["every"]
+    spent = sum(cost(h) for h in holdings)
+    cap = amount * (1 + OVER_MAX)
+    for h in sorted([h for h in holdings if h["every"] > 1], key=lambda h: -h["slice"]):        # every instalment, when it fits
+        extra = h["p"] - cost(h)
+        if spent + extra <= cap and h["p"] <= h["slice"] * UPGRADE_MAX_X:
+            h["units"], h["every"] = 1, 1
+            spent += extra
+    for h in sorted([h for h in holdings if h["every"] == 1], key=lambda h: -h["slice"]):       # top-up within the amount
+        while spent + h["p"] <= amount and cost(h) + h["p"] <= h["slice"] * 1.5:
+            h["units"] += 1; spent += h["p"]
+    invested = sum(cost(h) for h in holdings)
+    for h in holdings:
+        h["amt"] = round(cost(h), 2)
+        h["w"] = round(cost(h) / invested * 100, 1) if invested else 0
+        h["slice"] = round(h["slice"], 2)
+        h["year"] = round(cost(h) * per_year)
+    order = {"index": 0, "commodity": 1}
+    holdings.sort(key=lambda h: (order[h["sleeve"]], h.get("role") != "core", -h["amt"]))
+    known = [h for h in holdings if h["st"] is not None]
+    st_avg = round(sum(h["st"] * h["amt"] for h in known) / max(1, sum(h["amt"] for h in known)))
+    sleeves = {k: round(sum(h["amt"] for h in holdings if h["sleeve"] == k) / invested * 100, 1) if invested else 0 for k in ("index", "stock", "commodity")}
+    over, unused = round(max(0.0, invested - amount), 2), round(max(0.0, amount - invested), 2)
+    gold = sleeves["commodity"]
+    lines = [["good", f"{_inr(amount)} a {word} into the {len(holdings)} ETF{'s' if len(holdings) != 1 else ''} of your basket — "
+                      + ("the shares you set." if w else "an equal share each.")],
+             ["info", f"{gold:.0f}% goes to gold / silver: it moves differently from shares."] if gold else None,
+             ["good" if st_avg >= ETF_UP else "mid", f"Average long-term strength of the basket: {'+' if st_avg > 0 else ''}{st_avg}."],
+             ["info", f"About {_inr(unused)} of each instalment stays with you (whole units only)."] if unused >= 1 else None]
+    alloc = {"index": round(100 - gold), "stock": 0, "commodity": round(gold)}
+    inputs = {"amount": amount, "freq": freq, "years": years, "stepup": 0, "basket": True, "src": "etf", "alloc": alloc,
+              **({"weights": w} if w else {})}
+    return {"app": "sip", "basket": True, "amount": amount, "freq": freq, "per_year": per_year, "alloc": alloc, "rel": [], "mix": None,
+            "stepup": 0, "years_plan": years, "count_asked": None, "count_rec": None, "count": len(holdings), "holdings": holdings,
+            "invested": round(invested, 2), "unused": unused, "over": over,
+            "over_note": f"Needs {_inr(invested)} a {word} — {over / amount * 100:.1f}% above your {_inr(amount)} — so every ETF is bought every {word}." if over > 0 else None,
+            "st_avg": st_avg, "sleeves": sleeves, "stepup_table": _stepup(invested, per_year, 0, years), "insights": _insights(holdings),
+            "summary": [x for x in lines if x], "notes": notes, "inputs": inputs, "as_of": (etf_data or {}).get("as_of")}
+
+
 def build_stock(data, amount, freq, rel=("S",), mix=None, count=None, years=10, opts=None, sector_max=None, tier="customer"):
     """AI Momentum SIP (Risk): stocks only, spread wide — each stock the same ₹ every instalment"""
     amount, freq, rel, mix, count, years, opts, sector_max = check_stock(amount, freq, rel, mix, count, years, opts, sector_max, tier)
@@ -635,6 +730,9 @@ def check_holdings(data, etf_data, holdings, rel, mix=None, kind="sip"):
             exits.append({**h, "why": why})
             continue
         p = prices.get(h["s"]) or h.get("p")
+        if kind == "etf":                                              # round 23: an ETF Analyser portfolio — 1 unit of each
+            keep.append({**h, "p": p, "qty": 1, "units": 1, "every": 1, "amt": p})
+            continue
         if kind == "builder":                                          # a one-time portfolio: the same shares at today's price
             keep.append({**h, "p": p, **({"amt": round(h["qty"] * p, 2)} if p and h.get("qty") else {})})
             continue
@@ -667,6 +765,8 @@ def check_holdings(data, etf_data, holdings, rel, mix=None, kind="sip"):
             u = _units(sl, alt["p"]) or (1, 1)
             nh = _etf_holding(alt, sl, u, etf_data, "index")
             nh.update(amt=round(u[0] * alt["p"] / u[1], 2), replaces=h["s"])
+            if kind == "etf":
+                nh.update(qty=1, units=1, every=1, amt=alt["p"])
             new.append(nh)
     total = sum(h.get("amt") or 0 for h in keep) + sum(h["amt"] for h in new)
     return {"keep": keep, "exit": exits, "new": new, "total": round(total, 2)}

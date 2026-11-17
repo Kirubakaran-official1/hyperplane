@@ -9,6 +9,7 @@ from . import adoption
 from . import inbox
 from . import mailer
 from . import permissions as perms
+from . import scoring
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://hyperplane:hyperplane@db:5432/hyperplane")
 
@@ -693,12 +694,185 @@ ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS checked_at TIMESTAMPTZ;
 -- round 21b (owner: "for the swaps — all sell, then all buy, with check boxes"): a basket can carry several swaps (one line each)
 ALTER TABLE zerodha_handoffs ADD COLUMN IF NOT EXISTS swap_keys TEXT[];
 CREATE INDEX IF NOT EXISTS zerodha_handoffs_plan ON zerodha_handoffs (customer_id, sid, created_at DESC);
+-- round 24 (owner 2026-11-17: "the scoring inside the admin panel … default, change it, apply it to the old data as well"): named sets of
+-- the strength engine's numbers (zone_engine.DEFAULT_PARAMS); exactly one is live. id 1 = the built-in Default (app/scoring.py seeds it).
+CREATE TABLE IF NOT EXISTS score_profiles (
+    id          BIGSERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    params      JSONB NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'archived')),
+    builtin     BOOLEAN NOT NULL DEFAULT false,
+    note        TEXT,
+    created_by  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    applied_at  TIMESTAMPTZ,                         -- last time it went live
+    applied_by  TEXT,
+    retired_at  TIMESTAMPTZ                          -- last time another set replaced it
+);
+CREATE UNIQUE INDEX IF NOT EXISTS score_profiles_one_live ON score_profiles ((true)) WHERE status = 'active';
+-- what the engine needs of every stock / ETF of a collection, read ONCE (zone_engine.factors): a past day is rescored from these in
+-- milliseconds without opening its raw collection again. JSON {symbol: [monthly regime, M, Q, Y]}, gzip.
+CREATE TABLE IF NOT EXISTS score_factors (
+    snapshot_id BIGINT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+    kind        TEXT   NOT NULL CHECK (kind IN ('stock', 'etf')),
+    schema      SMALLINT NOT NULL,
+    n           INT    NOT NULL,
+    data_gz     BYTEA  NOT NULL,
+    built_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (snapshot_id, kind)
+);
+-- which score set built each stored output (= score_profiles.id; 1 = Default — everything stored before round 24 was built with it)
+ALTER TABLE customer_history ADD COLUMN IF NOT EXISTS score_ver BIGINT NOT NULL DEFAULT 1;
+-- the stock states' score set is kept per collection (one small row), never stamped on every state row: a rescore then writes only the
+-- states whose numbers really changed (round 24 — far less database writing)
+ALTER TABLE stock_states DROP COLUMN IF EXISTS score_ver;
+CREATE TABLE IF NOT EXISTS score_marks (
+    snapshot_id BIGINT PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+    ver         BIGINT NOT NULL,                       -- no row = built with the Default (1), like everything before round 24
+    at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE stock_detail ADD COLUMN IF NOT EXISTS score_ver BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE published ADD COLUMN IF NOT EXISTS score_ver BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE published ADD COLUMN IF NOT EXISTS rev INT NOT NULL DEFAULT 0;      -- +1 each time it is rescored in place (portal caches / ETags)
+-- round 23: the ETF Analyser basket — the customer's own list of ETFs (symbols only), like the Analyser list
+CREATE TABLE IF NOT EXISTS customer_etf_basket (
+    customer_id  BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+    symbols      TEXT[]      NOT NULL DEFAULT '{}',
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- round 21: "remind me on day N of every month" for a saved SIP (1 … 28; NULL = off)
 ALTER TABLE customer_sips ADD COLUMN IF NOT EXISTS reminder_day SMALLINT;
 -- round 21: All Portfolios — every saved portfolio of every application, in one place (every role; never pinned by default)
 INSERT INTO app_modules (key, name, description, sort) VALUES
     ('portfolios', 'All Portfolios', 'Every portfolio you saved — SIPs, Builder portfolios and Analyser lists — with their value, returns and Zerodha orders', 8)
 ON CONFLICT (key) DO NOTHING;
+-- round 22: Hyperplane Planner — to-dos, notebooks (notes), a planner (start / end / status, rows under rows) and a calendar; every row belongs to one customer
+-- (row-level security + composite foreign keys: the database itself refuses a page in someone else's notebook). app/planner.py
+INSERT INTO app_modules (key, name, description, sort) VALUES
+    ('planner', 'Hyperplane Planner', 'Your to-dos, notes, plans and calendar in one place — private to you', 9)
+ON CONFLICT (key) DO NOTHING;
+CREATE TABLE IF NOT EXISTS pl_notebooks (
+    id          BIGSERIAL PRIMARY KEY,
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    color       TEXT NOT NULL DEFAULT 'blue',
+    icon        TEXT NOT NULL DEFAULT 'book',
+    sort        INT  NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (customer_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS pl_notebooks_name ON pl_notebooks (customer_id, lower(name));
+CREATE TABLE IF NOT EXISTS pl_pages (
+    id          BIGSERIAL PRIMARY KEY,
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    notebook_id BIGINT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'note' CHECK (kind IN ('note', 'journal', 'project')),
+    title       TEXT NOT NULL DEFAULT '',
+    doc         JSONB NOT NULL,                        -- the page as blocks (checked against an allow-list, never HTML)
+    body        TEXT NOT NULL DEFAULT '',              -- its plain words (search)
+    tags        TEXT[] NOT NULL DEFAULT '{}',
+    day         DATE,                                  -- the day it belongs to (journal entries; any note may have one)
+    pinned      BOOLEAN NOT NULL DEFAULT false,
+    status      TEXT CHECK (status IN ('active', 'hold', 'done')),   -- projects only
+    due         DATE,                                  -- projects only
+    files       BIGINT[] NOT NULL DEFAULT '{}',        -- the pictures it shows (pl_files)
+    words       INT NOT NULL DEFAULT 0,
+    rev         INT NOT NULL DEFAULT 1,                -- goes up on every save: an older copy never overwrites a newer one
+    trashed_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (customer_id, id),
+    FOREIGN KEY (customer_id, notebook_id) REFERENCES pl_notebooks (customer_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS pl_pages_recent ON pl_pages (customer_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS pl_pages_nb ON pl_pages (customer_id, notebook_id);
+CREATE TABLE IF NOT EXISTS pl_links (
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    src         BIGINT NOT NULL,
+    dst         BIGINT NOT NULL,
+    PRIMARY KEY (src, dst),
+    FOREIGN KEY (customer_id, src) REFERENCES pl_pages (customer_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (customer_id, dst) REFERENCES pl_pages (customer_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS pl_links_dst ON pl_links (customer_id, dst);
+CREATE TABLE IF NOT EXISTS pl_tasks (
+    id          BIGSERIAL PRIMARY KEY,
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    notebook_id BIGINT NOT NULL,
+    page_id     BIGINT,                                -- under a page (or none)
+    kind        TEXT NOT NULL DEFAULT 'todo' CHECK (kind IN ('todo', 'plan')),   -- round 22b: a to-do, or a row of the planner
+    parent_id   BIGINT,                                -- planner rows: the row it is indented under (or none)
+    start_on    DATE,                                  -- planner rows: start (due = end)
+    title       TEXT NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'doing', 'hold', 'done', 'missed')),
+    priority    SMALLINT NOT NULL DEFAULT 0 CHECK (priority BETWEEN 0 AND 3),
+    due         DATE,
+    repeat      TEXT CHECK (repeat IN ('daily', 'weekdays', 'weekly', 'monthly')),
+    tags        TEXT[] NOT NULL DEFAULT '{}',
+    sort        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    done_at     TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    FOREIGN KEY (customer_id, notebook_id) REFERENCES pl_notebooks (customer_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (customer_id, page_id) REFERENCES pl_pages (customer_id, id) ON DELETE SET NULL (page_id),
+    UNIQUE (customer_id, id),
+    FOREIGN KEY (customer_id, parent_id) REFERENCES pl_tasks (customer_id, id) ON DELETE CASCADE,
+    CHECK (start_on IS NULL OR due IS NULL OR due >= start_on)
+);
+CREATE INDEX IF NOT EXISTS pl_tasks_due ON pl_tasks (customer_id, due);
+CREATE INDEX IF NOT EXISTS pl_tasks_parent ON pl_tasks (parent_id) WHERE parent_id IS NOT NULL;
+-- round 22c: a planner row's progress (0–100; a row with rows under it shows their average) and a to-do's optional time (the week view)
+ALTER TABLE pl_tasks ADD COLUMN IF NOT EXISTS progress SMALLINT NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100);
+ALTER TABLE pl_tasks ADD COLUMN IF NOT EXISTS time_from TIME;
+ALTER TABLE pl_tasks ADD COLUMN IF NOT EXISTS time_to TIME;
+-- round 22e: a to-do can be "missed" (closed without being done — kept as history, off the open list)
+ALTER TABLE pl_tasks DROP CONSTRAINT IF EXISTS pl_tasks_status_check;
+ALTER TABLE pl_tasks ADD CONSTRAINT pl_tasks_status_check CHECK (status IN ('todo', 'doing', 'hold', 'done', 'missed'));
+-- round 22f: several planners in a notebook (each its own table of rows); "Clear" on the dashboard only hides closed to-dos (archived_at)
+CREATE TABLE IF NOT EXISTS pl_plans (
+    id          BIGSERIAL PRIMARY KEY,
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    notebook_id BIGINT NOT NULL,
+    name        TEXT NOT NULL,
+    sort        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (customer_id, id),
+    FOREIGN KEY (customer_id, notebook_id) REFERENCES pl_notebooks (customer_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS pl_plans_cust ON pl_plans (customer_id, notebook_id);
+ALTER TABLE pl_tasks ADD COLUMN IF NOT EXISTS plan_id BIGINT;
+ALTER TABLE pl_tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pl_tasks_plan_fk') THEN
+    ALTER TABLE pl_tasks ADD CONSTRAINT pl_tasks_plan_fk FOREIGN KEY (customer_id, plan_id) REFERENCES pl_plans (customer_id, id) ON DELETE CASCADE;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS pl_tasks_plan ON pl_tasks (plan_id) WHERE plan_id IS NOT NULL;
+-- planner rows from before 22f: one "Planner" per notebook that has rows
+INSERT INTO pl_plans (customer_id, notebook_id, name)
+    SELECT DISTINCT t.customer_id, t.notebook_id, 'Planner' FROM pl_tasks t
+    WHERE t.kind = 'plan' AND t.plan_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM pl_plans p WHERE p.customer_id = t.customer_id AND p.notebook_id = t.notebook_id);
+UPDATE pl_tasks t SET plan_id = (SELECT min(p.id) FROM pl_plans p WHERE p.customer_id = t.customer_id AND p.notebook_id = t.notebook_id)
+    WHERE t.kind = 'plan' AND t.plan_id IS NULL;
+CREATE INDEX IF NOT EXISTS pl_tasks_open ON pl_tasks (due) WHERE status <> 'done' AND due IS NOT NULL;
+CREATE TABLE IF NOT EXISTS pl_files (
+    id          BIGSERIAL PRIMARY KEY,
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    mime        TEXT NOT NULL,
+    data        BYTEA NOT NULL,
+    size        INT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS pl_files_own ON pl_files (customer_id, created_at);
+CREATE TABLE IF NOT EXISTS pl_prefs (
+    customer_id BIGINT PRIMARY KEY REFERENCES customers(id) ON DELETE CASCADE,
+    prefs       JSONB NOT NULL DEFAULT '{}'::jsonb,    -- {"digest": true} — its row also marks "the first notebooks were made"
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- round 20c: the admin-wide Publisher key is gone (each customer saves their own)
 DROP FUNCTION IF EXISTS portal_zerodha();
 DELETE FROM portal_config WHERE key = 'zerodha';
@@ -756,6 +930,9 @@ def init_db():
         perms.migrate_msip_detail(c)                           # the Momentum SIP's detail view, Customer Admin (round 19k)
         perms.migrate_zerodha(c)                               # Buy on Zerodha, Customer Admin first (round 20)
         perms.migrate_all_portfolios(c)                        # All Portfolios for every role (round 21)
+        perms.migrate_planner(c)                               # Hyperplane Planner, Customer Admin first (round 22)
+        perms.migrate_etf_basket(c)                            # ETF portfolios: share for every ETF role, Zerodha Customer Admin first (round 23)
+        scoring.seed(c)                                        # the built-in Default score set, live (round 24)
         perms.migrate_pins8(c)                                 # 8 pins: the AI Momentum SIP joins saved pins (owner 2026-11-06)
         perms.migrate_msip_levels(c)                           # Momentum SIP Customer / Admin levels (owner 2026-11-06 r6)
         perms.rename_builder_levels(c)
@@ -851,6 +1028,12 @@ def _setup_portal_role(c):
     c.execute("ALTER TABLE customer_portfolio ENABLE ROW LEVEL SECURITY")
     c.execute("DROP POLICY IF EXISTS portal_own ON customer_portfolio")
     c.execute(sql.SQL("CREATE POLICY portal_own ON customer_portfolio TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
+                      "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
+    # round 23: the ETF Analyser basket — own row only
+    c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, symbols, updated_at), UPDATE (symbols, updated_at) ON customer_etf_basket TO {}").format(role))
+    c.execute("ALTER TABLE customer_etf_basket ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON customer_etf_basket")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON customer_etf_basket TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
                       "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     # side-menu pins: same rule as the portfolio — each customer reads and writes only their own row
     c.execute(sql.SQL("GRANT SELECT, INSERT (customer_id, pins, updated_at), UPDATE (pins, updated_at) ON customer_prefs TO {}").format(role))
@@ -950,6 +1133,28 @@ def _setup_portal_role(c):
     c.execute("DROP POLICY IF EXISTS portal_own ON zerodha_handoffs")
     c.execute(sql.SQL("CREATE POLICY portal_own ON zerodha_handoffs TO {} USING (customer_id::text = current_setting('hp.cid', true)) "
                       "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
+    # Hyperplane Planner (round 22): every table is "own rows only"; the id, the owner and the created time can never be rewritten
+    pl_grants = {
+        "pl_notebooks": ("customer_id, name, color, icon, sort", "name, color, icon, sort"),
+        "pl_pages": ("customer_id, notebook_id, kind, title, doc, body, tags, day, pinned, status, due, files, words",
+                     "notebook_id, kind, title, doc, body, tags, day, pinned, status, due, files, words, rev, trashed_at, updated_at"),
+        "pl_links": ("customer_id, src, dst", None),
+        "pl_tasks": ("customer_id, notebook_id, page_id, kind, parent_id, start_on, title, note, status, priority, due, repeat, tags, sort, done_at, "
+                     "progress, time_from, time_to, plan_id",
+                     "notebook_id, page_id, parent_id, start_on, title, note, status, priority, due, repeat, tags, sort, done_at, updated_at, "
+                     "progress, time_from, time_to, plan_id, archived_at"),
+        "pl_files": ("customer_id, mime, data, size", None),
+        "pl_plans": ("customer_id, notebook_id, name, sort", "notebook_id, name, sort, updated_at"),
+        "pl_prefs": ("customer_id, prefs", "prefs, updated_at"),
+    }
+    for table, (ins, upd) in pl_grants.items():
+        c.execute(sql.SQL(f"GRANT SELECT, INSERT ({ins}){f', UPDATE ({upd})' if upd else ''}, DELETE ON {table} TO {{}}").format(role))
+        if table not in ("pl_links", "pl_prefs"):
+            c.execute(sql.SQL(f"GRANT USAGE ON SEQUENCE {table}_id_seq TO {{}}").format(role))
+        c.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        c.execute(f"DROP POLICY IF EXISTS portal_own ON {table}")
+        c.execute(sql.SQL(f"CREATE POLICY portal_own ON {table} TO {{}} USING (customer_id::text = current_setting('hp.cid', true)) "
+                          "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     own = "(owner_kind = 'customer' AND owner_id = current_setting('hp.cid', true))"
     in_own ="EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = ticket_id)"        # hd_tickets' own policy applies here
     policies = {

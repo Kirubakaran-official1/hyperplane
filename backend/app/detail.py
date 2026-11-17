@@ -78,7 +78,7 @@ def explain_tf(price, zl, zh, tf, b):
     pts = ze.nr_points(b, place)
     out.update(rel=_r(rel), place=place, nr_points=_r(pts, 2), nr_weight=_r(ze.nr_weight(abs(b)), 3) if b else None)
     if t is not None:
-        base = 100 * (ze.TREND_W * t + ze.POS_W * p)
+        base = 100 * (ze.TREND_W * t + (0.0 if ze.live().model == "ladder" else ze.POS_W) * p)   # round 25: the ladder model ignores the price place
         out.update(zone_points=_r(base, 2), strength=round(max(-100.0, min(100.0, base + pts))))
     return out
 
@@ -127,6 +127,8 @@ def build_all(sheets, payload, candles=None):
                 row["candles"] = [_bar(c.get(f"{tf}{k}")) for k in range(BARS + 1)] if c else None
             tfs[tf] = row
         before = ze.read_stock(z, zh.get(sym), nrs.get(sym)) if zh.get(sym) else None
+        fz = ze.factors(z, zh.get(sym), nrs.get(sym)) if zh.get(sym) else None
+        lad = ze.ladder(fz.get("Z")) if fz and ze.live().model == "ladder" else None   # round 25: the zone ladder, item by item
         out[sym] = {
             "s": sym, "n": s.get("n"), "sec": s.get("sec"), "ind": s.get("ind"), "cap": s.get("cap"), "p": price,
             "c": s.get("c"), "h": s.get("h"), "x": s.get("x"), "yh": s.get("yh"), "av": s.get("av"), "r3": s.get("r3"),
@@ -140,10 +142,12 @@ def build_all(sheets, payload, candles=None):
             # (the regime line is sent as "ST": its name stays out of the customer app bundle — meta.line_name)
             "tech": {tf: {("ST" if k == "Supertrend" else k): ze._num(t.get(f"{tf}_{k}")) for k in _TECH} for tf in "DWMQY"} if t else None,
             "failed_nr": failed.get(sym),
+            **({"ladder": {"total": lad[0], "items": lad[1]}} if lad else {}),
         }
-    meta = {"tf_weight": ze.TF_W, "trend_w": ze.TREND_W, "pos_w": ze.POS_W, "recency": list(ze.RECENCY),
+    meta = {"tf_weight": ze.TF_W, "trend_w": ze.TREND_W, "pos_w": ze.POS_W, "recency": list(ze.RECENCY), "up": ze.UP, "turn": ze.TURN, "q_guard": ze.Q_GUARD,
             "full_step": ze.FULL_STEP, "cut": ze.CUT, "squeeze": ze.REGIME_SQUEEZE,
             "nr_points": ze.NR_POINTS, "nr_places": list(ze.NR_PLACES), "nr_base": ze.NR_BASE, "bars": BARS,
-            "candles": bool(cdl),
+            "candles": bool(cdl), "model": ze.live().model,
+            **({"ladder": {"close": ze.live().l_close, "strict": ze.live().l_strict, "pairs": ze.live().l_pairs}} if ze.live().model == "ladder" else {}),
             "line_name": "Supertrend"}       # the regime line's name: sent only to the detail view, never in the app bundle
     return {"meta": meta, "stocks": out}

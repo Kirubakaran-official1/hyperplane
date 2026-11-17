@@ -46,8 +46,8 @@ SERIES = {"BE": "trade-to-trade (BE): delivery only, intraday not allowed",
           "ST": "SME platform (ST): sold in lots"}
 BUFFER = Decimal("0.01")                                    # the limit: our last price +1 % (BUY) / −1 % (SELL)
 QTY_MAX = 10_000_000
-SOURCES = ("sip", "msip", "builder", "order", "swap", "swaps")   # swaps = several swaps at once, one step (round 21b)
-APP_OF = {"sip": "sip", "msip": "msip", "builder": "builder", "analyser": "portfolio"}   # saved kind → the application
+SOURCES = ("sip", "msip", "builder", "etf", "order", "swap", "swaps")   # swaps = several swaps at once, one step (round 21b); etf = round 23
+APP_OF = {"sip": "sip", "msip": "msip", "builder": "builder", "analyser": "portfolio", "etf": "etf"}   # saved kind → the application
 SYM = re.compile(r"^[A-Z0-9&._-]{1,30}$")
 
 

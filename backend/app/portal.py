@@ -45,6 +45,7 @@ from . import helpdesk as hd
 from . import inbox
 from . import community as cm
 from . import zerodha as zr
+from . import planner as pl
 from . import vault
 from .detail import DETAIL_DAYS
 from .security import DUMMY_HASH, hash_password, verify_password
@@ -123,10 +124,10 @@ def _day_row():
 
 
 def _hist_views(row):
-    sid = row["snapshot_id"]
+    sid = (row["snapshot_id"], row.get("score_ver"))                 # round 24: a rescored day is a new entry
     if sid not in _hist:
         with pool.connection() as conn:
-            r = conn.execute("SELECT data_gz, etf_gz FROM customer_history WHERE snapshot_id = %s", (sid,)).fetchone()
+            r = conn.execute("SELECT data_gz, etf_gz FROM customer_history WHERE snapshot_id = %s", (sid[0],)).fetchone()
         if not r:
             raise HTTPException(404, "No data for that day")
         _hist[sid] = (json.loads(gzip.decompress(bytes(r["data_gz"]))), json.loads(gzip.decompress(bytes(r["etf_gz"]))) if r["etf_gz"] else None)
@@ -165,7 +166,8 @@ async def _bad_request(request: Request, exc: RequestValidationError):
 @app.middleware("http")
 async def _headers(request: Request, call_next):
     # body-size cap (Caddy also caps it): helpdesk messages may carry images, everything else is tiny
-    limit = 8_500_000 if request.url.path.startswith(("/app/api/helpdesk", "/app/api/community")) else 64_000
+    path = request.url.path                              # the Planner: a long note, or one pasted picture (≤ 2 MB) per request
+    limit = 8_500_000 if path.startswith(("/app/api/helpdesk", "/app/api/community")) else 3_500_000 if path.startswith("/app/api/planner") else 64_000
     try:
         too_big = int(request.headers.get("content-length") or 0) > limit
     except ValueError:
@@ -671,7 +673,7 @@ def _history_days(conn):
     """{date: {"open": row, "end": row}} — first scheduled run of the day = Day open, last = Day end
     (a day with one run: before noon = open, otherwise end)."""
     days = {}
-    for r in conn.execute("SELECT snapshot_id, trade_date, taken_at FROM customer_history ORDER BY taken_at").fetchall():
+    for r in conn.execute("SELECT snapshot_id, trade_date, taken_at, score_ver FROM customer_history ORDER BY taken_at").fetchall():
         days.setdefault(r["trade_date"].isoformat(), []).append(r)
     out = {}
     for d, rows in days.items():
@@ -707,19 +709,20 @@ def data(request: Request, date: str | None = None, part: str | None = None, c=D
             raise HTTPException(403, "Past data is not part of your access.", headers={"X-Access": "denied"})
         with pool.connection() as conn:
             row = _history_days(conn).get(date, {}).get(part)
-            if row and request.headers.get("if-none-match") == f'W/"h{row["snapshot_id"]}"':
-                return Response(status_code=304, headers={"ETag": f'W/"h{row["snapshot_id"]}"', "Cache-Control": "private, no-cache"})
+            htag = row and f'W/"h{row["snapshot_id"]}-{row["score_ver"]}"'
+            if row and request.headers.get("if-none-match") == htag:
+                return Response(status_code=304, headers={"ETag": htag, "Cache-Control": "private, no-cache"})
             r = row and conn.execute("SELECT data_gz FROM customer_history WHERE snapshot_id = %s", (row["snapshot_id"],)).fetchone()
         if not r:
             raise HTTPException(404, "No data for that day — markets may have been closed.")
         return Response(content=bytes(r["data_gz"]), media_type="application/json",
-                        headers={"Content-Encoding": "gzip", "ETag": f'W/"h{row["snapshot_id"]}"', "Cache-Control": "private, no-cache"})
+                        headers={"Content-Encoding": "gzip", "ETag": htag, "Cache-Control": "private, no-cache"})
     # latest view: a browser that already holds this publish gets "304 Not Modified" (no 180 KB download again)
     with pool.connection() as conn:
-        head = conn.execute("SELECT id, published_at FROM published ORDER BY id DESC LIMIT 1").fetchone()
+        head = conn.execute("SELECT id, published_at, rev FROM published ORDER BY id DESC LIMIT 1").fetchone()
         if not head:
             raise HTTPException(404, "No data has been published yet — please check back soon.")
-        etag = f'W/"p{head["id"]}"'
+        etag = f'W/"p{head["id"]}-{head["rev"]}"'
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "private, no-cache"})
         r = conn.execute("SELECT data_gz FROM published WHERE id = %s", (head["id"],)).fetchone()
@@ -737,10 +740,10 @@ def etf_data(request: Request, c=Depends(need("etf"))):
         return e
     """ETF analyser (owner, 2026-11-06): the latest published ETF summary — strength + Recommended only (app/etf.py)."""
     with pool.connection() as conn:
-        head = conn.execute("SELECT id, published_at FROM published WHERE etf_gz IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+        head = conn.execute("SELECT id, published_at, rev FROM published WHERE etf_gz IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
         if not head:
             raise HTTPException(404, "ETF data will appear after the next update — please check back soon.")
-        etag = f'W/"e{head["id"]}"'
+        etag = f'W/"e{head["id"]}-{head["rev"]}"'
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "private, no-cache"})
         r = conn.execute("SELECT etf_gz FROM published WHERE id = %s", (head["id"],)).fetchone()
@@ -762,6 +765,63 @@ def _own(c):
     with pool.connection() as conn:
         conn.execute("SELECT set_config('hp.cid', %s, true)", (str(c["id"]),))
         yield conn
+
+
+# ── ETF Analyser basket (round 23, owner 2026-11-15: "move the ETF to the basket, then the basket to the analyser like the AI stock
+# analyser"): the customer's own list of ETFs (symbols only), kept on the server like the Analyser list — own row only (RLS)
+ETF_BASKET_MAX = 30
+
+
+class EtfBasketIn(SafeModel):
+    symbols: list[str]
+
+
+@app.get("/app/api/etf/basket")
+def etf_basket_get(c=Depends(need("etf"))):
+    _rate("etf-basket", str(c["id"]), 120, 60)
+    with _own(c) as conn:
+        r = conn.execute("SELECT symbols, updated_at FROM customer_etf_basket WHERE customer_id = %s", (c["id"],)).fetchone()
+    return {"symbols": list(r["symbols"]) if r else [], "updated_at": r["updated_at"].isoformat() if r else None, "max": ETF_BASKET_MAX}
+
+
+@app.put("/app/api/etf/basket")
+def etf_basket_put(body: EtfBasketIn, c=Depends(need("etf"))):
+    """the basket, replaced as a whole: today's ETFs only, each once, at most ETF_BASKET_MAX"""
+    _rate("etf-basket", str(c["id"]), 120, 60)
+    known = {x["s"] for x in (_latest_etf_view(today=True) or {}).get("etfs", [])}
+    syms = list(dict.fromkeys(str(s or "").strip().upper() for s in body.symbols))
+    if len(syms) > ETF_BASKET_MAX:
+        raise HTTPException(422, f"A basket holds up to {ETF_BASKET_MAX} ETFs")
+    bad = next((s for s in syms if not PF_SYM.match(s) or s not in known), None)
+    if bad is not None:
+        raise HTTPException(422, f"{bad[:30] or 'That'} is not an ETF in today's data")
+    with _own(c) as conn:
+        conn.execute("INSERT INTO customer_etf_basket (customer_id, symbols, updated_at) VALUES (%s, %s, now()) "
+                     "ON CONFLICT (customer_id) DO UPDATE SET symbols = EXCLUDED.symbols, updated_at = now()", (c["id"], syms))
+        if syms:
+            adoption.action(conn, c["id"], "etf", "basket")
+    return {"symbols": syms, "max": ETF_BASKET_MAX}
+
+
+class EtfSipIn(SafeModel):
+    symbols: list[str]
+    amount: float
+    freq: str = "month"
+    years: int = 10
+    weights: dict | None = None                                  # {symbol: whole %} adding up to 100; None = an equal share each
+
+
+@app.post("/app/api/etf/basket/sip")
+def etf_basket_sip(body: EtfSipIn, c=Depends(need("etf"))):
+    """round 23: a SIP of the basket (sip.build_basket) — saved as an AI ETF SIP, so it needs that application too"""
+    if "sip" not in c["modules"]:
+        raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+    _need_day(etf=True)
+    _rate("sip", str(c["id"]), 30, 60)
+    try:
+        return sip.build_basket(_latest_etf_view(), body.amount, body.freq, body.years, body.symbols, body.weights)
+    except sip.SipError as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/app/api/portfolio")
@@ -822,12 +882,12 @@ def _latest_view(today=False):
     if not today and _day_row():
         return _hist_views(_day_row())[0]
     with pool.connection() as conn:
-        r = conn.execute("SELECT id FROM published ORDER BY id DESC LIMIT 1").fetchone()
+        r = conn.execute("SELECT id, rev FROM published ORDER BY id DESC LIMIT 1").fetchone()
         if not r:
             raise HTTPException(404, "No data has been published yet — please check back soon.")
-        if r["id"] != _latest["id"]:
+        if (r["id"], r["rev"]) != _latest["id"]:                         # round 24: rescored in place = rev + 1
             g = conn.execute("SELECT data_gz FROM published WHERE id = %s", (r["id"],)).fetchone()
-            _latest.update(id=r["id"], data=json.loads(gzip.decompress(bytes(g["data_gz"]))))
+            _latest.update(id=(r["id"], r["rev"]), data=json.loads(gzip.decompress(bytes(g["data_gz"]))))
     return _latest["data"]
 
 
@@ -904,12 +964,12 @@ def _latest_etf_view(today=False):
     if not today and _day_row():
         return _hist_views(_day_row())[1]
     with pool.connection() as conn:
-        r = conn.execute("SELECT id FROM published WHERE etf_gz IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+        r = conn.execute("SELECT id, rev FROM published WHERE etf_gz IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
         if not r:
             return None
-        if r["id"] != _latest_etf["id"]:
+        if (r["id"], r["rev"]) != _latest_etf["id"]:
             g = conn.execute("SELECT etf_gz FROM published WHERE id = %s", (r["id"],)).fetchone()
-            _latest_etf.update(id=r["id"], data=json.loads(gzip.decompress(bytes(g["etf_gz"]))))
+            _latest_etf.update(id=(r["id"], r["rev"]), data=json.loads(gzip.decompress(bytes(g["etf_gz"]))))
     return _latest_etf["data"]
 
 
@@ -937,7 +997,7 @@ def msip_tier(c):
 
 
 class SavedIn(SafeModel):
-    kind: str = "sip"                                            # sip | msip | builder | analyser
+    kind: str = "sip"                                            # sip | msip | builder | analyser | etf
     name: str
     inputs: dict
     holdings: list
@@ -1000,15 +1060,17 @@ def sip_build(body: SipIn, c=Depends(need("sip"))):
 
 
 # ── saved plans: Momentum SIPs and Portfolio Builder portfolios (owner 2026-11-06: save, check, adjust, alerts) ──
-SAVED_KINDS = {"sip": "sip", "msip": "msip", "builder": "builder", "analyser": "portfolio"}   # kind → the application it needs
-SAVED_TAG = {"sip": "AI ETF SIP Builder", "msip": "AI Momentum SIP Builder", "builder": "Portfolio Builder", "analyser": "AI Portfolio Analyser"}
+SAVED_KINDS = {"sip": "sip", "msip": "msip", "builder": "builder", "analyser": "portfolio", "etf": "etf"}   # kind → the application it needs
+SAVED_TAG = {"sip": "AI ETF SIP Builder", "msip": "AI Momentum SIP Builder", "builder": "Portfolio Builder", "analyser": "AI Portfolio Analyser",
+             "etf": "ETF Analyser"}
+BASKET_SIP_TAG = "ETF Analyser · SIP"                            # round 23: a SIP made from an ETF Analyser basket (kind sip, inputs.src etf)
 SAVED_COLS = "id, kind, name, inputs, holdings, alerts, state, created_at, refreshed_at, saved_on, versions, share_id, visibility, reminder_day"
-SHARE_PERM = {"sip": "sip:share", "msip": "msip:share", "builder": "builder:share", "analyser": "portfolio:share"}   # who may make one public
+SHARE_PERM = {"sip": "sip:share", "msip": "msip:share", "builder": "builder:share", "analyser": "portfolio:share", "etf": "etf:share"}   # who may make one public
 SHARE_CODE = re.compile(r"^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$")       # db.hp_share_id()
 SAVED_KEEP = ("kind", "sleeve", "role", "s", "n", "grp", "cap", "sec", "k", "u", "units", "every", "slice", "p", "amt", "qty")
 
 
-HOLD_MAX = {"sip": 60, "msip": 2000, "builder": 1000, "analyser": 1000}
+HOLD_MAX = {"sip": 60, "msip": 2000, "builder": 1000, "analyser": 1000, "etf": 60}
 HOLD_NUM = (("units", 0, 1e7), ("qty", 0, 1e9), ("every", 1, 12), ("slice", 0, 1e13), ("amt", 0, 1e13))
 HOLD_ROLE, HOLD_SLEEVE = (None, "core", "theme", "diversifier", "commodity"), (None, "index", "stock", "commodity")
 
@@ -1020,8 +1082,8 @@ def _clean_holdings(kind, holdings, inputs, c, legacy=False):
     if not isinstance(holdings, list) or not holdings or len(holdings) > HOLD_MAX.get(kind, 1000):
         raise HTTPException(422, "That plan cannot be saved")
     stocks = {x["s"]: x for x in _latest_view().get("stocks", [])}
-    etfs = {x["s"]: x for x in (_latest_etf_view() or {}).get("etfs", [])} if kind == "sip" else {}
-    kinds = ("etf", "stock") if legacy else {"sip": ("etf",), "msip": ("stock",), "builder": ("stock",), "analyser": ("stock",)}[kind]
+    etfs = {x["s"]: x for x in (_latest_etf_view() or {}).get("etfs", [])} if kind in ("sip", "etf") else {}
+    kinds = ("etf", "stock") if legacy else {"sip": ("etf",), "msip": ("stock",), "builder": ("stock",), "analyser": ("stock",), "etf": ("etf",)}[kind]
     out, seen = [], set()
     for h in holdings:
         if not isinstance(h, dict) or h.get("kind") not in kinds:
@@ -1066,8 +1128,12 @@ def _saved_row(conn, c, sid):
     return r
 
 
+def _tag_of(r):
+    return BASKET_SIP_TAG if r["kind"] == "sip" and (r["inputs"] or {}).get("src") == "etf" else SAVED_TAG.get(r["kind"])
+
+
 def _saved_out(r, c=None):
-    return {"id": r["id"], "kind": r["kind"], "tag": SAVED_TAG.get(r["kind"]), "name": r["name"], "inputs": r["inputs"], "holdings": r["holdings"],
+    return {"id": r["id"], "kind": r["kind"], "tag": _tag_of(r), "name": r["name"], "inputs": r["inputs"], "holdings": r["holdings"],
             "code": r["share_id"], "visibility": r["visibility"],
             "can_share": bool(c) and SHARE_PERM.get(r["kind"]) in c["perms"],
             "alerts": r["alerts"], "reminder_day": r.get("reminder_day"), "created_at": r["created_at"].isoformat(), "saved_on": r["saved_on"].isoformat() if r["saved_on"] else None,
@@ -1090,9 +1156,10 @@ def saved_list(kind: str = "sip", spark: bool = False, c=Depends(customer)):
     if not kinds:
         return []
     _rate("saved-list", str(c["id"]), 60, 60)
+    basket = kind == "etf" and "sip" in c["modules"]                 # round 23: the ETF Analyser's list holds its basket SIPs too
     with _own(c) as conn:
-        rows = conn.execute(f"SELECT {SAVED_COLS} FROM customer_sips WHERE customer_id = %s AND kind = ANY(%s) ORDER BY id DESC",
-                            (c["id"], kinds)).fetchall()
+        rows = conn.execute(f"SELECT {SAVED_COLS} FROM customer_sips WHERE customer_id = %s AND (kind = ANY(%s) "
+                            "OR (%s AND kind = 'sip' AND inputs->>'src' = 'etf')) ORDER BY id DESC", (c["id"], kinds, basket)).fetchall()
         out = [_saved_out(r, c) for r in rows]
         for o, r in zip(out, rows):
             o["watch"] = len(_watch_syms(r))
@@ -1113,7 +1180,16 @@ def saved_add(body: SavedIn, c=Depends(customer)):
     name = " ".join(str(body.name or "").split())[:60] or ("My SIP" if body.kind in ("sip", "msip") else "My portfolio")
     i = body.inputs or {}
     try:
-        if body.kind == "sip" and "opts" in i:                    # AI ETF SIP Builder (ETFs)
+        if body.kind == "sip" and i.get("basket"):                # round 23: a SIP of an ETF Analyser basket (equal / chosen shares)
+            a, f, y, syms, w = sip.check_basket(i.get("amount"), i.get("freq"), i.get("years", 10),
+                                                [h.get("s") for h in body.holdings if isinstance(h, dict)], i.get("weights"))
+            if "etf" not in c["modules"]:
+                raise HTTPException(403, NO_ACCESS, headers={"X-Access": "denied"})
+            g = round(sum(float(h.get("amt") or 0) for h in body.holdings if isinstance(h, dict) and h.get("role") == "commodity")
+                      / max(1.0, sum(float(h.get("amt") or 0) for h in body.holdings if isinstance(h, dict))) * 100)
+            inputs = {"amount": a, "freq": f, "years": y, "stepup": 0, "basket": True, "src": "etf",
+                      "alloc": {"index": 100 - g, "stock": 0, "commodity": g}, **({"weights": w} if w else {})}
+        elif body.kind == "sip" and "opts" in i:                  # AI ETF SIP Builder (ETFs)
             a, f, o, y = sip.check_etf(i.get("amount"), i.get("freq"), i.get("opts"), i.get("years", 10))
             inputs = {"amount": a, "freq": f, "opts": o, "stepup": 0, "years": y, "alloc": {"index": 100 - o["gold"], "stock": 0, "commodity": o["gold"]}}
         elif body.kind == "sip":                                  # a combined plan from before the split
@@ -1138,13 +1214,19 @@ def saved_add(body: SavedIn, c=Depends(customer)):
             raise HTTPException(403, "That portfolio is outside your access")
         rel = [r for r in (i.get("reliability") or ["S"]) if r in t["reliability"]] or ["S"]
         inputs = {"amount": amt_, "count": cnt_, "reliability": rel}
+    elif body.kind == "etf":                                       # round 23: an ETF Analyser basket, tracked as 1 unit of each ETF
+        inputs = {"src": "basket"}
+        body.holdings = [{"kind": "etf", "s": h.get("s"), "qty": 1} for h in body.holdings if isinstance(h, dict)]
     elif body.kind == "analyser":                                  # AI Portfolio Analyser: tracked as 1 share of each stock
         inputs = {"reliability": ["S", "M", "W"]}
         body.holdings = [{"kind": "stock", "s": h.get("s"), "n": h.get("n"), "cap": h.get("cap"), "sec": h.get("sec"),
                           "grp": f"{h.get('cap')} cap" if h.get("cap") else None, "qty": 1} for h in body.holdings if isinstance(h, dict)]
     if not body.holdings:
         raise HTTPException(422, "Nothing to save")
-    hold = _clean_holdings(body.kind, body.holdings, inputs, c, legacy=body.kind == "sip" and "opts" not in i)
+    hold = _clean_holdings(body.kind, body.holdings, inputs, c, legacy=body.kind == "sip" and "opts" not in i and not i.get("basket"))
+    if body.kind == "etf":
+        for h in hold:
+            h["grp"] = h.get("u")
     with _own(c) as conn:
         n = conn.execute("SELECT count(*) AS n FROM customer_sips WHERE customer_id = %s AND kind = %s", (c["id"], body.kind)).fetchone()["n"]
         if n >= sip.MAX_SAVED:
@@ -1392,7 +1474,7 @@ def saved_track(sid: int, sym: str | None = None, stepup: int | None = None, c=D
     flags = monitor.regime_flags(_latest_view(today=True), [h["s"] for h in t["holdings"] if h.get("held") and h.get("kind") == "stock"])
     themes = {h["s"]: sip.etf_status(_latest_etf_view(today=True), h["s"]) for h in t["holdings"] if h.get("held") and h.get("kind") == "etf"}
     hold = [{**h, "flag": flags.get(h["s"]) or (themes.get(h["s"]) if h.get("kind") == "etf" else None)} for h in t["holdings"]]
-    return {"id": sid, "name": r["name"], "kind": r["kind"], "tag": SAVED_TAG.get(r["kind"]), **t, "holdings": hold}
+    return {"id": sid, "name": r["name"], "kind": r["kind"], "tag": _tag_of(r), **t, "holdings": hold}
 
 
 @app.get("/app/api/alternatives")
@@ -1469,7 +1551,8 @@ def notifications(c=Depends(customer)):
 
 # ── Unified inbox (round 19, inbox.py): every notification + the helpdesk tickets, for the three-pane inbox page ──
 # which process an item belongs to (round 19k, owner: "from which app, which process — the investment or the SIP"), in plain words
-PROCESS = {"analyser": "Saved stock list", "portfolio": "Your Analyser list", "builder": "Investment · one-time amount", "sip": "ETF SIP", "msip": "Stock SIP"}
+PROCESS = {"analyser": "Saved stock list", "portfolio": "Your Analyser list", "builder": "Investment · one-time amount", "sip": "ETF SIP", "msip": "Stock SIP",
+           "etf": "Saved ETF portfolio"}
 INBOX_COLS = "id, kind, ref_id, title, body, created_at, updated_at, read_at, app, type, status, done_at, done_note, items_done"
 
 
@@ -1484,7 +1567,7 @@ def _plan_of(r, plans):
 
 
 def _inbox_note(r, plans=None):
-    return {"id": f"n{r['id']}", "nid": r["id"], "src": {"announce": "announce", "mention": "mention"}.get(r["kind"], "alert"), "kind": r["kind"],
+    return {"id": f"n{r['id']}", "nid": r["id"], "src": {"announce": "announce", "mention": "mention", "planner_due": "planner"}.get(r["kind"], "alert"), "kind": r["kind"],
             "app": r["app"] or inbox.app_of(r["kind"]), "type": r["type"] or "info", "status": r["status"], "title": r["title"],
             "body": r["body"], "ref": r["ref_id"], "at": (r.get("updated_at") or r["created_at"]).isoformat(), "created": r["created_at"].isoformat(),
             "plan": _plan_of(r, plans or {}), "read": r["read_at"] is not None,
@@ -1803,7 +1886,7 @@ ZR_RETURN_HOURS = 2                                              # a hand-off ol
 
 
 class ZrIn(SafeModel):
-    source: str                                                  # sip | msip | builder (a result) · order (a saved SIP's instalment) · swap
+    source: str                                                  # sip | msip | builder | etf (a result) · order (a saved SIP's instalment) · swap
     sid: int | None = None                                       # the saved plan (order / swap; optional for the others)
     lines: list = []                                             # [{s, qty, side}] — symbols and quantities only
     swap_out: str | None = None                                  # swap: the stock that left the plan …
@@ -1935,7 +2018,7 @@ def _zr_context(conn, c, body):
     row = _saved_row(conn, c, body.sid) if body.sid else None
     if body.source in ("order", "swap", "swaps") and not row:
         raise HTTPException(422, "Open the saved plan first")
-    if row and body.source in ("sip", "msip", "builder") and row["kind"] != body.source:
+    if row and body.source in ("sip", "msip", "builder", "etf") and row["kind"] != body.source:
         raise HTTPException(422, "That saved plan belongs to another application")
     if body.source == "order" and row["kind"] not in ("sip", "msip"):
         raise HTTPException(422, "Only a SIP has instalment orders")
@@ -1963,7 +2046,7 @@ def _zr_context(conn, c, body):
                 continue
             smap[sym] = key
             o, i = w["out"], w["in"]
-            if row["kind"] == "analyser":
+            if row["kind"] in ("analyser", "etf"):
                 held, cap, buy = 1, zr.QTY_MAX, 1
             else:
                 held = cap = int(o.get("qty") or 0)
@@ -1990,7 +2073,7 @@ def _zr_context(conn, c, body):
     if not w:
         raise HTTPException(422, "That swap is not in this portfolio")
     o, i = w["out"], w["in"]
-    if row["kind"] == "analyser":                                # the Analyser list has no quantities: the customer enters theirs
+    if row["kind"] in ("analyser", "etf"):                       # the Analyser lists have no quantities: the customer enters theirs
         held, cap, buy = 1, zr.QTY_MAX, 1
     else:
         held = int(o.get("qty") or 0)
@@ -2299,3 +2382,332 @@ def zerodha_returned(body: ZrReturnIn, c=Depends(customer)):
         return {"found": False, "said": word}
     return {"found": True, "said": word, "id": str(r["id"]), "tag": r["tag"], "source": r["source"], "sid": r["sid"], "part": r["part"], "parts": r["parts"],
             "lines": r["lines"] or []}
+
+
+# ── Hyperplane Planner (round 22, app/planner.py) ──
+# Notes, journal, to-dos, calendar, projects and a knowledge graph. Every route needs planner:view and runs as the signed-in customer
+# (row-level security: only their own rows exist for it). A page travels as a JSON string and is checked block by block in planner.clean_doc.
+class PlNotebookIn(SafeModel):
+    name: str = Field(..., max_length=60)
+    color: str = Field("blue", max_length=12)
+    icon: str = Field("book", max_length=12)
+
+
+class PlNotebookPatch(SafeModel):
+    name: str | None = Field(None, max_length=60)
+    color: str | None = Field(None, max_length=12)
+    icon: str | None = Field(None, max_length=12)
+    sort: int | None = Field(None, ge=0, le=1000)
+
+
+class PlPageIn(SafeModel):
+    notebook_id: int
+    kind: str = Field("note", max_length=10)
+    title: str = Field("", max_length=300)
+    doc: str | None = Field(None, max_length=pl.MAX_DOC)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    day: str | None = Field(None, max_length=10)
+    status: str | None = Field(None, max_length=10)
+    due: str | None = Field(None, max_length=10)
+
+
+class PlPageSave(SafeModel):
+    title: str = Field("", max_length=300)
+    doc: str = Field(..., max_length=pl.MAX_DOC)
+    rev: int = Field(..., ge=1)
+
+
+class PlPagePatch(SafeModel):
+    notebook_id: int | None = None
+    kind: str | None = Field(None, max_length=10)
+    title: str | None = Field(None, max_length=300)
+    tags: list[str] | None = Field(None, max_length=20)
+    day: str | None = Field(None, max_length=10)
+    pinned: bool | None = None
+    status: str | None = Field(None, max_length=10)
+    due: str | None = Field(None, max_length=10)
+    trashed: bool | None = None
+
+
+class PlMergeIn(SafeModel):
+    ids: list[int] = Field(..., min_length=2, max_length=pl.MAX_MERGE)
+    title: str = Field("", max_length=300)
+    notebook_id: int
+    trash_sources: bool = False
+
+
+class PlSplitIn(SafeModel):
+    mode: str = Field(..., max_length=10)
+    level: int = Field(1, ge=1, le=3)
+    index: int = Field(0, ge=0, le=pl.MAX_NODES)
+    trash_source: bool = False
+
+
+class PlIdsIn(SafeModel):
+    ids: list[int] = Field(..., min_length=1, max_length=500)
+
+
+class PlTaskIn(SafeModel):
+    notebook_id: int
+    title: str = Field(..., max_length=400)
+    note: str = Field("", max_length=4000)
+    status: str = Field("todo", max_length=10)
+    priority: int = Field(0, ge=0, le=3)
+    due: str | None = Field(None, max_length=10)
+    repeat: str | None = Field(None, max_length=10)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    page_id: int | None = None
+    kind: str = Field("todo", max_length=10)
+    start: str | None = Field(None, max_length=10)
+    parent_id: int | None = None
+    after_id: int | None = None
+    progress: int = Field(0, ge=0, le=100)
+    time_from: str | None = Field(None, max_length=5)
+    time_to: str | None = Field(None, max_length=5)
+    plan_id: int | None = None
+
+
+class PlPlanIn(SafeModel):
+    notebook_id: int
+    name: str = Field(..., max_length=120)
+
+
+class PlPlanPatch(SafeModel):
+    notebook_id: int | None = None
+    name: str | None = Field(None, max_length=120)
+    sort: float | None = Field(None, ge=-1e12, le=1e12)
+
+
+class PlMoveIn(SafeModel):
+    action: str = Field(..., max_length=10)
+
+
+class PlTaskPatch(SafeModel):
+    notebook_id: int | None = None
+    title: str | None = Field(None, max_length=400)
+    note: str | None = Field(None, max_length=4000)
+    status: str | None = Field(None, max_length=10)
+    priority: int | None = Field(None, ge=0, le=3)
+    due: str | None = Field(None, max_length=10)
+    repeat: str | None = Field(None, max_length=10)
+    tags: list[str] | None = Field(None, max_length=20)
+    sort: float | None = Field(None, ge=-1e12, le=1e12)
+    page_id: int | None = None
+    start: str | None = Field(None, max_length=10)
+    progress: int | None = Field(None, ge=0, le=100)
+    time_from: str | None = Field(None, max_length=5)
+    time_to: str | None = Field(None, max_length=5)
+    plan_id: int | None = None
+
+
+class PlFileIn(SafeModel):
+    image: str = Field(..., max_length=pl.MAX_IMAGE * 4 // 3 + 64)
+
+
+class PlPrefsIn(SafeModel):
+    digest: bool
+
+
+class PlClearIn(SafeModel):
+    notebook_id: int | None = None
+    status: str = Field("done", max_length=10)
+
+
+def _pl_changes(body, nullable):
+    """only what the request really sent; a null is kept only where "none" is a value (a day, a due date, a repeat, a project)"""
+    return {k: getattr(body, k) for k in body.model_fields_set if getattr(body, k) is not None or k in nullable}
+
+
+def _pl_used(c, action):
+    with pool.connection() as conn:
+        adoption.action(conn, c["id"], "planner", action)
+
+
+@app.get("/app/api/planner")
+def planner_state(c=Depends(need("planner"))):
+    _rate("planner", str(c["id"]), 120, 60)
+    with _own(c) as conn:
+        return pl.state(conn, c["id"])
+
+
+@app.patch("/app/api/planner/prefs")
+def planner_prefs(body: PlPrefsIn, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.prefs_set(conn, c["id"], body.digest)
+
+
+@app.post("/app/api/planner/notebooks")
+def planner_nb_create(body: PlNotebookIn, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.nb_create(conn, c["id"], body.name, body.color, body.icon)
+
+
+@app.patch("/app/api/planner/notebooks/{nid}")
+def planner_nb_update(nid: int, body: PlNotebookPatch, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.nb_update(conn, c["id"], nid, body.name, body.color, body.icon, body.sort)
+
+
+@app.delete("/app/api/planner/notebooks/{nid}")
+def planner_nb_delete(nid: int, force: bool = False, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.nb_delete(conn, c["id"], nid, force)
+
+
+@app.get("/app/api/planner/search")
+def planner_search(q: str = Query("", max_length=120), c=Depends(need("planner"))):
+    _rate("planner-search", str(c["id"]), 120, 60)
+    with _own(c) as conn:
+        return pl.search(conn, c["id"], q)
+
+
+@app.post("/app/api/planner/pages")
+def planner_page_create(body: PlPageIn, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        r = pl.page_create(conn, c["id"], body.notebook_id, body.kind, body.title, body.doc, body.tags, body.day, body.status, body.due)
+    _pl_used(c, "note")
+    return r
+
+
+@app.post("/app/api/planner/pages/merge")
+def planner_pages_merge(body: PlMergeIn, c=Depends(need("planner"))):
+    _rate("planner-heavy", str(c["id"]), 30, 60)
+    with _own(c) as conn:
+        return pl.pages_merge(conn, c["id"], body.ids, body.title, body.notebook_id, body.trash_sources)
+
+
+@app.post("/app/api/planner/pages/docs")
+def planner_pages_docs(body: PlIdsIn, c=Depends(need("planner"))):
+    _rate("planner-heavy", str(c["id"]), 30, 60)
+    with _own(c) as conn:
+        return pl.pages_docs(conn, c["id"], body.ids)
+
+
+@app.post("/app/api/planner/trash/empty")
+def planner_trash_empty(c=Depends(need("planner"))):
+    _rate("planner-heavy", str(c["id"]), 30, 60)
+    with _own(c) as conn:
+        return pl.trash_empty(conn, c["id"])
+
+
+@app.get("/app/api/planner/pages/{pid}")
+def planner_page_get(pid: int, c=Depends(need("planner"))):
+    _rate("planner", str(c["id"]), 120, 60)
+    with _own(c) as conn:
+        return pl.page_get(conn, c["id"], pid)
+
+
+@app.put("/app/api/planner/pages/{pid}")
+def planner_page_save(pid: int, body: PlPageSave, c=Depends(need("planner"))):
+    _rate("planner-save", str(c["id"]), 120, 60)
+    with _own(c) as conn:
+        return pl.page_save(conn, c["id"], pid, body.title, body.doc, body.rev)
+
+
+@app.patch("/app/api/planner/pages/{pid}")
+def planner_page_patch(pid: int, body: PlPagePatch, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.page_patch(conn, c["id"], pid, _pl_changes(body, {"day", "due"}))
+
+
+@app.delete("/app/api/planner/pages/{pid}")
+def planner_page_delete(pid: int, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.page_delete(conn, c["id"], pid)
+
+
+@app.post("/app/api/planner/pages/{pid}/copy")
+def planner_page_copy(pid: int, c=Depends(need("planner"))):
+    _rate("planner-heavy", str(c["id"]), 30, 60)
+    with _own(c) as conn:
+        return pl.page_copy(conn, c["id"], pid)
+
+
+@app.post("/app/api/planner/pages/{pid}/split")
+def planner_page_split(pid: int, body: PlSplitIn, c=Depends(need("planner"))):
+    _rate("planner-heavy", str(c["id"]), 30, 60)
+    with _own(c) as conn:
+        return pl.page_split(conn, c["id"], pid, body.mode, body.level, body.index, body.trash_source)
+
+
+@app.post("/app/api/planner/tasks")
+def planner_task_create(body: PlTaskIn, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.task_create(conn, c["id"], body.notebook_id, body.title, body.note, body.status, body.priority, body.due, body.repeat,
+                              body.tags, body.page_id, body.kind, body.start, body.parent_id, body.after_id, body.progress, body.time_from, body.time_to,
+                              body.plan_id)
+
+
+@app.post("/app/api/planner/plans")
+def planner_plan_create(body: PlPlanIn, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.plan_create(conn, c["id"], body.notebook_id, body.name)
+
+
+@app.patch("/app/api/planner/plans/{pid}")
+def planner_plan_patch(pid: int, body: PlPlanPatch, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.plan_patch(conn, c["id"], pid, body.name, body.notebook_id, body.sort)
+
+
+@app.delete("/app/api/planner/plans/{pid}")
+def planner_plan_delete(pid: int, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.plan_delete(conn, c["id"], pid)
+
+
+@app.post("/app/api/planner/tasks/{tid}/move")
+def planner_task_move(tid: int, body: PlMoveIn, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.task_move(conn, c["id"], tid, body.action)
+
+
+@app.post("/app/api/planner/tasks/clear-done")
+def planner_tasks_clear(body: PlClearIn, c=Depends(need("planner"))):
+    _rate("planner-heavy", str(c["id"]), 30, 60)
+    with _own(c) as conn:
+        return pl.tasks_clear_done(conn, c["id"], body.notebook_id, body.status)
+
+
+@app.patch("/app/api/planner/tasks/{tid}")
+def planner_task_patch(tid: int, body: PlTaskPatch, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    ch = _pl_changes(body, {"due", "repeat", "page_id", "start", "time_from", "time_to"})
+    with _own(c) as conn:
+        r = pl.task_patch(conn, c["id"], tid, ch)
+    if ch.get("status") == "done" and r["task"]["status"] == "done":
+        _pl_used(c, "task_done")
+    return r
+
+
+@app.delete("/app/api/planner/tasks/{tid}")
+def planner_task_delete(tid: int, c=Depends(need("planner"))):
+    _rate("planner-write", str(c["id"]), 300, 60)
+    with _own(c) as conn:
+        return pl.task_delete(conn, c["id"], tid)
+
+
+@app.post("/app/api/planner/files")
+def planner_file_add(body: PlFileIn, c=Depends(need("planner"))):
+    _rate("planner-files", str(c["id"]), 40, 60)
+    with _own(c) as conn:
+        return pl.file_add(conn, c["id"], body.image)
+
+
+@app.get("/app/api/planner/files/{fid}")
+def planner_file_get(fid: int, c=Depends(need("planner"))):
+    _rate("planner-file", str(c["id"]), 600, 60)
+    with _own(c) as conn:
+        return pl.file_get(conn, c["id"], fid)

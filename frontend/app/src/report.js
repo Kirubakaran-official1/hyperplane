@@ -21,7 +21,10 @@ const toneOf = v => v == null ? "side" : v < 0 ? "bad" : v >= 24 ? "good" : "sid
 const mix = (a, b, k) => "#" + [1, 3, 5].map(i => Math.round(parseInt(a.substr(i, 2), 16) * (1 - k) + parseInt(b.substr(i, 2), 16) * k)
   .toString(16).padStart(2, "0")).join("");
 
+// round 23: the ETF Analyser's basket report draws the same pages — m.noun / m.nouns ("ETF" / "ETFs"), m.band, m.title1, m.tagline and
+// m.header change the words only (the stock report leaves them out and reads exactly as before)
 export function downloadReport(m) {
+  const N1 = m.noun || "stock", N2 = m.nouns || "stocks", Cap = x => x[0].toUpperCase() + x.slice(1);
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const op = v => doc.setGState(new GState({ opacity: v }));
   const font = (size, style = "normal", color = C.ink) => { doc.setFont("helvetica", style); doc.setFontSize(size); doc.setTextColor(color); };
@@ -79,13 +82,13 @@ export function downloadReport(m) {
   font(22, "bold", "#FFFFFF"); text("Hyperplane", M + 23, 29.5);
   font(10, "normal", "#A5B4FC"); text("by QuantFriday", M + 23.5, 35.5);
   gradLine(M + 2, W - M - 2, 50, 0.6);
-  font(10, "bold", C.cyan); doc.setCharSpace(1.2); text("HYPERPLANE AI  ·  PORTFOLIO ANALYSER", M + 2, 92); doc.setCharSpace(0);
-  font(40, "bold", "#FFFFFF"); text("AI Portfolio", M + 2, 112);
+  font(10, "bold", C.cyan); doc.setCharSpace(1.2); text(m.band || "HYPERPLANE AI  ·  PORTFOLIO ANALYSER", M + 2, 92); doc.setCharSpace(0);
+  font(40, "bold", "#FFFFFF"); text(m.title1 || "AI Portfolio", M + 2, 112);
   font(40, "bold", C.violet); text("Report", M + 2, 128);
-  font(12.5, "normal", "#CBD5E1"); wrap("A clear, long-term view of the stocks you hold, prepared by Hyperplane AI.", 150)
+  font(12.5, "normal", "#CBD5E1"); wrap(m.tagline || "A clear, long-term view of the stocks you hold, prepared by Hyperplane AI.", 150)
     .forEach((l, i) => text(l, M + 2, 142 + i * 6.2));
   doc.setFillColor(C.navy2); doc.setDrawColor(C.navyLine); doc.setLineWidth(0.4); doc.roundedRect(M + 2, 160, W - 2 * M - 4, 44, 3, 3, "FD");
-  [["Prepared for", m.customer || "You"], ["Data as of", m.asOf], ["Report date", m.generated], ["Stocks analysed", String(m.total)]].forEach(([k, v], i) => {
+  [["Prepared for", m.customer || "You"], ["Data as of", m.asOf], ["Report date", m.generated], [`${Cap(N2)} analysed`, String(m.total)]].forEach(([k, v], i) => {
     const x = M + 10 + (i % 2) * 86, yy = 172 + Math.floor(i / 2) * 19;
     font(7.5, "bold", "#7C8DB5"); doc.setCharSpace(0.6); text(k.toUpperCase(), x, yy); doc.setCharSpace(0);
     font(12, "bold", "#FFFFFF"); text(v, x, yy + 6.5);
@@ -98,7 +101,7 @@ export function downloadReport(m) {
     dot(cx + 3.8, 218.5, 1.2, C[c.tone]); font(9.5, "bold", "#FFFFFF"); text(label, cx + 6.6, 220); cx += w + 4;
   });
   font(8.5, "normal", "#94A3B8");
-  wrap(`Private to you. This report was made on your own device for ${m.customer || "you"}, the account holder. Your stock list is never visible to other users or to the admin, as per SEBI norms.`, W - 2 * M - 4)
+  wrap(`Private to you. This report was made on your own device for ${m.customer || "you"}, the account holder. Your ${N1} list is never visible to other users or to the admin, as per SEBI norms.`, W - 2 * M - 4)
     .forEach((l, i) => text(l, M + 2, 256 + i * 4.4));
   font(8, "normal", "#64748B"); text("For education only. Not investment advice. Please do your own research or consult a SEBI-registered adviser.", M + 2, 270);
   gradLine(M + 2, W - M - 2, 278, 0.4);
@@ -106,7 +109,7 @@ export function downloadReport(m) {
 
   // ── 2. overview: AI summary | gauge, spread bar ─────────────────────────────────────────────────────────────
   newPage();
-  y = heading(y, "Portfolio overview", `Hyperplane AI summary of your ${m.total} stock${m.total === 1 ? "" : "s"}.`);
+  y = heading(y, "Portfolio overview", `Hyperplane AI summary of your ${m.total} ${m.total === 1 ? N1 : N2}.`);
   const sumW = 104, lx = M + 6, rx = M + sumW + 10;
   font(10, "normal"); const bullets = m.lines.map(([tone, s]) => [tone, wrap(s, sumW - 10)]);
   const textH = 16 + bullets.reduce((a, [, ls]) => a + ls.length * lh(9.5) + 2.2, 0);
@@ -142,7 +145,7 @@ export function downloadReport(m) {
   y += panelH + 8;
 
   ensure(30);
-  font(7.5, "bold", C.mute); doc.setCharSpace(0.6); text("HOW YOUR STOCKS ARE SPREAD", M, y + 3); doc.setCharSpace(0);
+  font(7.5, "bold", C.mute); doc.setCharSpace(0.6); text(`HOW YOUR ${N2.toUpperCase()} ARE SPREAD`, M, y + 3); doc.setCharSpace(0);
   y += 6;
   const live = m.cats.filter(c => c.count), totalN = live.reduce((a, c) => a + c.count, 0) || 1;
   let bx = M; const bw = W - 2 * M;
@@ -177,7 +180,7 @@ export function downloadReport(m) {
   const boxH = c => 25 + Math.max(1, Math.min(c.items.length, MAXI) + (c.items.length > MAXI ? 1 : 0)) * rowH;
   for (let r = 0; r < 2; r++) {
     const pair = m.cats.slice(r * 2, r * 2 + 2), h = Math.max(...pair.map(boxH));
-    if (r === 0) { ensure(h + 24); y = heading(y, "Your stocks by colour", "Red first, then amber, then green. Grey stocks are too new for a view."); }
+    if (r === 0) { ensure(h + 24); y = heading(y, `Your ${N2} by colour`, `Red first, then amber, then green. Grey ${N2} are too new for a view.`); }
     else ensure(h + 4);
     pair.forEach((c, i) => {
       const x = M + i * (gw + 6);
@@ -198,14 +201,14 @@ export function downloadReport(m) {
         font(8.5, "bold", it.v == null ? C.sub : C[toneOf(it.v)]); text(it.v == null ? it.extra : `${sgn(it.v)}%`, x + gw - 5, iy, { align: "right" });
         doc.setDrawColor(C.line); doc.setLineWidth(0.2); doc.line(x + 5, iy + 2, x + gw - 5, iy + 2); iy += rowH;
       });
-      if (c.items.length > MAXI) { font(8, "normal", C.mute); text(`+ ${c.items.length - MAXI} more, see the stock details`, x + 5, iy); }
+      if (c.items.length > MAXI) { font(8, "normal", C.mute); text(`+ ${c.items.length - MAXI} more, see the ${N1} details`, x + 5, iy); }
     });
     y += h + 6;
   }
 
   // ── 4. Trend map ────────────────────────────────────────────────────────────────────────────────────────────
   ensure(112);
-  y = heading(y, "Trend map", "One dot per stock. Further right: stronger quarterly trend. Higher up: stronger yearly trend.");
+  y = heading(y, "Trend map", `One dot per ${N1}. Further right: stronger quarterly trend. Higher up: stronger yearly trend.`);
   const px0 = M + 12, px1 = W - M - 2, py0 = y + 7, py1 = y + 78;
   const X = v => px0 + (v + 100) / 200 * (px1 - px0), Y = v => py0 + (100 - v) / 200 * (py1 - py0);
   [["Rising", "good", 1, 1], ["Cooling off", "mid", -1, 1], ["Recovering", "mid", 1, -1], ["Falling", "bad", -1, -1]].forEach(([lbl, tone, sx, sy]) => {
@@ -223,12 +226,12 @@ export function downloadReport(m) {
   dots.forEach(d => { const g = tags[d.s]; if (g) text(d.s, g[1], g[2], { align: g[0] === "start" ? "left" : g[0] === "end" ? "right" : "center" }); });
   y = py1 + 15;
   font(8, "normal", C.sub);
-  wrap(`Dot colours match the colour groups.${m.hidden ? ` ${m.hidden} stock${m.hidden === 1 ? " is" : "s are"} not shown: recently listed or no yearly view yet.` : ""}`, W - 2 * M).forEach(l => { text(l, M, y); y += 4; });
+  wrap(`Dot colours match the colour groups.${m.hidden ? ` ${m.hidden} ${m.hidden === 1 ? `${N1} is` : `${N2} are`} not shown: recently listed or no yearly view yet.` : ""}`, W - 2 * M).forEach(l => { text(l, M, y); y += 4; });
   y += 4;
 
   // ── 5. stock by stock ───────────────────────────────────────────────────────────────────────────────────────
   ensure(80);
-  y = heading(y, "Stock by stock", "Look-at-first stocks come first. Each stock with its strength and the reasons in plain words.");
+  y = heading(y, `${Cap(N1)} by ${N1}`, `Look-at-first ${N2} come first. Each ${N1} with its strength and the reasons in plain words.`);
   const RW = 90, rX = W - M - RW - 4, LW = rX - M - 10;
   m.stocks.forEach(st => {
     font(8.8, "normal"); const why = st.why.map(w => wrap(w, RW - 5));
@@ -250,7 +253,7 @@ export function downloadReport(m) {
       doc.setFillColor(C.panel); doc.setDrawColor(C.line); doc.roundedRect(M + 6, cy0, LW, 16, 2, 2, "FD");
       font(9, "bold", C.sub); text("Recently listed", M + 10, cy0 + 6.5); font(8, "normal", C.mute); text("No view yet", M + 10, cy0 + 11.5);
     } else {
-      font(7, "bold", C.mute); doc.setCharSpace(0.5); text("STOCK STRENGTH", M + 6, cy0 + 1); doc.setCharSpace(0);
+      font(7, "bold", C.mute); doc.setCharSpace(0.5); text(`${N1.toUpperCase()} STRENGTH`, M + 6, cy0 + 1); doc.setCharSpace(0);
       font(18, "bold", C[toneOf(st.v)]); text(sgn(st.v), M + 6, cy0 + 9.5);
       const vw = doc.getTextWidth(sgn(st.v)); font(9, "bold", C[toneOf(st.v)]); text(st.word, M + 9 + vw, cy0 + 9);
       const barY = cy0 + 13, bx0 = M + 6, bw0 = LW, mid = bx0 + bw0 / 2;
@@ -278,7 +281,7 @@ export function downloadReport(m) {
 
   // ── 6. how to read ──────────────────────────────────────────────────────────────────────────────────────────
   newPage();
-  y = heading(y, "How to read this report", "Plain-word guide to the colours, the strength and the notes on each stock.");
+  y = heading(y, "How to read this report", `Plain-word guide to the colours, the strength and the notes on each ${N1}.`);
   m.cats.forEach(c => {
     const ls = (font(9, "normal"), wrap(c.long, W - 2 * M - 52));
     const h = Math.max(11, ls.length * lh(9) + 5);
@@ -349,7 +352,7 @@ export function downloadReport(m) {
   }
 
   ensure(28); y += 1;
-  font(9, "normal"); const disc = wrap("For education only. This report describes the trend of each stock using Hyperplane's own quant algorithms. It is not investment advice and not a recommendation to buy or sell any security. Please do your own research or consult a SEBI-registered adviser before investing.", W - 2 * M - 12);
+  font(9, "normal"); const disc = wrap(`For education only. This report describes the trend of each ${N1} using Hyperplane's own quant algorithms. It is not investment advice and not a recommendation to buy or sell any security. Please do your own research or consult a SEBI-registered adviser before investing.`, W - 2 * M - 12);
   const dh = disc.length * lh(9) + 13;
   doc.setFillColor("#FFF8EC"); doc.setDrawColor("#F6D9A4"); doc.roundedRect(M, y, W - 2 * M, dh, 2.5, 2.5, "FD");
   font(9.5, "bold", "#9A5B00"); text("Information, not advice", M + 6, y + 6.5);
@@ -361,7 +364,7 @@ export function downloadReport(m) {
     doc.setPage(p);
     logo(M, 8.5, 9.5);
     font(11, "bold", C.ink); text("Hyperplane", M + 12, 13.2); font(7.5, "normal", C.sub); text("by QuantFriday", M + 12, 17.4);
-    font(10, "bold", C.ink); text("AI Portfolio Report", W - M, 13.2, { align: "right" });
+    font(10, "bold", C.ink); text(m.header || "AI Portfolio Report", W - M, 13.2, { align: "right" });
     font(7.5, "normal", C.sub); text(`${m.customer ? `${m.customer}  ·  ` : ""}Data as of ${m.asOf}`, W - M, 17.4, { align: "right" });
     gradLine(M, W - M, 21.5, 0.7);
     doc.setDrawColor(C.line); doc.setLineWidth(0.3); doc.line(M, 283, W - M, 283);

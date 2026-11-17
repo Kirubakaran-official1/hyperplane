@@ -278,9 +278,9 @@ def track(c, row, sym=None, stepup=None):
                 for h in hold:
                     meta[h["s"]] = h
                     held_from.setdefault(h["s"], d.isoformat())
-                if kind in ("analyser", "builder"):
+                if kind in ("analyser", "etf", "builder"):
                     for h in hold:
-                        spent = buy(h["s"], 1 if kind == "analyser" else (h.get("qty") or h.get("units") or 0))
+                        spent = buy(h["s"], 1 if kind in ("analyser", "etf") else (h.get("qty") or h.get("units") or 0))
                         put_in += spent
                     if bp:
                         bq = put_in / bp
@@ -292,7 +292,7 @@ def track(c, row, sym=None, stepup=None):
                     proceeds[s] = proceeds.get(s, 0) + qty.get(s, 0) * p
                     cash += qty.get(s, 0) * p + bucket.pop(s, 0.0)
                     qty[s] = 0
-                if came and kind == "analyser":                # 1 share of each new stock; any shortfall is new money
+                if came and kind in ("analyser", "etf"):       # 1 share / unit of each new one; any shortfall is new money
                     for s in came:
                         spent = buy(s, 1)
                         extra = max(0.0, spent - cash)

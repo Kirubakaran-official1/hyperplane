@@ -252,13 +252,15 @@ _cache = {}
 
 
 def admin_rows(snapshot_id, as_of):
-    """Admin → Control Tower → ETF analyser (cached per collection; None = no ETF data in that collection)."""
-    if snapshot_id not in _cache:
+    """Admin → Control Tower → ETF analyser (cached per collection and score set; None = no ETF data in that collection)."""
+    from . import scoring                                             # late: scoring loads this module
+    key = (snapshot_id, scoring.sync())
+    if key not in _cache:
         b = bundle_of(snapshot_id)
         if len(_cache) >= 4:
             _cache.pop(next(iter(_cache)))
-        _cache[snapshot_id] = analyse(b, as_of) if b else None
-    return _cache[snapshot_id]
+        _cache[key] = analyse(b, as_of) if b else None
+    return _cache[key]
 
 
 def store(snapshot_id, path):

@@ -29,7 +29,7 @@ addCss("notify", `
 .nc-all{display:block;width:100%;padding:10px 14px;border:0;background:var(--s1);color:var(--acc);font:600 12.5px var(--sans);cursor:pointer;text-align:center}
 `);
 
-const CODE = { portfolio: "PA", builder: "PB", sip: "ES", msip: "MS", hyperplane: "HP", helpdesk: "HD", community: "CM" };
+const CODE = { portfolio: "PA", builder: "PB", sip: "ES", msip: "MS", hyperplane: "HP", helpdesk: "HD", community: "CM", planner: "PL" };
 const ago = iso => {
   const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
   return m < 1 ? "now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;

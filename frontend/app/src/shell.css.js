@@ -1320,6 +1320,8 @@ footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 .hp-actbar .hp-grp>.px-btn{height:34px;border-radius:0;box-shadow:none;border-right:1px solid var(--b1)}
 .hp-actbar .hp-grp>.px-btn:hover:not(:disabled){box-shadow:none;background:var(--adim)}
 .hp-actbar .hp-grp .tcopy{height:34px;border:0;border-radius:0;box-shadow:none;background:none;padding:0 4px 0 10px}
+.hp-actbar .hp-dll{display:inline-flex;align-items:center;height:34px;padding:0 10px 0 12px;font:600 12.5px var(--sans);color:var(--t2);border-right:1px solid var(--b1);white-space:nowrap}
+.hp-actbar .hp-dlg>.px-btn:last-child{border-right:0}.hp-actbar .hp-dlg>.px-btn{gap:5px}
 .hp-actbar .tcopy .lbl{font:600 11.5px var(--sans);letter-spacing:0;text-transform:none;color:var(--t2)}
 .hp-actbar .px-btn.hp-link{box-shadow:none;background:none;color:var(--t2);padding:0 6px}.hp-actbar .px-btn.hp-link:hover:not(:disabled){box-shadow:none;color:var(--acc)}
 .hp-actbar .px-btn.primary{margin-left:auto;height:34px!important;min-height:0!important;line-height:1;padding:0 14px;background:var(--adim);color:var(--acc);box-shadow:0 0 0 1px var(--accb)}

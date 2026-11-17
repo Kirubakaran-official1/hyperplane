@@ -46,6 +46,8 @@ from .db import (DEFAULT_SETTINGS, TECH_TF_DEFAULT, get_auto_approve, get_histor
 from .schedule import TZ, next_runs, now, parse_hhmm
 from .publish import FORMULA_VERSION, history_missing, publish
 from . import evidence
+from . import scoring
+from . import zone_engine
 from .security import hash_password
 from .store import save_snapshot, taken_at_from_filename, workbook_to_sheets
 
@@ -864,6 +866,111 @@ def evidence_rebuild(user=Depends(admin_user)):
     return {**evidence.status(), "pending": len(history_missing())}
 
 
+# ── ⚙ Admin → 🎚 Scoring (round 24, app/scoring.py): named sets of the strength engine's numbers, compare one with the live set on the stored
+# days (and how each colour group did afterwards), apply it — today's publish at once, every past day by the worker. Owner only.
+class ScoreIn(BaseModel):
+    name: str = Field(..., max_length=80)
+    params: dict | None = None                      # None = the live set's numbers
+    note: str | None = Field(None, max_length=300)
+
+
+class ScorePatch(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    params: dict | None = None
+    note: str | None = Field(None, max_length=300)
+
+
+class ScoreCompareIn(BaseModel):
+    params: dict
+    days: int = Field(30, ge=1, le=scoring.DAYS_MAX)
+
+
+def _score_err(e):
+    if isinstance(e, LookupError):
+        raise HTTPException(404, str(e))
+    if isinstance(e, PermissionError):
+        raise HTTPException(409, str(e))
+    raise HTTPException(422, str(e))
+
+
+@app.get("/api/admin/scoring")
+def scoring_home(user=Depends(admin_user)):
+    scoring.sync()
+    return {"profiles": scoring.profiles(), "status": scoring.status(), "defaults": zone_engine.DEFAULT_PARAMS,
+            "table": scoring.period_table(), "rows": [t for t, _ in scoring.T_ROWS], "cols": [p for p, _ in scoring.P_COLS],
+            "t_values": [t for _, t in scoring.T_ROWS], "p_values": [p for _, p in scoring.P_COLS], "days_max": scoring.DAYS_MAX}
+
+
+@app.get("/api/admin/scoring/status")
+def scoring_status(user=Depends(admin_user)):
+    return scoring.status()
+
+
+@app.post("/api/admin/scoring/profiles")
+def scoring_create(body: ScoreIn, user=Depends(admin_user)):
+    try:
+        params = body.params if body.params is not None else next(p["params"] for p in scoring.profiles() if p["status"] == "active")
+        return scoring.create(body.name, params, user["name"], body.note)
+    except (ValueError, LookupError, PermissionError) as e:
+        _score_err(e)
+
+
+@app.patch("/api/admin/scoring/profiles/{pid}")
+def scoring_update(pid: int, body: ScorePatch, user=Depends(admin_user)):
+    try:
+        return scoring.update(pid, body.name, body.params, body.note)
+    except (ValueError, LookupError, PermissionError) as e:
+        _score_err(e)
+
+
+@app.delete("/api/admin/scoring/profiles/{pid}")
+def scoring_delete(pid: int, user=Depends(admin_user)):
+    try:
+        scoring.delete(pid)
+        return {"ok": True}
+    except (ValueError, LookupError, PermissionError) as e:
+        _score_err(e)
+
+
+@app.post("/api/admin/scoring/profiles/{pid}/duplicate")
+def scoring_duplicate(pid: int, user=Depends(admin_user)):
+    src = next((p for p in scoring.profiles() if p["id"] == pid), None)
+    if not src:
+        raise HTTPException(404, "That score set was not found")
+    try:
+        return scoring.create(f"{src['name']} (copy)"[:60], src["params"], user["name"], src["note"])
+    except ValueError as e:
+        _score_err(e)
+
+
+@app.post("/api/admin/scoring/compare")
+def scoring_compare(body: ScoreCompareIn, user=Depends(admin_user)):
+    try:
+        return scoring.compare(body.params, body.days)
+    except ValueError as e:
+        _score_err(e)
+    except RuntimeError as e:
+        raise HTTPException(429, str(e))
+
+
+@app.post("/api/admin/scoring/profiles/{pid}/apply")
+def scoring_apply(pid: int, request: Request, user=Depends(admin_user)):
+    """make a score set live: the latest publish is rescored now; the worker rescores every other stored output in the background"""
+    try:
+        new, old = scoring.apply(pid, user["name"])
+    except (ValueError, LookupError, PermissionError) as e:
+        _score_err(e)
+    try:
+        done = scoring.rescore_latest()
+    except Exception as e:                                       # noqa: BLE001 — the worker retries it
+        done = {"error": str(e)[:200]}
+    with pool.connection() as c:
+        act.log(c, actor_kind="user", actor_id=user["name"], actor_name=user["name"], app="admin", event="scoring_apply",
+                ip=_client_ip(request), detail={"to": {"id": new["id"], "name": new["name"]},
+                                                                         "from": {"id": old["id"], "name": old["name"]} if old else None})
+    return {"live": pid, "latest": done, "status": scoring.status()}
+
+
 @app.get("/api/admin/customer-history")
 def customer_history_status(user=Depends(admin_user)):
     return _history_status()
@@ -890,7 +997,8 @@ def list_customers(user=Depends(admin_user)):
 # ── Shared portfolios (owner 2026-11-07, round 15: "the list of every saved portfolio by the user name with the ID, public or private,
 # value and category — to track the engagement; a separate sub-app in the admin console"). Read only: the customer, the portfolio's ID,
 # name, application, visibility, holdings, changes, how often its public link was opened, and its tracked value. No holdings are sent.
-PF_TAG = {"sip": "AI ETF SIP Builder", "msip": "AI Momentum SIP Builder", "builder": "AI Portfolio Builder", "analyser": "AI Portfolio Analyser"}
+PF_TAG = {"sip": "AI ETF SIP Builder", "msip": "AI Momentum SIP Builder", "builder": "AI Portfolio Builder", "analyser": "AI Portfolio Analyser",
+          "etf": "ETF Analyser"}
 
 
 @app.get("/api/admin/portfolios")

@@ -11,6 +11,7 @@ import { Community, useCommunityUnread } from "../shared/community.jsx";
 import { AccessTab } from "./access.jsx";
 import { PortfoliosTab } from "./portfolios.jsx";
 import { AdoptionTab } from "./adoption.jsx";
+import { ScoringTab } from "./scoring.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 let onUnauthorized = () => {};
@@ -1077,12 +1078,14 @@ function AdminArea({ snaps, notify, ...adminProps }) {
         {tab("access", "🔐 Access manager")}
         {tab("portfolios", "📂 Shared portfolios")}
         {tab("zerodha", "🔗 Zerodha")}
+        {tab("scoring", "🎚 Scoring")}
       </div>
       {sub === "customers" ? <CustomersTab snaps={snaps} notify={notify} />
         : sub === "activity" ? <AdoptionTab api={api} notify={notify} />
         : sub === "access" ? <AccessTab api={api} notify={notify} />
         : sub === "portfolios" ? <PortfoliosTab api={api} notify={notify} />
         : sub === "zerodha" ? <ZerodhaTab notify={notify} />
+        : sub === "scoring" ? <ScoringTab api={api} notify={notify} />
         : <AdminTab snaps={snaps} notify={notify} {...adminProps} />}
     </div>
   );

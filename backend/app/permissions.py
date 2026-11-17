@@ -75,8 +75,13 @@ PERMISSIONS = (
     ("msip:zerodha", "Buy on Zerodha", "Open Kite with this Momentum SIP's instalment, or a swap (sell + buy), filled in", "msip:view", True),
     ("builder:zerodha", "Buy on Zerodha", "Open Kite with the built portfolio's quantities, or a swap (sell + buy), filled in", "builder:view", True),
     ("portfolio:zerodha", "Buy on Zerodha", "Open Kite with a swap of the Analyser list (sell + buy) filled in", "portfolio:view", True),
+    # round 23 (owner 2026-11-15: "ETF basket → the analyser … save portfolio … place the order to Zerodha as SIP or one time"): an ETF
+    # Analyser basket saved as an ETF portfolio, shared like the others; Buy on Zerodha owner-level first, like every other application
+    ("etf:share", "Share saved ETF portfolios", "Give a saved ETF portfolio an ID and make it private or public", "etf:view", False),
+    ("etf:zerodha", "Buy on Zerodha", "Open Kite with the ETF basket's units filled in (a one-time buy)", "etf:view", True),
     # round 21 (owner 2026-11-13: "in More apps, All Portfolios to see the portfolios of every sub-application — for all customers, not pinned")
     ("portfolios:view", "Open All Portfolios", "Every saved portfolio of the applications the customer holds, in one place", None, False),
+    ("planner:view", "Open Hyperplane Planner", "Private to-dos, notes, plans and calendar — each customer sees only their own", None, False),
 )
 KEYS = tuple(p[0] for p in PERMISSIONS)
 assert all(r is None or r in KEYS for *_, r, _ in PERMISSIONS), "requires must name a catalogue key"
@@ -231,7 +236,7 @@ def migrate_msip_detail(c):
     c.execute("INSERT INTO settings (key, value) VALUES ('msip_detail_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
 
 
-ZERODHA_PERMS = ("sip:zerodha", "msip:zerodha", "builder:zerodha", "portfolio:zerodha")
+ZERODHA_PERMS = ("sip:zerodha", "msip:zerodha", "builder:zerodha", "portfolio:zerodha")   # etf:zerodha came later (migrate_etf_basket)
 
 
 def migrate_zerodha(c):
@@ -249,6 +254,26 @@ def migrate_all_portfolios(c):
         return
     c.execute("INSERT INTO role_permissions (role_id, permission) SELECT id, 'portfolios:view' FROM roles ON CONFLICT DO NOTHING")
     c.execute("INSERT INTO settings (key, value) VALUES ('all_portfolios_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
+
+
+def migrate_etf_basket(c):
+    """Once (round 23): every role that opens the ETF Analyser may share its saved ETF portfolios; Customer Admin gets Buy on Zerodha."""
+    if c.execute("SELECT 1 FROM settings WHERE key = 'etf_basket_v1'").fetchone():
+        return
+    c.execute("INSERT INTO role_permissions (role_id, permission) SELECT role_id, 'etf:share' FROM role_permissions WHERE permission = 'etf:view' "
+              "ON CONFLICT DO NOTHING")
+    c.execute("INSERT INTO role_permissions (role_id, permission) SELECT id, 'etf:zerodha' FROM roles WHERE lower(name) = 'customer admin' "
+              "ON CONFLICT DO NOTHING")
+    c.execute("INSERT INTO settings (key, value) VALUES ('etf_basket_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
+
+
+def migrate_planner(c):
+    """Once (round 22): the Hyperplane Planner goes to the Customer Admin role first; the owner gives it to other roles in Access manager."""
+    if c.execute("SELECT 1 FROM settings WHERE key = 'planner_v1'").fetchone():
+        return
+    c.execute("INSERT INTO role_permissions (role_id, permission) SELECT id, 'planner:view' FROM roles WHERE lower(name) = 'customer admin' "
+              "ON CONFLICT DO NOTHING")
+    c.execute("INSERT INTO settings (key, value) VALUES ('planner_v1', 'true'::jsonb) ON CONFLICT DO NOTHING")
 
 
 def migrate_pins8(c):

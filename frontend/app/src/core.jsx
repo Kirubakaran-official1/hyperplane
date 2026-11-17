@@ -39,6 +39,7 @@ const ICON_PATHS = {
   edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></>,
   trend: <><path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/></>,
   help: <><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></>,
+  basket: <><path d="m15 11-1 9"/><path d="m19 11-4-7"/><path d="M2 11h20"/><path d="m3.5 11 1.6 7.4a2 2 0 0 0 2 1.6h9.8a2 2 0 0 0 2-1.6l1.7-7.4"/><path d="M4.5 15.5h15"/><path d="m5 11 4-7"/><path d="m9 11 1 9"/></>,
   out: <><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></>,
 };
 export function Icon({ name, size = 16, className = "", title }) {
@@ -63,6 +64,9 @@ export const DISCLAIMER = "Hyperplane shows trend information for education only
 export const idx = tf => "DWMQY".indexOf(tf);
 export const dirTf = (s, i) => ({ G:1, W:-1, M:0 })[s.r[i]] ?? null;
 export const dirVal = v => v == null ? null : v >= TREND_CUT ? 1 : v <= -TREND_CUT ? -1 : 0;
+// round 24 (Admin → Scoring): the AI Portfolio engine's live colour cut travels inside the published view (data.cfg); Deep Research keeps TREND_CUT
+export const cutOf = data => (data && data.cfg && data.cfg.cut) || TREND_CUT;
+export const dirCut = (v, cut = TREND_CUT) => v == null ? null : v >= cut ? 1 : v <= -cut ? -1 : 0;
 // Level words (owner, 2026-10-11): Weak 0–30 · Average 31–60 · Good 61–80 · Strong 81–100 on the rounded |value|.
 // Stocks keep the sideways cut (|strength| < TREND_CUT); sector / industry use the same words on their 0–100% strength.
 export const levelOf = v => { const a = Math.round(Math.abs(v)); return a > 80 ? "Strong" : a > 60 ? "Good" : a > 30 ? "Average" : "Weak"; };
@@ -350,6 +354,8 @@ export const APP_ICON = {
   // AI Momentum SIP (2026-11-06): Lucide "trending-up"
   msip: <NavSvg><path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/></NavSvg>,
   portfolios: <NavSvg><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/></NavSvg>,
+  // Hyperplane Planner (round 22): Lucide "notebook-pen"
+  planner: <NavSvg><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></NavSvg>,
   // ETF analyser (2026-11-06): Lucide "coins"
   etf: <NavSvg><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></NavSvg>,
 };
@@ -357,7 +363,7 @@ export const APP_ICON = {
 // address"): /app/<app-name> for each application, /app/<app-name>/portfolio/<ID> for one of the customer's own saved portfolios (signed
 // in), /app/portfolio/<ID> for the PUBLIC page of a shared one (no sign-in, no app shell — main.jsx / public.jsx), /app/docs, /app/helpdesk.
 // The server already sends /app/* to the page (Caddyfile try_files).
-export const APP_SLUG = { simple: "ai-mode", research: "deep-research", portfolio: "portfolio-analyser", builder: "portfolio-builder", portfolios: "all-portfolios",
+export const APP_SLUG = { simple: "ai-mode", research: "deep-research", portfolio: "portfolio-analyser", builder: "portfolio-builder", portfolios: "all-portfolios", planner: "planner",
   etf: "etf-analyser", sip: "etf-sip-builder", msip: "momentum-sip-builder" };
 const SLUG_APP = Object.fromEntries(Object.entries(APP_SLUG).map(([k, v]) => [v, k]));
 export const routeOf = (p = window.location.pathname) => {

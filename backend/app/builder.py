@@ -251,6 +251,8 @@ def candidates(data, rel, opts=None):
         m, q, y = zv[2], zv[3], zv[4]
         parts = [(wts[k], t[2]) for k, t in (("M", m), ("Q", q), ("Y", y)) if t]
         st = round(sum(w * v for w, v in parts) / sum(w for w, _ in parts))
+        if len(zv) > 5:                                    # round 25: the zone ladder model's marks (Admin → Scoring) count here too
+            st = max(-100, min(100, st + zv[5]))
         tier = 1 if st >= t1 and q[2] >= 0 else 2 if t2 is not None and st >= t2 and q[2] >= 0 else 0
         if not tier:
             skip["weak"] += 1; continue

@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from . import detail
 from . import etf
+from . import scoring
 from . import monitor
 from . import tracking
 from . import liquidity
@@ -378,6 +379,7 @@ def build_public(sheets, settings, as_of, earlier=None):
                                        bool(settings.get("tech_enabled")), index_syms, reg)
     return {"v": 3, "as_of": as_of, "stocks": stocks, "top": [sym for _, _, sym in scored[:10]],
             "sectors": sectors, "industries": industries,
+            "cfg": scoring.cfg(),                                     # round 24: the live colour cut + period weights (Admin → Scoring)
             **({"rd": prev["date"]} if prev and reg else {})}         # day the "regime shifted" flags compare with
 
 
@@ -523,7 +525,7 @@ def state_rows(snap, payload):
     return out
 
 
-def _store_states(snap, payload):
+def _store_states(snap, payload, ver=1):
     rows = state_rows(snap, payload)
     with pool.connection() as c:
         c.execute("DELETE FROM stock_states WHERE snapshot_id = %s", (snap["id"],))
@@ -531,6 +533,8 @@ def _store_states(snap, payload):
             cur.executemany("INSERT INTO stock_states (snapshot_id, trade_date, taken_at, symbol, price, cap, rel, stretched, regime, "
                             "m_state, q_state, y_state, m_st, q_st, y_st, m_nr, q_nr, y_nr, strength, colour, formula) "
                             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", rows)
+        c.execute("INSERT INTO score_marks (snapshot_id, ver) VALUES (%s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET ver = EXCLUDED.ver, at = now()",
+                  (snap["id"], ver))
     return len(rows)
 
 
@@ -541,18 +545,22 @@ def build_history(snapshot_id):
         snap = c.execute("SELECT id, taken_at, trade_date, slot, source, data_gz FROM snapshots WHERE id = %s", (snapshot_id,)).fetchone()
     if not snap:
         return None
+    ver = scoring.sync()                         # round 24: the live score set builds it (and is recorded with it)
     sheets = json.loads(gzip.decompress(bytes(snap["data_gz"])))
+    scoring.store_factors(snap["id"], sheets)    # …and its factors, so a later score change never needs this raw collection again
+    scoring.store_etf_factors(snap["id"])
     payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat(), earlier_zones(snap["trade_date"]))
     if snap["source"] == "scheduled":
         gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
         egz = _etf_gz(snap["id"], snap["taken_at"].isoformat())
         with pool.connection() as c:
-            c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz, formula, etf_gz) "
-                      "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET data_gz = EXCLUDED.data_gz, "
-                      "stocks = EXCLUDED.stocks, formula = EXCLUDED.formula, etf_gz = COALESCE(EXCLUDED.etf_gz, customer_history.etf_gz), built_at = now()",
-                      (snap["id"], snap["trade_date"], snap["taken_at"], snap["slot"], len(payload["stocks"]), gz, FORMULA_VERSION, egz))
-    n = _store_states(snap, payload)
-    d = _store_detail(snap, sheets, payload) if snap["taken_at"] >= _detail_since() else 0
+            c.execute("INSERT INTO customer_history (snapshot_id, trade_date, taken_at, slot, stocks, data_gz, formula, etf_gz, score_ver) "
+                      "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (snapshot_id) DO UPDATE SET data_gz = EXCLUDED.data_gz, "
+                      "stocks = EXCLUDED.stocks, formula = EXCLUDED.formula, etf_gz = COALESCE(EXCLUDED.etf_gz, customer_history.etf_gz), "
+                      "score_ver = EXCLUDED.score_ver, built_at = now()",
+                      (snap["id"], snap["trade_date"], snap["taken_at"], snap["slot"], len(payload["stocks"]), gz, FORMULA_VERSION, egz, ver))
+    n = _store_states(snap, payload, ver)
+    d = _store_detail(snap, sheets, payload, ver) if snap["taken_at"] >= _detail_since() else 0
     return {"snapshot_id": snap["id"], "stocks": len(payload["stocks"]), "states": n, "detail": d}
 
 
@@ -584,7 +592,7 @@ def _detail_since():
     return datetime.now(timezone.utc) - timedelta(days=detail.DETAIL_DAYS)
 
 
-def _store_detail(snap, sheets, payload):
+def _store_detail(snap, sheets, payload, ver=1):
     """Stock detail view rows of one collection (customer-admin permission *:detail), one per stock + '~meta'."""
     with pool.connection() as c:
         g = c.execute("SELECT data_gz FROM snapshot_candles WHERE snapshot_id = %s", (snap["id"],)).fetchone()
@@ -594,10 +602,10 @@ def _store_detail(snap, sheets, payload):
     with pool.connection() as c:
         c.execute("DELETE FROM stock_detail WHERE snapshot_id = %s", (snap["id"],))
         gz = lambda v: gzip.compress(json.dumps(v, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
-        with c.cursor().copy("COPY stock_detail (snapshot_id, symbol, formula, data_gz) FROM STDIN") as cp:
-            cp.write_row((snap["id"], "~meta", FORMULA_VERSION, gz(meta)))
+        with c.cursor().copy("COPY stock_detail (snapshot_id, symbol, formula, data_gz, score_ver) FROM STDIN") as cp:
+            cp.write_row((snap["id"], "~meta", FORMULA_VERSION, gz(meta), ver))
             for sym, v in built["stocks"].items():
-                cp.write_row((snap["id"], sym, FORMULA_VERSION, gz(v)))
+                cp.write_row((snap["id"], sym, FORMULA_VERSION, gz(v), ver))
     return len(built["stocks"])
 
 
@@ -606,16 +614,23 @@ def history_missing(limit=None, skip_failed=True):
     need their past day, every one needs its stock states, the last DETAIL_DAYS days their stock detail rows. Collections that failed are skipped until the admin
     switches past days on again (that clears the list)."""
     failed = [int(k) for k in (get_meta("history_failed", {}) or {})] if skip_failed else []
+    ver = scoring.sync()
     with pool.connection() as c:
+        # round 24: another score set — collections WITHOUT factors are rebuilt here (the ones with factors: scoring.rescore, fast); the
+        # stock detail rows (last DETAIL_DAYS days) always here, they need the raw collection
         rows = c.execute(
             "SELECT s.id FROM snapshots s LEFT JOIN customer_history h ON h.snapshot_id = s.id "
             "WHERE NOT (s.id = ANY(%s)) AND ("
             "  (s.source = 'scheduled' AND (h.snapshot_id IS NULL OR h.formula < %s))"
             "  OR NOT EXISTS (SELECT 1 FROM stock_states t WHERE t.snapshot_id = s.id AND t.formula >= %s)"
             "  OR (s.taken_at >= %s AND NOT EXISTS (SELECT 1 FROM stock_detail d WHERE d.snapshot_id = s.id "
-            "      AND d.symbol = '~meta' AND d.formula >= %s))) "
+            "      AND d.symbol = '~meta' AND d.formula >= %s AND d.score_ver = %s))"
+            "  OR (NOT EXISTS (SELECT 1 FROM score_factors f WHERE f.snapshot_id = s.id AND f.kind = 'stock' AND f.schema = %s) AND ("
+            "      (h.snapshot_id IS NOT NULL AND h.score_ver <> %s)"
+            "      OR (EXISTS (SELECT 1 FROM stock_states t WHERE t.snapshot_id = s.id) AND "
+            "          coalesce((SELECT m.ver FROM score_marks m WHERE m.snapshot_id = s.id), 1) <> %s)))) "
             "ORDER BY s.taken_at DESC" + (" LIMIT %s" % int(limit) if limit else ""),
-            (failed, FORMULA_VERSION, FORMULA_VERSION, _detail_since(), FORMULA_VERSION)).fetchall()
+            (failed, FORMULA_VERSION, FORMULA_VERSION, _detail_since(), FORMULA_VERSION, ver, scoring.SCHEMA, ver, ver)).fetchall()
     return [r["id"] for r in rows]
 
 
@@ -655,10 +670,16 @@ def publish(snapshot_id=None, mode="manual", by=None, dry_run=False):
         snap = c.execute(q, (snapshot_id,) if snapshot_id else ()).fetchone()
     if not snap:
         raise ValueError("no collection to publish")
+    ver = scoring.sync()
     sheets = json.loads(gzip.decompress(bytes(snap["data_gz"])))
     payload = build_public(sheets, get_settings(), snap["taken_at"].isoformat(), earlier_zones(snap["trade_date"]))
     if dry_run:
         return payload
+    try:                                         # round 24: its factors (Admin → Scoring rescoring), while the raw collection is open
+        scoring.store_factors(snap["id"], sheets)
+        scoring.store_etf_factors(snap["id"])
+    except Exception as e:                       # noqa: BLE001 — never block the publish for it (the worker extracts them later)
+        print(f"⚠ Score factors not stored: {e}")
     gz = gzip.compress(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(), compresslevel=6)
     etf_gz, etf_payload = None, None             # ETF analyser (owner, 2026-11-06): strength + Recommended only
     try:
@@ -669,9 +690,9 @@ def publish(snapshot_id=None, mode="manual", by=None, dry_run=False):
     except Exception as e:                       # noqa: BLE001 — never block the stock publish for it
         print(f"⚠ ETF analyser not published: {e}")
     with pool.connection() as c:
-        r = c.execute("INSERT INTO published (snapshot_id, data_as_of, mode, published_by, stocks, data_gz, etf_gz) "
-                      "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id, published_at",
-                      (snap["id"], snap["taken_at"], mode, by, len(payload["stocks"]), gz, etf_gz)).fetchone()
+        r = c.execute("INSERT INTO published (snapshot_id, data_as_of, mode, published_by, stocks, data_gz, etf_gz, score_ver) "
+                      "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, published_at",
+                      (snap["id"], snap["taken_at"], mode, by, len(payload["stocks"]), gz, etf_gz, ver)).fetchone()
         c.execute("DELETE FROM published WHERE id NOT IN (SELECT id FROM published ORDER BY id DESC LIMIT %s)", (KEEP_PUBLISHED,))
     try:                                         # tracking: today's closes of every stock and ETF (+ splits found)
         prices = {x["s"]: x.get("p") for x in payload["stocks"]}

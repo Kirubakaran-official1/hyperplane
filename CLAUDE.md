@@ -2546,3 +2546,332 @@ Owner: "for the swaps bring the option for all sell then all buy with the check 
 - Tests: `zerodha_test` (+ shared sell basket, per-stock check-in, buy only the sold one, done never offered again),
   `zerodha_ui_test` (+ tick 2 → sell all → check in → buy all → check in → all done; the label inside the card padding).
 
+### Round 22 — Hyperplane Planner: notes, journal, tasks, calendar, projects, knowledge graph (owner 2026-11-14)
+Owner's words: "a complete trader journal app … personal notes, to-do, calendar view … like Notion … write anything like OneNote … a proper
+knowledge graph … personal and office notes … multi-purpose … filters, date range, topic search … multiple notebooks — trading, office, to-do,
+fitness … paste images … download the whole notes as PDF / document … merge, split … mini project planner … inspiration from Notion, Asana …
+mobile friendly … avoid page-to-page redirects — a holistic view … Hyperplane Planner … my every-day application". Customer app only — the
+admin service has no Planner route (the owner only grants it in Access manager).
+- **Access:** module `planner` (sort 9) + `planner:view` (not restricted); `migrate_planner` (settings `planner_v1`) gives it to
+  **Customer Admin** once — other roles get it in Access manager. Every route `need("planner")`, `_rate`, `_own` (RLS). Notes are private to
+  each customer (RLS `portal_own` on every `pl_*` table + column grants); nobody else — the owner included — reads them through the app.
+- **Data (`db.py`):** `pl_notebooks` (unique name per customer), `pl_pages` (kind note | journal | project; doc JSONB + body text for search;
+  tags; day; pinned; project status / due; rev; trashed_at), `pl_links` (src → dst, from the [[links]]), `pl_tasks` (status todo | doing |
+  done, priority 0–3, due, repeat daily | weekdays | weekly | monthly, page_id = project, sort), `pl_files` (pictures, bytea), `pl_prefs`
+  (`{digest}`). Composite FKs (customer_id, id) everywhere so a row can never point at another customer's row.
+- **Server (`planner.py`, routes at the end of `portal.py`):** `GET /app/api/planner` = everything the screen needs at once (notebooks, page
+  meta without words, tasks, links, prefs, today, usage, limits); the first call seeds Trading / Office / To-do / Fitness + a pinned Welcome
+  note. Pages: create, get (doc + backlinks), PUT save `{title, doc: JSON string, rev}` (409 + X-Rev when the version moved — never a silent
+  overwrite), PATCH details, copy, merge (each source = an H1 section, its headings one level down), split (a page per heading of a level, or
+  at block index), docs (for downloads, ≈ 6 MB per answer + `more`), trash / restore / delete (only from the trash) / empty. Tasks: create,
+  PATCH (done on a repeating task adds the next one, never in the past), delete, clear done. Search: every word in title / words / topics.
+  Pictures: `POST /files {image: data URL}` (PNG / JPEG / WebP sniffed, ≤ 2 MB, 250 MB per customer, 300 a day) → `/app/api/planner/files/<id>`
+  (private cache, nosniff, sandbox CSP).
+- **The doc is an allow-list, never HTML** (`clean_doc`): blocks paragraph, heading 1–3, bullet / ordered / task lists, blockquote, codeBlock,
+  horizontalRule, image (our own file URL only), table; inline text, hardBreak, pageLink {id, label}; marks bold, italic, strike, underline,
+  code, highlight, link (http / https / mailto, rel noopener). Unknown node → 422; unknown attrs dropped; control / bidi characters stripped.
+  The doc travels as a JSON **string** (SafeModel's depth limit) — the client strips U+007F–U+009F first.
+- **Limits (server):** 30 notebooks, 5000 pages, 10000 tasks, doc ≤ 600k chars / 20k nodes / depth 24, 200 pictures a page, 12 topics,
+  merge ≤ 50, trash emptied after 30 days (worker), unused pictures removed after 2 days. Body cap 3.5 MB on `/app/api/planner*` (Caddy 4 MB
+  block before the generic 64 KB one). Rate buckets planner / -write / -save / -heavy / -search / -files / -file.
+- **Inbox:** kind `planner_due` (app planner, src `planner`, code PL, teal). The worker once a day after 07:00 IST (meta
+  `planner_digest_day`): one open item per customer holding `planner:view` with the summary on — "Planner: N tasks due today · M overdue",
+  body `{today, late, n_today, n_late}`; updated, never repeated; closes itself when nothing is due ("All caught up"). Today has the switch
+  "Morning summary in the Inbox". Inbox detail: the tasks by name + Open the Planner + Mark done.
+- **Screen (`apps/planner*.jsx`, CSS `planner.css.js`, every class `pl-`):** one page — band (search Ctrl K with quick results, New menu with
+  templates), `.hp-actbar` (views Today · Notes · Tasks · Calendar · Projects · Graph; topics MultiSelect, From → To date range, Download),
+  notebook chips (All + each, pencil to edit, + Notebook), then the view with the open note beside it (desktop: list column 300–380 px +
+  note; "Wide" hides the list; phone ≤ 900 px: the note is a full-screen sheet with Back). Views read their own width (container queries).
+  Pop-ups are centred (`Modal` in `planner-lib.jsx`). Remembered in this browser only: view, notes layout / sort, tasks layout, the open page.
+  Never remounted on the day change (no `dayKey`) — an open note keeps its words.
+  - Today: greeting, quick add, tiles (due today, late, done this week, notes this week), Late / Today / Next 7 days, today's journal
+    buttons (templates), recently edited, active projects with progress.
+  - Notes: cards (notebook colour on top, thumbnail, snippet / search hit, topics) or list (`.hp-t`); kind filter; sort; Select → Merge,
+    Download, Move to, Trash; Trash view (Restore, Delete for good, Empty).
+  - Tasks: list (Late, Today, Next 7 days, Later, No date, Done + Clear done) or board (To do · In progress · Done; drag on a mouse, ‹ › on
+    every card). Task pop-up: title, details, status, due, repeat, priority, notebook, project, topics.
+  - Calendar: month (Monday first), tasks by due + dated notes / project due dates; pick a day → its list, quick add, journal / note for that
+    day; drag a task to another day. Narrow: dots + the day list.
+  - Projects: cards with status, due, progress from the project's tasks, next tasks, add a task; the project note shows its tasks on top.
+  - Graph (`planner-graph.jsx`, own chunk): canvas force layout of its own (grid repulsion, springs, centring), dots in the notebook
+    colour, size by links, hover = neighbours, click opens, drag dots, pan, wheel / pinch zoom, Fit; Topics switch adds topic rings;
+    "Only connected notes"; "Most connected" list beside it (the text view). Reduced motion: laid out first, drawn once.
+  - Editor (`planner-editor.jsx`, own chunk — TipTap 3.34 StarterKit + TaskList + TableKit + Image + Highlight + Placeholder +
+    CharacterCount + our `pageLink` node): title, details row (notebook, type, date or project status / due, topics, pin), sticky toolbar,
+    "/" block menu (blocks + templates) and "[[" note-link menu (or "New note …") through `@tiptap/suggestion` → a React menu; click a
+    link to open that note; "Linked from" at the bottom. Pictures pasted / dropped / picked are made ≤ 1600 px (WebP, else JPEG) in the
+    browser and uploaded; pictures from web pages are never stored as outside links. Autosave 1.2 s after typing (Ctrl S now), on leaving,
+    on hiding the tab; 409 → "Load the latest" / "Keep mine". More: Download, Duplicate, Split…, Merge with…, Move to the trash.
+  - Downloads (`planner-export.js`, own chunk; jsPDF / docx load only then): scope this note · picked · notebook · what the filters show ·
+    everything; PDF (own block renderer; cover + contents with page links when several; page numbers; standard Latin fonts — ₹ → "Rs",
+    other scripts → choose Word), Word .docx (headings, lists with numbering, check boxes, quotes, code, tables, pictures, links), Markdown;
+    one file or a file per note in a .zip (own store-only zip writer). `trackAction("planner", "export")`; the server counts `note` and
+    `task_done`.
+  - Icons: the Planner has its own Lucide set (`PI` in `planner-lib.jsx`) — `ICON_PATHS` in core.jsx has no notebook / editor icons.
+  - Notebook colours (keys blue, orange, teal, pink, green, violet, amber, red, sky — "slate" replaced: it read as grey): fixed order,
+    checked with the dataviz validator on #ffffff (light) and #0d1520 (dark) — every check passes; light / dark hexes in `NB_COLORS`.
+    The notebook's name is always written beside its colour.
+- Docs: "Hyperplane Planner" section in `guide.jsx` (shown to customers who have the app).
+- Tests: `planner_test` (API ≈ 110: 403 on every route without the permission, 401 signed out, seeding, notebooks, rev conflict, the
+  allow-list, pictures, links / backlinks, copy / merge / split / docs, search, tasks + repeats, RLS between customers, Inbox digest,
+  clean-up, adoption, cascade), `planner_ui_test` (59: no access → no code; Today; editor with "/", check list, "[[", pasted picture,
+  autosave; backlinks; conflict → Keep mine; board; calendar; projects; graph; Ctrl K search; notebooks + filters; merge; split; trash;
+  Markdown / PDF / Word / zip downloads; Inbox summary → Open the Planner; light; phone 400 px with no sideways scroll + note sheet).
+- Deploy: new npm packages (TipTap, docx) and a new Caddy block → the normal `bash deploy/deploy.sh` rebuild of every container.
+
+### Round 22b — the Planner as one clean dashboard (owner 2026-11-14, same day, before the first deploy)
+Owner: "default keep Trading journal as the one notebook for all the customers · don't keep the notebooks on the top nav — what if the count
+increases · clean · all I need is the main dashboard · in the main dashboard itself I can add the task · just To-do · Notebook — write anything ·
+Planner with start and end date and a proper status, easy like entries in a table, indent and outdent any task, no pop-up · Calendar view of
+all the to-dos and plans for that day from all notebooks or the selected one — Calendar is a view, not a feature · no journal for now".
+Asked and answered: all three on one page; notebooks as a slim list on the left. **This replaces the Round 22 screen** (Today, Notes, Tasks,
+Projects and Graph tabs, notebook chips, the task pop-up, the board, journal and project pages are gone).
+- **Server:** `SEED` = one notebook "Trading journal". `pl_tasks` gains `kind` (todo | plan), `parent_id` (composite FK to the same
+  customer's row, ON DELETE CASCADE), `start_on` (CHECK due ≥ start), status `hold`; `UNIQUE (customer_id, id)`. The table shape changed
+  before any deploy (the local copy was dropped and made again). `task_create(kind, start, parent_id, after_id)` — a row under a planner
+  row only (≤ 6 levels, the parent's notebook), `after_id` puts it straight after a row; to-dos never have a start / parent / hold;
+  planner rows never repeat. `POST /app/api/planner/tasks/{id}/move {action: indent | outdent | up | down}` (indent = under the row above;
+  outdent = right after the old parent; up / down among the rows beside it — top rows per notebook) → the rows that changed. A planner
+  row's notebook moves the rows under it; a row under another cannot move alone (422). Delete takes the rows under it (`removed`).
+  Clear done = to-dos only. App module / permission wording: "Your to-dos, notes, plans and calendar".
+- **Screen:** band (search for notes, to-dos and plans; New: note · to-do · planned task · note templates) → left: `NotebookRail` (All +
+  each with counts; + adds in place; three dots: rename in place, colour, delete with an inline confirm; "Find a notebook" past 8;
+  the morning-summary switch at the bottom; ≤ 900 px it is a dropdown `#pl-nb-pick`) → main: [Dashboard | Calendar], topics, date range,
+  Download → **Dashboard** = To-do and Planner side by side (stacked under 1000 px), Notes below.
+  - To-do: the add box at the top (notebook select when All; date chip) → Late / Today / Upcoming / No date / Done (Clear). Edit the words
+    in place; the date chip opens the browser's picker (`showPicker`); three dots: repeat, notebook, delete. No pop-up.
+  - Planner: a table (Task · Start · End · Status · three dots). Typing: Enter = next row, Tab = under the row above, Shift + Tab = back,
+    Alt + ↑ / ↓ = move, ↑ / ↓ = next row, Backspace on an empty row = delete it. "Add a row". A parent shows done / total; rows fold.
+    In All notebooks the top rows are grouped under their notebook. Deleting a row with rows under it asks first (the only confirm).
+  - Notes: cards (12, then "Show all"), New note, sort, Graph, Select → merge / download / move / trash, Trash. A note (and the graph) opens in
+    the main area with "Dashboard" back; on a phone the note is a full-screen sheet. No note types, no dates on notes; templates: Trade
+    notes, Meeting notes, Workout log, Weekly review, Project brief.
+  - **Calendar** (a view): planned rows as bars from start to end (lanes, 3 shown per week, "+N more"), to-dos on their day (drag to another
+    day), the picked day's list on the right (add a to-do for that day). A bar / a planned row → the dashboard on that row (`focusTask`).
+    Narrow: dots + the day list. It follows the notebook picked on the left.
+- Tests: `planner_test` (+ the planner rows: order after a row, dates, kinds, indent / outdent / up / down, six levels, notebook moves the
+  rows under it, someone else's rows → 404, clear done keeps plans, delete takes the rows under it), `planner_ui_test` rewritten (64).
+
+### Round 22c — more room, more data, progress, times, dated notes, a week view (owner 2026-11-14)
+Owner: "the to-do is not handled properly · open and close the notebook list like the side nav · better UI · handle more planners and notes ·
+the planner full screen with a minimise at the top right · expand all / collapse all · a progress bar — a parent follows its children · FY in the
+date selector · a weekly calendar like Teams: select 1 hr / 2 hr for a purpose, time optional, keep the month · a note for a specific date: pick the
+date and its to-dos and notes appear; keep the common notes as they are · tick to show common and dated notes · minimal tabs, great use of space".
+- **Server:** `pl_tasks.progress` (0–100, planner rows only) and `time_from` / `time_to` (to-dos only; both or neither; needs a day; end after
+  start; no day → no time) — added with `ALTER … ADD COLUMN IF NOT EXISTS` (local data kept) and in the portal column grants. Progress ⇄ status
+  on a planner row: progress > 0 on Not started → In progress, 100 → Done, Done → 100, leaving Done → 0 (Not started) or 90. A repeating to-do
+  keeps its time. Notes for a date reuse `pl_pages.day` (null = a common note).
+- **Notebook list:** the panel button folds it to a 52 px strip of initials in the notebook colour (name in the tooltip / aria-label);
+  remembered in this browser (`hp_pl_ui.railMin`).
+- **To-do:** no scroll box inside the card any more; each group shows 6, then "Show all N"; done to-dos behind a "Done (n)" tick; an optional
+  time chip (clock) per dated to-do; the add box's date can be cleared.
+- **Planner:** columns Task · Start · End · (Days, full screen) · Progress · Status; a slider per row (5 % steps), a parent shows the average of its
+  rows (read only, bottom-up); overall progress in the header; Hide done (a row and everything under it done); Expand all / Collapse all; full
+  screen (fixed over the page, Escape or the corner button to minimise).
+- **Notes:** "New note" → a common note / a note for today; the note's details have an optional Date (clear it → common again); Common / Dated
+  ticks; cards or a list; 12 cards / 25 rows, then Show all; dated cards show their date.
+- **Date filter:** This FY / Last FY (1 April → 31 March, labelled "FY 2026–27").
+- **Calendar** (`planner-calendar.jsx`): Month | Week (one day on a narrow screen). Week = an hour grid (48 px an hour, opens at 07:00, a red
+  line at the time now): drag over hours → a new block to name (Enter); drag a block to move it (day and time), its lower edge to resize (15 min
+  steps); click → change it in place (title, day, time, done, no time, delete); a touch tap adds an hour. The all-day row has planned bars,
+  to-dos without a time and dated notes. Month cells show dated notes too; the day list has To-do (by time), Planned (with progress), Notes and
+  "A note for this day".
+- Tests: `planner_test` (+ progress ⇄ status, times, a dated note), `planner_ui_test` (93: + fold the list, Show all, time chip, progress roll-up,
+  expand / collapse, hide done, full screen with Days, FY, week drag-create / move / resize / edit, a note for a day, Common / Dated).
+
+### Round 22d — formulas in notes, pasted from ChatGPT / Claude (owner 2026-11-14)
+Owner: "allow copy and paste of formulas from ChatGPT or Claude — pi, sigma and all the formulas".
+- **Packages:** `@tiptap/extension-mathematics` 3.34.0 + `katex` 0.16.45 (pinned; the editor chunk only). KaTeX's CSS + fonts are bundled
+  (`/app/assets`), so the `/app` CSP now has `font-src 'self' https://fonts.gstatic.com` (Caddyfile).
+- **Server allow-list:** blocks gain `blockMath`, inline gains `inlineMath`; attrs = `{latex}` only (control / bidi characters stripped,
+  ≤ 4000 chars, an empty one is dropped); the LaTeX is in the searchable text. Nothing else of a formula is stored.
+- **Editor** (`planner-math.jsx`): `InlineMath` / `BlockMath` (block in display mode) with KaTeX `{throwOnError: false, strict: "ignore",
+  trust: false, maxSize: 20, maxExpand: 500}` (no \href / \url / HTML). Paste: HTML with KaTeX (`.katex`, `.katex-display`) or MathML (`<math>`)
+  → the `application/x-tex` annotation becomes a formula, parsed at note level (`PMParser.parseSlice`) so a formula block pasted alone fits;
+  text with `$…$`, `\(…\)` (inline) or `$$…$$`, `\[…\]` (block) → formulas (only when the HTML has no formatting worth keeping; never inside a
+  code block); "$5 and $10" stays text. After a paste / insert that ends on a formula the cursor goes after it (`caretAfterMath`) — the next key
+  never replaces it. "/formula", "/formula block" and the Σ toolbar button open `MathPanel` (LaTeX box, quick signs, live preview,
+  Insert / Save / Remove); a click on a formula opens it too.
+- **Downloads:** Markdown keeps `$…$` / `$$…$$`; Word writes readable signs (`texText`: Greek letters, ∑ ∏ ∫ ∞ ± × ≤ ≥ ≠ ≈ …, `\frac{a}{b}` →
+  (a)/(b), `\sqrt{x}` → √(x)) in Cambria Math; the PDF prints the same text with Latin fonts (signs it cannot print become "?").
+- Tests: `planner_ui_test` (100: + ChatGPT-style KaTeX paste, Claude-style $…$ text, "$5 and $10" stays text, KaTeX fonts load, /formula with a
+  live preview, click to change, Markdown keeps $…$, Word shows ∑ and π).
+
+### Round 22e/22f — to-dos done or missed, Excel-like planners, several planners, tabs (owner 2026-11-15)
+Owner (22e): "fixed heights with a scroll bar · the three widgets on one screen, each with a maximise · to-dos completed or missed, tracked, off the
+main list — better icons · date and time on one row, 24-hour · the planner like Excel (drag dates / status down, copy and paste with Excel) · Excel
+cells pasted in a note become a table". (22f): "the calendar only shows to-dos and notes · the progress a slider · one button to expand / collapse ·
+a better time picker (no forced hour) · a new to-do goes on today · Clear only from the dashboard · the to-do header steady · the date picker is not
+working · a daily to-do — one line? · a long to-do readable on hover · a proper full to-do view (Notion / Asana) · the notebook menu cut off · less
+gap · several planners in a notebook · tabs under the notebooks: Dashboard (with the calendar), To-do, Planner (a tile per planner), Notes".
+- **Server:** `pl_tasks.status` gains `missed` (to-dos only; `done_at` = when closed; a repeating to-do done or missed makes the next one; not in the
+  morning summary). `pl_tasks.archived_at` — "Clear" (`POST /tasks/clear-done {status: done | missed}`) only hides closed to-dos from the dashboard
+  (`archived` in the row); reopening clears it. **`pl_plans`** (id, notebook, name, sort; RLS + grants; ≤ 200 a customer; names unique per notebook):
+  `POST /plans`, `PATCH /plans/{id} {name, notebook_id, sort}` (a planner moving notebook takes its rows), `DELETE /plans/{id}` (its rows go too).
+  `pl_tasks.plan_id` (composite FK, cascade): a planner row lives in a planner (a top row without one goes to the notebook's first planner — one
+  called "Planner" is made when there is none; a row under another takes its parent's planner); top-row siblings are per planner; a top row moves
+  to another planner with `PATCH {plan_id}` (its rows follow); a planner row never changes notebook on its own (422). Old rows were moved into one
+  "Planner" per notebook by the schema (local data kept).
+- **Screen:** the side panel = notebooks + **tabs** (Dashboard · To-do · Planner · Notes; icons when folded; in the bar on a phone).
+  Dashboard = three **Widgets** (fixed heights, own scroll bars, a maximise button — Escape / the button to come back; 8 px gaps).
+  - To-do widget: Open · Done · Missed tabs in the header (counts inside — the header never changes size); the add box puts a new to-do on today;
+    rows: a state icon (ring → done = filled green check; missed = calendar-cross; click to reopen), the words (edit in place; long ones read in full
+    on hover — a small card), a missed icon on hover / late rows, the notebook's initial (All notebooks), the date chip (its own small calendar:
+    Today · Tomorrow · Next week · No date · a month — `DatePop`; the browser picker was unreliable), the time chip (start times every 15 minutes,
+    24-hour, then a length 15 m – 4 h; a small clock icon when there is no time — no layout change on hover), the three dots (missed, repeat,
+    notebook, delete). Late group: one icon marks every late to-do missed. Done / Missed: by date, the last-30-days rate, Clear.
+  - The full to-do view (`TodoBoard`, the To-do tab and the maximised widget): sections on the left (Today, Upcoming, Late, No date, All open,
+    Done, Missed + the 30-day rate), a list with columns (To-do · Notebook · Date · Time · Repeat), grouped by date, Find, Show cleared.
+  - Planner widget: a chip per planner (with its progress) + "+ Planner"; the picked planner's table (`PlannerTable`). Planner tab: a tile per
+    planner (progress, rows, done, late, dates) → open one full page (rename, notebook, delete in its menu).
+  - `PlannerTable`: row numbers; cells pick (click, drag, Shift + click, row numbers for whole rows); the corner square fills down (dates step a
+    day — or the step between the last two; status / progress copy; parents keep their roll-up); Ctrl + C → tab-separated text for Excel;
+    Ctrl + V (or pasting into a row's title) reads Excel rows (header skipped; dd/mm/yyyy, yyyy-mm-dd, 20-Nov-2026, Excel day numbers;
+    "In progress" / "Done" / "On hold"; 40% / 0.4) — rows past the end are added when the Task column is in the paste; Delete clears dates;
+    double-click / Enter changes a cell (dates in `DatePop`, status in a list, typing digits on a progress cell); the progress is a slider; one
+    button expands / collapses all; the eye hides finished rows; a Days column when maximised; a row's menu moves it to another planner.
+  - Notes widget: icon buttons (graph, pick, trash), New → a common note / a note for today; the Notes tab = the same, full page.
+  - Calendar: to-dos and notes only (no planner bars); a repeating to-do shows its coming days faintly ("repeats", not clickable); cleared to-dos
+    stay.
+  - Menus and pickers are `position: fixed` (`useFloat`) — nothing that scrolls cuts them off; the hidden-until-hover rule is on the menu
+    *button* only (the open menu used to inherit opacity 0); the side panel stacks above the widgets.
+  - Notes: cells copied from Excel / Google Sheets paste as a table (the picture Excel also puts on the clipboard is ignored); tab-separated
+    text becomes a table too.
+- Tests: `planner_test` (+ missed, clear = archive, planners: default, second, names, rows, moving rows / planners, someone else's → 404, delete),
+  `planner_ui_test` (129: + hover full text, header steady, scroll inside, missed / Done / Missed / Clear, DatePop, TimePop, full to-do view, a
+  daily to-do is one line, planners: create / switch / move a row / tiles / rename, the slider, one expand button, Excel fill / copy / paste,
+  the tabs, the calendar without planner rows and with repeats, the notebook menu fully visible, Excel cells → a table in a note).
+
+### Round 23 — ETF Analyser: basket → analyser, ETF portfolios, basket SIP, Buy on Zerodha (owner 2026-11-15)
+Owner: "move the ETF to a basket, then the basket to the analyser like the AI stock analyser — same page, same style, same download, same Save
+portfolio · a better basket UI / UX · the arrow under the progress in the first (All ETFs) card · Best in segment by default · make an ETF-only
+portfolio a SIP with every option of the ETF SIP portfolio; a normal one is an ETF portfolio like the stock portfolio · place the order to Zerodha
+as SIP or one time".
+- **Server:** `customer_etf_basket` (customer_id PK, symbols TEXT[]; RLS own row; grants) · `GET/PUT /app/api/etf/basket` (need etf; today's ETFs
+  only, each once, ≤ 30) · `POST /app/api/etf/basket/sip {symbols, amount, freq, years, weights|null}` (need etf + the sip module; `sip.build_basket`:
+  equal or whole-% shares adding to 100, the AI ETF SIP Builder's whole-unit rules — 1 unit every k ≤ 3 instalments, top-up within the amount,
+  ≤ +10 % only to buy every instalment; same result shape as build_etf, `basket: true`, inputs `{basket, src: "etf", weights?}`).
+  Saved kinds: **`etf`** (app etf; holdings 1 unit each, name / price / market from the server; tag "ETF Analyser"; tracked like the Analyser list;
+  momentum check = `sip.check_holdings(kind="etf")` — themes in a long-term downtrend, replacement 1 unit; no reminder; no stock alerts) and a
+  basket SIP saved as **`sip`** (`inputs.basket` checked by `sip.check_basket`, needs etf too; tag "ETF Analyser · SIP"; everything a SIP has).
+  `GET /saved?kind=etf` = ETF portfolios + basket SIPs. Permissions: `etf:share` (every role with etf:view), `etf:zerodha` (owner-level, Customer
+  Admin — `migrate_etf_basket`). Zerodha source **`etf`** (a one-time basket from the client's lines, or a saved ETF portfolio's 1-unit lines);
+  ETF portfolio swaps hold 1 like the Analyser. Adoption actions etf: basket · report · sip.
+- **Screen:** ETF Analyser tabs ETFs · Basket · My portfolios. List: Best in segment on by default; the first card shows ▲ ◆ ▼ under its bar;
+  a round + in each row's first cell (a tick when in the basket; the row still opens the card) and Add to basket on the card; a sticky bar at the
+  bottom (count, first tickers, Analyse basket) → a side drawer (each ETF with its strength, the split by type, the same market twice, remove,
+  empty). `etf-basket.jsx` BasketView = the AI Portfolio Analyser's page for ETFs: search to add, Save portfolio (SaveBar kind etf), Make it a SIP,
+  Buy on Zerodha (one time: an amount split equally into whole units → ZerodhaButton source etf, Customer Admin), Download report (report.js with
+  `noun / nouns / band / title1 / tagline / header`), gauge + facts + split, AI summary (counts only — the ETF Analyser's ±24 and Recommended,
+  no new rule), trend map (Q × Y), the AI check (a better ETF of the same market → Swap / Keep it only; the same market twice), cards per ETF
+  (colour group Look at first / Keep an eye on / Doing well / Too new by the ±24 trend). SIP: a form (amount, monthly / quarterly, years, equal or
+  your own % with sliders) → `SipResult` (extracted from sip.jsx — the AI ETF SIP Builder's result page, `res.basket` words). saved.jsx: kind etf
+  (tag, ofTag — the ETF tag also holds basket SIPs, no stock AI watch, no alerts switch, "1 unit of each ETF", Buy on Zerodha source etf).
+- Tests: `etf_basket_test` (60: catalogue / roles, basket rules + RLS, SIP split rules, saving both kinds + tampering, tracking, check, share,
+  Zerodha preview only — nothing recorded), `etf_basket_ui_test` (bar, drawer, analyser, search, AI check, PDF, one-time box → Zerodha window with
+  form posts stubbed, save → tracker, SIP form → result → save → reminder, dark, phone, default role without Buy), `etf_ui_test` updated (Best in
+  segment on by default, the first card's arrows).
+
+### Round 23b — Planner menus opened "somewhere else" (owner 2026-11-17, screenshot of a planner tile's … menu)
+- Cause: the panels were `position: fixed` inside boxes that make fixed count from themselves — a card / tile lifting on hover (`transform`)
+  and the panels with container queries (`container-type` = layout containment). Fix: `Float` (planner-lib.jsx) draws every floating panel in a
+  portal at the end of `<body>` (`.pl-float`, z-index 100 — above the maximised widget 43, the pop-ups 60, the toast 90): Menu (`.pl-mpop`; its
+  outside-click check also looks inside the panel), DatePop, TimePop, the long to-do tip, the editor's / and [[ menu, the formula panel. The
+  notebook colours (`NB_CSS`) also apply under `.pl-float`.
+- The customer build keeps fonts as files (`vite.app.config.js` assetsInlineLimit): KaTeX's smallest fonts were inlined as `data:` and blocked by the
+  CSP (`font-src 'self'`).
+- Test `planner_float_test` (146 panels): every … menu, date chip and time chip on every view — dashboard, rail, the 3 maximised widgets, To-do, the
+  tiles (real hover), a planner page, Notes, a note, the calendar (month / week), dark + scrolled, phone — opened with a real mouse: it touches its
+  button, overlaps it sideways, stays in the window, is on top and lives in the portal; plus the / menu at the cursor and the tip under its to-do.
+
+### Round 23c — every report as PDF · Word · Markdown (owner 2026-11-17: "download everything as Word + Markdown — 3 options")
+- `app/src/doc-export.js` (its own chunk; docx / jsPDF load inside): a page describes its report once as a document model
+  `{file, title, subtitle, meta, blocks}` (h / h2 / p / ul / kv / table / note / pb) and gets **Word** (docx, the Planner's library — header,
+  page numbers, tables, bullets), **Markdown**, or a plain **PDF** (jsPDF, columns sized by their measured text) where the page has no
+  designed PDF. Models: `docFromReport` (report.js's model — AI Portfolio Analyser and the ETF basket; report.js now takes `noun / nouns /
+  band / title1 / tagline / header`), `docFromSip` (AI ETF SIP, Momentum SIP, basket SIP — with the growth simulator rows on screen),
+  `docFromBuilder` (overview, segments, sectors, holdings, volume check, buying plan).
+- Buttons: Analyser + ETF basket — a joined group "Download report · PDF · Word · Markdown" (`#pf-dl` / `-docx` / `-md`, `#ef-bk-dl…`); the
+  SIP results — PDF · Word · Markdown · CSV (`#sip-docx`, `#msip-md` …); the Builder — PDF · Word · Markdown · Excel (`#bd-pdf` …).
+- Test `downloads_test` (21): every button downloads its file and each file holds the report (a real PDF, a Word file that opens with the
+  title and tickers, Markdown with the headings).
+
+### Round 24 — ⚙ Admin → 🎚 Scoring: the strength engine's numbers, editable, applied to the past too (owner 2026-11-17)
+Owner: "the zone × regime scores (Hyperplane_Zone_Engine_Review.xlsx) inside the admin panel — any number of scenarios, the default, the option
+to change it … apply it to the old data as well, not only the upcoming data … the most dynamic architecture … optimise the code, DB and RAM".
+Decided: scope = the strength engine; save → compare → apply; Apply rescores every past day (saved portfolios keep their price tracking;
+alerts already sent stay).
+- **Engine (`zone_engine.py`)**: every number is a parameter — `DEFAULT_PARAMS` (recency 0.4/0.3/0.2/0.1, a full step 0.5, trend words
+  0.5 / 0.15, trend · price share 0.6 / 0.4, Q50 Y30 M20, cut 24 + "quarter not negative", the 12-cell mother candle table, NR base 0.94,
+  streak move 0.10, regime squeeze 0.23), `check_params` (ranges, shares add up to 1, Quarter weight > 0 …), `Params`, `set_params` (the
+  module constants RECENCY / TF_W / CUT … always hold the LIVE set — detail.py reads them). Two steps: `factors(zl, zh, nr)` (per period:
+  zone steps, rel = where the price sits, the place label code, the mother candle n) → `score(f, P)`; `read_stock` / `read_all` = factors +
+  score. **Golden check**: old vs new engine on every stored collection — 24,864 stock and 1,007 ETF results identical (raw, after the
+  regime, after a JSON round trip of the factors).
+- **Data (db.py)**: `score_profiles` (name, params, status draft | active | archived, builtin, note, who / when applied / retired; one live —
+  partial unique index; id 1 = the built-in **Default**, seeded by `scoring.seed`), `score_factors` (snapshot, kind stock | etf, schema,
+  JSON gz `{symbol: [monthly regime, M, Q, Y]}` ≈ 150 KB a collection), `score_marks` (the set the stock states of a collection were built
+  with — one row, never stamped on every state row), `score_ver` on customer_history / published / stock_detail, `published.rev` (+1 when a
+  publish is rescored in place). Everything stored before round 24 counts as built with Default (1) — nothing is rebuilt on deploy.
+- **`scoring.py`**: `sync` (the live set into this process — one tiny query at most every 5 s), profiles CRUD (drafts only; Default, the
+  live set and the ones that were live are locked — copy to change), `apply` (→ `rescore_latest`: today's view within a second),
+  `store_factors` (publish / build_history store them while the raw collection is open), `extract` (old collections, once, by the worker),
+  **`rescore(snapshot)`** — from the factors only: patch `zv` / `rz` of each stock + `cfg` in the stored view, `st` / `c` / `tf` of each
+  ETF, the stock states — and it **writes only what changed** (a view only when a result moved, a state row only when its numbers moved);
+  `stale` / `tick` (the worker: up to 10 collections a tick), `status`, **`compare(params, days)`** — from the factors, day by day, totals
+  only: colour counts per day (live vs set), the colour changes, the 20 biggest movers (a colour change first) with their periods, the
+  strength spread, and the **back-test**: each colour's return vs all stocks of the same day after 30 / 90 days (stock_states prices).
+  `period_table` = the review sheet's Period table (5 trends × 6 places) for any set.
+- **publish.py**: the view carries `cfg {ver, cut, w, q}`; factors stored; `score_ver` recorded; `history_missing` (heavy) only for
+  collections WITHOUT factors and for the stock detail rows (last 14 days). **worker**: `scoring.tick()` before the heavy loop; factor
+  backfill one collection per idle tick. **portal**: every cache / ETag carries the version (`p{id}-{rev}`, `e{id}-{rev}`,
+  `h{snapshot}-{score_ver}`, `_hist` by (snapshot, ver)) — a rescored view is a new download. **etf.py**: admin rows cached per set.
+- **Admin routes** (admin_user): `GET /api/admin/scoring` (profiles, status, defaults, Period table), `/status`, `POST /profiles`,
+  `PATCH|DELETE /profiles/{id}`, `POST /profiles/{id}/duplicate`, `POST /compare {params, days ≤ 120}` (one at a time — 429), `POST
+  /profiles/{id}/apply` (activity log `scoring_apply`, from → to).
+- **Admin screen** (`frontend/src/scoring.jsx`, ⚙ Admin → 🎚 Scoring): status strip (live set, since / by, past days rescored, factors,
+  "Rescoring… N left" polled every 4 s); the sets (Live / Default / Draft / Was live, + From the live set / From Default); the editor grouped
+  like the review sheet (each number with "was …" and ↺ to the Default; the trend / price shares keep adding up to 1); the **live Period
+  table** (the change from the live set in brackets); Compare (counts with ±, the colour-change matrix, back-test 30 / 90, movers → their
+  periods, each stored day as two bars); Apply → a centred confirm.
+- **Customer app**: `cutOf(data)` / `dirCut` (core.jsx) — the AI Portfolio wording and the report's guide use the live cut from the view
+  (Deep Research keeps TREND_CUT 24); colours always come from the server's `zv`.
+- **Measured** (local, 2,000 stocks a collection): rescoring a day from its factors ≈ 14 MB Python / +35 MB process vs the old full rebuild
+  177 MB / +450 MB (and 2.7 s vs 29 s with the memory tracer on); the worker rescored all 24 stored collections in 12–15 s; a whole Apply
+  wrote ≈ 21 MB to the database log; Compare over every stored day < 1 s.
+- Tests: `scoring_test` (53: access, Default, 17 refusals, drafts, compare = no change against itself / fewer greens with a higher cut /
+  movers / back-test, apply → new ETag + new colours at once, ETFs, the worker rescores every past day + the stock states, the activity
+  log, back to Default → every stock, ETF and past day exactly as before, the old set locked), `scoring_ui_test` (tab, live table, save,
+  compare, centred confirm, apply → rescored → back to Default, narrow window).
+- Local note: on 17 Nov the local Postgres (data on the Windows D: drive through Docker Desktop) hit one PANIC creating a WAL file
+  ("Interrupted system call") during a burst of rescoring writes and recovered by itself — a Windows bind-mount issue, not seen on Linux;
+  the rescoring now writes only what changed.
+
+### Round 25 — a second scoring model: the Zone ladder (owner 2026-11-17) — a scenario only, Default stays live
+Owner: "a price near the top of a zone is resistance — it can reverse, yet it scores well … keep the formula as it is … for the bottom no
+marks … monthly zone in the upper side of the quarterly: small marks … weekly zone above / upper part / breaking the monthly, quarterly or
+yearly zone: small marks … the upper part or band of a price means nothing … reduce marks for the negative ones … monthly and quarterly the
+most (quarterly very slightly higher), weekly and yearly less … another scoring model along with the default — switch with the same data".
+Decided: trend / mother candle / regime / weights / colour cut as Default; only the price-position part is replaced; a breakout counts when
+the last completed candle CLOSED beyond the zone; strict ladder; back-test on production before choosing.
+- `zone_engine`: params `model` ("default" | "ladder") + `ladder` {close {W 4, M 9, Q 10, Y 5}, strict, pairs {WM [2,4,5,−4,−5], WQ
+  [2,4,6,−4,−6], WY [1,2,3,−2,−3], MQ [2,4,6,−4,−6]} = upper part · breaking the top · fully above · breaking the bottom · fully below};
+  `zone_in(small, big)`, `ladder(Z, P)` → (total, items); the ladder model: period strength = 100 × trend share × T ± mother candle (no
+  price place), stock strength = weighted periods + the ladder total (clipped ±100), the result's 6th element = the ladder total; against
+  the long-term regime the total is squeezed like the periods. factors gain `Z` = [W, M, Q, Y zone bottom / top, price, Prev_Week / Month /
+  Quarter / Year close] (score_factors schema 2 — the worker re-read the 24 local collections in < 90 s). Golden check again: the default
+  model identical on every stored collection.
+- builder.py adds the ladder total to its own strength (`zv[5]`); detail.py / detail.jsx: the ladder model's formula line, "How the final
+  score adds up" gets a Zone ladder row, a "Zone ladder — each item" checklist in plain words, the verdict lists ladder items instead of the
+  price place. The built-in Default now stores `model: default` explicitly.
+- Scoring tab: the model choice on every set, the ladder's marks editor (breakouts, strict, the four zone-in-zone pairs), "+ Zone ladder",
+  the set's model under its name, the movers show their ladder items.
+- Tests: `ladder_test` (default marks, 5 refusals, draft, compare + ladder items, apply → every result has 6 elements and strength =
+  periods + marks for all 1,723 stocks, colours, the detail view's ladder, the Builder, past days, back to Default exactly), scoring_test /
+  scoring_ui_test again.
+- Round 25b (owner: "sometimes a weekly breakdown, then a monthly break up — that is simply a consolidation; handle it"; found: AVALON
+  17 Nov −3 → +27 green while its price was below its weekly, monthly and quarterly zones with every last candle closed inside — 24 of
+  131 such stocks turned green): two switches in `ladder`, on by default — `consol` (the weekly candle closed one way and a higher one
+  the other way → those marks cancel, item `consol_W<tf>`, "consolidation") and `guard` (the green gate: the price below the monthly or
+  quarterly zone while that candle has not closed outside → not green, no marks change, item `gate_<tf>`; the result's 7th element).
+  Latest local day: Default 271 / 1150 / 302 · Zone ladder 194 / 1365 / 164 (green / amber / red). ladder_test + scoring suites pass.

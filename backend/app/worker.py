@@ -22,6 +22,7 @@ from datetime import timedelta
 from . import activity as act
 from . import tracking
 from . import zerodha
+from . import planner
 from . import config
 from . import etf
 from . import mailer
@@ -29,6 +30,7 @@ from .db import get_history_enabled, get_meta, get_settings, init_db, pool, set_
 from .adoption import ADOPTION_DAYS
 from .detail import DETAIL_DAYS
 from .publish import build_history, history_failed, history_missing, publish, quality_issues
+from . import scoring
 from .schedule import due_slots, now
 from .store import save_snapshot, workbook_to_sheets
 
@@ -383,6 +385,17 @@ def main():
                         print(f"🔔 SIP reminders: {n} instalment item(s) in the Inbox", flush=True)
             except Exception:                            # noqa: BLE001
                 traceback.print_exc()
+            try:                                         # round 22: the Planner's "due today" Inbox summary + its clean-up, once a day after 07:00 IST
+                t = now()
+                if t.hour >= 7 and get_meta("planner_digest_day") != t.date().isoformat():
+                    with pool.connection() as c:
+                        n = planner.run_digest(c, t)
+                        gone = planner.cleanup(c)
+                    set_meta("planner_digest_day", t.date().isoformat())
+                    if n or gone["pages"] or gone["files"]:
+                        print(f"🗒 Planner: {n} due-today summaries · trash emptied of {gone['pages']} page(s) · {gone['files']} unused picture(s) removed", flush=True)
+            except Exception:                            # noqa: BLE001
+                traceback.print_exc()
             try:                                         # Buy on Zerodha: Zerodha's own NSE instrument list, once a day after 08:35 IST
                 with pool.connection() as c:
                     if zerodha.due(c):
@@ -390,6 +403,16 @@ def main():
                         print(f"🔗 Zerodha instrument list: {r['rows']} NSE stocks / ETFs" if r["ok"] else
                               f"⚠ Zerodha instrument list not refreshed ({r['error']}) — kept the one from {r.get('kept')}", flush=True)
             except Exception:                            # noqa: BLE001 — never block the worker
+                traceback.print_exc()
+            # round 24 (Admin → Scoring): stored outputs built with another score set — rescored from their factors, up to 10
+            # collections a tick (milliseconds each, one in memory at a time)
+            try:
+                n = scoring.tick()
+                if n:
+                    left = len(scoring.stale(scoring.sync(), 1))
+                    print(f"🎚 Scoring: {n} collection(s) rescored with score set #{scoring.sync()}" + (" — more to go" if left else " — all done"), flush=True)
+                    continue
+            except Exception:                    # noqa: BLE001 — never block the worker
                 traceback.print_exc()
             # final output of older collections (missing, or built with an older formula): one per idle tick (light
             # on a small server) — always, so turning past days on is instant and the strength evidence is complete
@@ -403,6 +426,15 @@ def main():
                     history_failed(todo[0], e)
                     print(f"⚠ Final output: collection #{todo[0]} could not be prepared ({e}) — skipped", flush=True)
                 continue
+            # round 24: older collections get their score factors once (the raw collection is opened one last time), newest first
+            try:
+                todo = scoring.missing_factors(1)
+                if todo:
+                    n = scoring.extract(todo[0])
+                    print(f"🎚 Scoring: factors of collection #{todo[0]} kept ({n} stocks)", flush=True)
+                    continue
+            except Exception:                    # noqa: BLE001
+                traceback.print_exc()
         except Exception:                                        # noqa: BLE001 — never let the loop die
             traceback.print_exc()
         time.sleep(POLL_SECONDS)

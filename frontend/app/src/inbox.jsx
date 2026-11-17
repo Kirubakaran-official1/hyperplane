@@ -28,14 +28,15 @@ const META = {
   helpdesk: { code: "HD", name: "Helpdesk", c: "#64748b" },
   hyperplane: { code: "HP", name: "Hyperplane updates", c: "#1c7ed6" },
   community: { code: "CM", name: "Community", c: "#c2255c" },
+  planner: { code: "PL", name: "Hyperplane Planner", c: "#0f9f8f" },
 };
-const ORDER = ["portfolio", "builder", "sip", "msip", "community", "hyperplane", "helpdesk"];
+const ORDER = ["portfolio", "builder", "sip", "msip", "planner", "community", "hyperplane", "helpdesk"];
 const TABS = [["action", "Action"], ["info", "Updates"], ["done", "Done"]];
 const HOW = { swapped: "Swapped", removed: "Removed", recovered: "Trend recovered" };
 const inr = v => v == null ? "—" : `₹${Math.round(v).toLocaleString("en-IN")}`;
 const tabOf = x => x.status === "done" ? "done" : x.type === "action" ? "action" : "info";
-const kindOf = x => x.src === "helpdesk" ? "HELPDESK QUERY" : x.src === "announce" ? "ANNOUNCEMENT" : x.src === "mention" ? "MENTION" : x.body && x.body.order ? "SIP ORDER" : "PORTFOLIO CHANGE";
-const pfName = x => x.src === "alert" ? (x.title.split(":")[0] || "").trim() : x.src === "helpdesk" ? "Helpdesk queries" : x.src === "mention" ? "Community" : "Announcements";
+const kindOf = x => x.src === "planner" ? "TASKS DUE" : x.src === "helpdesk" ? "HELPDESK QUERY" : x.src === "announce" ? "ANNOUNCEMENT" : x.src === "mention" ? "MENTION" : x.body && x.body.order ? "SIP ORDER" : "PORTFOLIO CHANGE";
+const pfName = x => x.src === "alert" ? (x.title.split(":")[0] || "").trim() : x.src === "planner" ? "Planner" : x.src === "helpdesk" ? "Helpdesk queries" : x.src === "mention" ? "Community" : "Announcements";
 const age = iso => {
   const m = Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
   return m < 60 ? `${Math.max(1, Math.round(m))}m` : m < 1440 ? `${Math.round(m / 60)}h` : m < 10080 ? `${Math.round(m / 1440)}d` : m < 43200 ? `${Math.round(m / 10080)}W` : `${Math.round(m / 43200)}M`;
@@ -44,12 +45,13 @@ const day = iso => iso ? new Date(iso).toLocaleDateString("en-IN", { day: "2-dig
 const dt = iso => iso ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 const refOf = x => x.src === "helpdesk" ? `HD-${x.hid}` : `#${x.nid}`;
 // who an item is from — shown in bold before the summary, like the Helpdesk list (round 19d: "bring the name outside")
-const fromOf = x => x.src === "mention" ? (x.body || {}).by : x.src === "announce" ? "Hyperplane" : x.src === "helpdesk" ? "Helpdesk"
+const fromOf = x => x.src === "planner" ? "Hyperplane Planner" : x.src === "mention" ? (x.body || {}).by : x.src === "announce" ? "Hyperplane" : x.src === "helpdesk" ? "Helpdesk"
   : (x.body || {}).order ? "Hyperplane AI" : "Hyperplane AI watch";
 const summary = x => {
   const b = x.body || {};
   if (x.src === "helpdesk") return b.snippet || `${b.messages || 0} message${b.messages === 1 ? "" : "s"}`;
   if (x.src === "announce") return (b.text || "").slice(0, 90);
+  if (x.src === "planner") return `${b.n_today || 0} due today · ${b.n_late || 0} late${(b.today || []).length ? ` · ${(b.today || []).map(t => t.t).slice(0, 3).join(", ")}` : ""}`;
   if (x.src === "mention") return (b.text || "").slice(0, 110);
   if (b.order) return `Order ready · ${inr(b.total)}`;
   const its = b.items || [], done = Object.keys(x.items_done || {}).length;
@@ -100,6 +102,7 @@ addCss("inbox", `
 .ib-t .wait{color:var(--mixed);font-weight:600}
 .ib-stk{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;cursor:pointer;color:inherit;font:inherit}.ib-stk:hover .sym{text-decoration:underline}.ib-stk .ic{color:var(--t3)}
 .ib-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.ib-act input{flex:1;min-width:180px;height:36px;border:1px solid var(--b2);border-radius:6px;background:var(--bg);color:var(--t1);padding:0 10px;font:13px var(--sans)}
+.ib-pl{margin:4px 0 10px;padding-left:18px;white-space:normal}.ib-pl li{margin:2px 0}
 .ib-msg{white-space:pre-wrap;font-size:14px;line-height:22px;color:var(--t1);padding:14px 16px;border:1px solid var(--b1);border-radius:10px;background:var(--bg)}
 .ib-order{padding:14px 16px;border-radius:10px;background:var(--adim);font-size:14px;color:var(--t1)}.ib-order b{font-size:18px}
 .ib-note{font-size:12px;color:var(--t3)}
@@ -140,6 +143,8 @@ function Flow({ x }) {
     ? [["Raised", day(x.created), true], ["Our reply", x.body.unread ? `${x.body.unread} new` : x.status === "done" ? "Answered" : "Waiting for us", x.status === "done" || x.body.unread > 0], ["Closed", x.done_at ? day(x.done_at) : "Open", x.status === "done"]]
     : x.src === "announce"
     ? [["Sent by Hyperplane", dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at]]
+    : x.src === "planner"
+    ? [["Your daily summary", dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at], ["Done", x.done_at ? `${dt(x.done_at)}${x.done_note ? ` · ${x.done_note}` : ""}` : "Open", x.status === "done"]]
     : x.src === "mention"
     ? [[`Mentioned by ${x.body.by}`, dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at], ["Done", x.done_at ? dt(x.done_at) : "Open", x.status === "done"]]
     : [["Raised by Hyperplane AI", dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at],
@@ -156,7 +161,7 @@ function Activity({ x }) {
     ev.push([x.created, "Query raised", x.title, "a"]);
     if (x.at && x.at !== x.created) ev.push([x.at, "Last message", `${x.body.messages || 0} messages so far`, ""]);
   } else {
-    ev.push([x.at, x.src === "announce" ? "Sent by Hyperplane" : x.src === "mention" ? `Mentioned by ${x.body.by}` : "Raised by Hyperplane AI", x.title, "a"]);
+    ev.push([x.at, x.src === "planner" ? "Daily summary from your Planner" : x.src === "announce" ? "Sent by Hyperplane" : x.src === "mention" ? `Mentioned by ${x.body.by}` : "Raised by Hyperplane AI", x.title, "a"]);
     if (x.read_at) ev.push([x.read_at, "Seen by you", "", ""]);
     Object.entries(x.items_done || {}).forEach(([s, v]) => ev.push([v.d, `${s} · ${HOW[v.how] || v.how}`, v.in ? `Replaced by ${v.in}` : v.how === "recovered" ? "Its long-term trend turned up again — nothing to change" : "", "g"]));
   }
@@ -218,6 +223,7 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
   const facts = x.src === "helpdesk"
     ? [["Ticket", `HD-${x.hid}`], ["Severity", (b.severity || "").replace(/^./, c => c.toUpperCase())], ["Status", x.status === "done" ? "Closed" : "Open"], ["Messages", b.messages || 0], ["Raised on", day(x.created)]]
     : x.src === "announce" ? [["From", "Hyperplane"], ["Sent on", day(x.at)], ["Type", "Information"]]
+    : x.src === "planner" ? [["Application", m.name], ["Due today", b.n_today || 0], ["Late", b.n_late || 0], ["For", day(b.day || x.at)]]
     : x.src === "mention" ? [["From", b.by], ["Where", b.thread ? "A thread in the Community" : "Community chat"], ["Sent on", day(x.at)]]
     : b.order ? [["Application", m.name], ["Plan", pfName(x)], ["This instalment", inr(b.total)], ["Raised on", day(x.at)]]
     : [["Application", m.name], ["Process", (x.plan && x.plan.process) || "—"], ["Portfolio", (x.plan && x.plan.name) || pfName(x)],
@@ -240,6 +246,14 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
               onSwap={!(x.items_done || {})[peek.s] && x.status !== "done" && x.ref && has ? () => { setPeek(null); setSwap(peek.s); } : null}/></Suspense>
           : tab === "activity" ? <Activity x={x}/> : <>
           {x.src === "announce" && <div className="ib-msg" id="ib-text">{b.text}</div>}
+          {x.src === "planner" && <><div className="ib-msg" id="ib-planner">
+            {(b.late || []).length > 0 && <><b>Late</b><ul className="ib-pl">{b.late.map(t => <li key={t.id}>{t.t} <span className="sub">· was due {day(t.d)}</span></li>)}</ul></>}
+            {(b.today || []).length > 0 && <><b>Due today</b><ul className="ib-pl">{b.today.map(t => <li key={t.id}>{t.t}</li>)}</ul></>}
+            {!(b.late || []).length && !(b.today || []).length && "Nothing is due."}</div>
+            <div className="ib-act">{has && <button type="button" className="px-btn primary" id="ib-planner-open" onClick={() => onOpen("planner", "today")}>Open the Planner</button>}
+              {x.status !== "done" ? <button type="button" className="px-btn" onClick={() => set("done")} disabled={busy} id="ib-done"><Icon name="check" size={14}/> Mark done</button>
+                : <button type="button" className="px-btn" onClick={() => set("reopen")} disabled={busy} id="ib-reopen">Reopen</button>}</div>
+            <p className="ib-note">Ticking the tasks off in the Planner closes this summary by itself. You can switch the daily summary off in the Planner.</p></>}
           {x.src === "mention" && <><div className="ib-msg" id="ib-text"><b>{b.by}</b>{b.admin ? " · Hyperplane" : ""}<br/>{b.text}</div>
             <div className="ib-act"><button type="button" className="px-btn primary" id="ib-community" onClick={() => { if (x.status !== "done") set("done"); onCommunity(b.mid, b.thread); }}>Open in the Community</button>
               {x.status !== "done" ? <button type="button" className="px-btn" onClick={() => set("done")} disabled={busy} id="ib-done"><Icon name="check" size={14}/> Mark done</button>

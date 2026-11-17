@@ -1,7 +1,7 @@
 // AI Portfolio engine (long-term read): shared by the AI Portfolio Analyser and the Research stock card's
 // "Long-term AI Investment Summary" — its own chunk, loaded with whichever of the two opens first.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AiSpark, DivBar, Info, TF_FULL, TREND_CUT, andJoin, dirTf, dirVal, regimeFull, regimeOf, signed, tc, trendWordOf } from "../core.jsx";
+import { AiSpark, DivBar, Info, TF_FULL, TREND_CUT, andJoin, cutOf, dirCut, dirTf, dirVal, regimeFull, regimeOf, signed, tc, trendWordOf } from "../core.jsx";
 import { addCss } from "../core.jsx";
 import { CSS } from "./engine.css.js";
 
@@ -65,9 +65,10 @@ export function regimeWhy(s, data, held, dir) {
 }
 export function analyseZone(s, data) {
   const [fin, strength, ...per] = s.zv;
+  const cut = cutOf(data);                                          // round 24: the live colour cut (Admin → Scoring)
   const tf = {};
   ["M", "Q", "Y"].forEach((k, i) => { const t = per[i];
-    tf[k] = t ? { v: t[2], d: dirVal(t[2]), tr: t[0], pos: t[1], sd: t[3] ?? null, sn: t[4] ?? null, nr: t[5] ?? 0, at: t[6] ?? -1 } : { v: null, d: null, tr: null, pos: null, sd: null, sn: null, nr: 0, at: -1 }; });
+    tf[k] = t ? { v: t[2], d: dirCut(t[2], cut), tr: t[0], pos: t[1], sd: t[3] ?? null, sn: t[4] ?? null, nr: t[5] ?? 0, at: t[6] ?? -1 } : { v: null, d: null, tr: null, pos: null, sd: null, sn: null, nr: 0, at: -1 }; });
   const tooNew = s.yh == null || s.yh < PF_MIN_YEARS;
   let cat = tooNew ? "new" : fin === 1 ? "intact" : fin === -1 ? "review" : "watch";
   if (cat !== "new" && s.h === "W") cat = "review";                 // low reliability: always red (owner, 2026-10-16)
@@ -79,7 +80,7 @@ export function analyseZone(s, data) {
     why.push(s.yh != null ? `It has about ${s.yh} year${s.yh === 1 ? "" : "s"} of price history so far.` : "It has very little price history so far.");
     why.push(`The quant algorithm needs at least ${PF_MIN_YEARS} years of yearly data, so there is no view yet.`);
   } else {
-    const rw = regimeWhy(s, data, s.rz, dirVal(strength));
+    const rw = regimeWhy(s, data, s.rz, dirCut(strength, cut));
     if (rw) why.push(rw);
     const line = (t, k, name) => { const tr = streakText(t, k), once = tr.endsWith(`this ${ZPERIOD[k][0]}`);
       return `${name}: ${tr}, and the price is ${ZPRICE[t.pos]}${once ? "" : ` this ${ZPERIOD[k][0]}`}.`; };
@@ -102,9 +103,9 @@ export function analyseZone(s, data) {
     why.push(Y.tr != null ? line(Y, "Y", "Yearly view") : "Yearly view: not available yet. It needs 10 years of price data.");
     if (M.tr != null) why.push(line(M, "M", "Monthly view")
       + (zDir(M) === -1 && M.pos <= -1 ? " Keep an eye on it." : zDir(M) === 1 && M.pos >= 1 ? " A good short-term sign." : ""));
-    if (fin === 0 && Q.v >= TREND_CUT) why.push("The quarterly view is strong, but the yearly or monthly view holds it back.");
-    else if (fin === 0 && strength >= TREND_CUT && Q.v < 0) why.push("The overall strength is good, but the quarterly view is negative, so it is not marked Doing well yet.");
-    if (fin === -1 && Q.v > -TREND_CUT) why.push("The yearly and monthly views are weak enough to pull it down.");
+    if (fin === 0 && Q.v >= cut) why.push("The quarterly view is strong, but the yearly or monthly view holds it back.");
+    else if (fin === 0 && strength >= cut && Q.v < 0) why.push("The overall strength is good, but the quarterly view is negative, so it is not marked Doing well yet.");
+    if (fin === -1 && Q.v > -cut) why.push("The yearly and monthly views are weak enough to pull it down.");
     if (s.h === "W") why.push(fin === -1 ? relWhy(s) : `${relWhy(s)} Low reliability always puts a stock in Look at first.`);
     else if (s.h === "M") why.push(relWhy(s));
     if (s.x) why.push(fin === 1 ? "It went up more than 3 times in a year, so it stays in Keep an eye on. Such fast gains often cool off."

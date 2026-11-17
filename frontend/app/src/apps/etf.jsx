@@ -4,10 +4,15 @@
 // EVERY ETF by default; the "Best in segment" button narrows it to one row per market (its best ETF). A row opens the card
 // with a plain-word description of the ETF and every other ETF of its market. The server (backend/app/etf.py) reads every tradable ETF with the same long-term engine as the stocks and
 // picks, per market, the most traded ETF with the longest record. No prices, zones or formulas are shown.
+// Round 23 (owner 2026-11-15): "Best in segment" is on by default; + on any ETF puts it in the customer's BASKET (kept on the server);
+// the basket bar / drawer, then "Analyse basket" — the AI Portfolio Analyser's page for ETFs (etf-basket.jsx): save it, make it a SIP,
+// buy it once on Zerodha, download the report. My portfolios = the saved ETF portfolios and basket SIPs.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AiSpark, BrandBand, CopyBtns, GroupRow, Icon, Info, addCss, api, dirVal, signed, tc, trendWordOf, useAsOf } from "../core.jsx";
 import { CSS } from "./etf.css.js";
 import { aboutMarket, aboutShort } from "./etf-about.js";
+import { BasketView, catOf } from "./etf-basket.jsx";
+import { MyPortfolios } from "../saved.jsx";
 
 addCss("etf", CSS);
 
@@ -26,6 +31,7 @@ const TF_WORD = ["Months", "Quarters", "Years"], TREND_WORD = { "c-good": "risin
 const ARROW = v => v == null ? ["–", "c-side"] : dir(v) === 1 ? ["▲", "c-good"] : dir(v) === -1 ? ["▼", "c-bad"] : ["◆", "c-side"];
 const tfWord = v => v == null ? "—" : dir(v) === 1 ? "Rising" : dir(v) === -1 ? "Falling" : "Sideways";
 const gkey = (k, u) => `${k}|${u}`;
+const BASKET_MAX = 30;
 const I = {
   app: "An ETF is one share that follows a whole market — gold, the Nifty 50, a sector. ★ = the best ETF to buy for that market: the most traded, with a long record.",
   strength: "−100 to +100. Above +24 = going up. Below −24 = going down.",
@@ -52,7 +58,7 @@ function etfTake(e, best) {
 }
 
 // the side panel: the full ETF card
-function Panel({ e, group, onPick, onClose }) {
+function Panel({ e, group, onPick, onClose, inBasket, onToggle }) {
   const best = group && group.best, peers = (group ? group.items : []).filter(p => p.s !== e.s);
   const t = toneOf(e.st);
   const box = useRef(null);
@@ -64,7 +70,9 @@ function Panel({ e, group, onPick, onClose }) {
           <div><div className="px-eyebrow"><AiSpark/> Hyperplane AI · ETF card</div>
             <h2>{e.s} <small>{e.n !== e.s ? e.n : ""}</small></h2>
             <div className="ef-tags"><span>{e.k} · {e.u}</span>{e.r && <span className="rec"><Icon name="star" size={11}/> Best {e.u} ETF</span>}</div></div>
-          <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>
+          <div className="ef-phr">{onToggle && <button type="button" className={`px-btn ${inBasket ? "ef-inb" : "primary"}`} id="ef-panel-add" aria-pressed={!!inBasket} onClick={() => onToggle(e.s)}>
+            <Icon name={inBasket ? "check" : "basket"} size={14}/> {inBasket ? "In your basket" : "Add to basket"}</button>}
+            <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button></div>
         </div>
         <section className="ef-about" id="ef-about">
           <span className="px-label">About this ETF</span>
@@ -91,21 +99,51 @@ function Panel({ e, group, onPick, onClose }) {
           Buy, or choose <b>SIP</b> to buy it every month. Any broker works.</span></div>
         {peers.length > 0 && <div className="ef-peers"><span className="px-label">Also follow {e.u} · {peers.length}</span>
           {peers.map(p => (
-            <button key={p.s} type="button" className="ef-peer" onClick={() => onPick(p)}>
+            <button key={p.s} type="button" className="ef-peer" onClick={() => onPick(p)} data-peer={p.s}>
               <span><b>{p.s}</b>{p.r && <span className="ef-badge sm"><Icon name="star" size={11}/> Best</span>}<small>{EASE[p.lq] || "—"} to trade</small></span><Strength v={p.st}/>
             </button>))}</div>}
       </aside>
     </div>);
 }
 
-function EtfView({ onOut }) {
+const TYPE_OF = { Gold: "Commodities", Silver: "Commodities", "Broad market": "Broad market", "Sector & theme": "Sectors & themes", Strategy: "Strategy", International: "International" };
+const TONE_COL = { good: "var(--long)", mid: "var(--mixed)", bad: "var(--short)", side: "var(--t3)" };
+function BasketDrawer({ list, onRemove, onClear, onGo, onClose }) {
+  const [ask, setAsk] = useState(false);
+  useEffect(() => { const k = x => x.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
+  const types = {}; list.forEach(e => { const t = TYPE_OF[e.k] || "Other"; types[t] = (types[t] || 0) + 1; });
+  const seen = {}; list.forEach(e => { seen[e.u] = (seen[e.u] || 0) + 1; });
+  const twice = Object.keys(seen).filter(u => seen[u] > 1);
+  const SEC = { Commodities: "#d4a72c", "Broad market": "var(--acc)", "Sectors & themes": "#8b5cf6", Strategy: "var(--mx-m)", International: "var(--mx-l)", Other: "var(--mx-c)" };
+  return (
+    <div className="overlay ef-bdov" onClick={onClose}>
+      <aside className="ef-bd" role="dialog" aria-label="Your basket" id="ef-drawer" onClick={x => x.stopPropagation()}>
+        <div className="ef-bdh"><div><div className="px-eyebrow"><Icon name="basket" size={12}/> Your basket</div><h3>{list.length} ETF{list.length === 1 ? "" : "s"} <small>of {BASKET_MAX}</small></h3></div>
+          <button type="button" className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button></div>
+        {list.length > 0 && <div className="ef-bdtypes"><span className="ef-bdbar" aria-hidden="true">{Object.entries(types).map(([t, n]) => <i key={t} style={{ flexGrow: n, background: SEC[t] }}/>)}</span>
+          <span className="ef-bdleg">{Object.entries(types).map(([t, n]) => <span key={t}><i style={{ background: SEC[t] }}/>{t} <b>{n}</b></span>)}</span></div>}
+        {twice.length > 0 && <div className="ef-bdwarn" id="ef-drawer-twice"><Icon name="info" size={14}/><span>{twice.join(", ")}: two ETFs of the same market move together — one is enough.</span></div>}
+        <div className="ef-bdl">{!list.length ? <div className="ef-bdempty">Empty. Press <b>+</b> on any ETF to add it.</div> : list.map(e => { const t = { review: "bad", watch: "mid", intact: "good", new: "side" }[catOf(e)];
+          return <div key={e.s} className="ef-bdi" data-bd={e.s} style={{ "--t": TONE_COL[t] }}>
+            <span className="ef-bdn"><b>{e.r && <Icon name="star" size={11}/>}{e.s}</b><small>{e.u}</small></span>
+            <span className={`ef-bdst ${tc(e.st)}`}>{e.st == null ? "Too new" : `${e.st > 0 ? "+" : ""}${signed(e.st)} · ${trendWordOf(e.st)}`}</span>
+            <button type="button" className="ef-bdx" onClick={() => onRemove(e.s)} aria-label={`Remove ${e.s}`} title={`Remove ${e.s}`}><Icon name="x" size={13}/></button></div>; })}</div>
+        <div className="ef-bdf">
+          {list.length > 0 && (ask ? <span className="pf-clr">Empty it? <button type="button" onClick={() => { onClear(); setAsk(false); }} id="ef-drawer-clear-yes">Yes</button><button type="button" onClick={() => setAsk(false)}>No</button></span>
+            : <button type="button" className="pf-clrbtn" onClick={() => setAsk(true)} id="ef-drawer-clear">Empty the basket</button>)}
+          <button type="button" className="px-btn primary" disabled={!list.length} onClick={onGo} id="ef-drawer-go"><AiSpark/> Analyse basket <Icon name="chevron" size={13}/></button></div>
+      </aside>
+    </div>);
+}
+
+function EtfView({ onOut, apps = [], me }) {
   const [d, setD] = useState(null), [err, setErr] = useState("");
   useEffect(() => {
     api("/app/api/etf").then(setD).catch(e => { if (e.status === 401) onOut(e.message); else setErr(e.message || "Could not load the ETFs."); });
   }, []);
   useAsOf("etf", d && d.as_of);
   const [trend, setTrend] = useState("all"), [q, setQ] = useState(""), [shut, setShut] = useState(() => new Set());
-  const [only, setOnly] = useState(false);                     // false = every ETF · true = the best ETF of each market (a segment)
+  const [only, setOnly] = useState(true);                      // round 23: the best ETF of each market by default · false = every ETF
   const [open, setOpenRaw] = useState(null);
   // the panel adds a browser history step, so Back closes it
   const setOpen = e => { setOpenRaw(e); try { if (e) window.history.pushState({ ...(window.history.state || {}), efp: e.s }, ""); } catch { /* ignore */ } };
@@ -126,9 +164,51 @@ function EtfView({ onOut }) {
       .filter(g => g.best);
   }, [d]);
   const byKey = useMemo(() => new Map(groups.map(g => [g.key, g])), [groups]);
+  // round 23: the tabs (ETFs · Basket · My portfolios) and the basket, kept on the server (a change is saved half a second later)
+  const [tab, setTabRaw] = useState(() => { try { if (sessionStorage.getItem("hp_open_etf")) return "mine"; return sessionStorage.getItem("hp_etf_tab") || "list"; } catch { return "list"; } });
+  const setTab = t => { setTabRaw(t); try { sessionStorage.setItem("hp_etf_tab", t); } catch { /* ignore */ } window.scrollTo(0, 0); };
+  const [basket, setBasketRaw] = useState(null), [bkStatus, setBkStatus] = useState(""), [drawer, setDrawer] = useState(false), [bump, setBump] = useState(0), [full, setFull] = useState(false);
+  const [nSaved, setNSaved] = useState(null);
+  const bkTimer = useRef(null);
+  useEffect(() => {
+    api("/app/api/etf/basket").then(r => setBasketRaw(r.symbols || [])).catch(e => { if (e.status === 401) onOut(e.message); else setBasketRaw([]); });
+    api("/app/api/saved?kind=etf").then(r => setNSaved(r.length)).catch(() => {});
+    const on = e => { if (e.detail && e.detail.app === "etf") setTab("mine"); };            // a saved portfolio opened from the Inbox / an address
+    window.addEventListener("hp-open", on);
+    return () => { window.removeEventListener("hp-open", on); clearTimeout(bkTimer.current); };
+  }, []);
+  const setBasket = list => {
+    setBasketRaw(list); setBkStatus("Saving…"); clearTimeout(bkTimer.current);
+    bkTimer.current = setTimeout(() => api("/app/api/etf/basket", { method: "PUT", json: { symbols: list } })
+      .then(() => setBkStatus("Saved")).catch(e => { if (e.status === 401) onOut(e.message); else setBkStatus(e.message); }), 500);
+  };
+  const inB = useMemo(() => new Set(basket || []), [basket]);
+  const toggleB = s => {
+    if (!basket) return;
+    if (inB.has(s)) { setBasket(basket.filter(x => x !== s)); return; }
+    if (basket.length >= BASKET_MAX) { setFull(true); setTimeout(() => setFull(false), 2600); return; }
+    setBasket([...basket, s]); setBump(n => n + 1);
+  };
 
+  const tabs = (
+    <div className="hp-tabs" role="tablist">
+      <button type="button" role="tab" aria-selected={tab === "list"} className={tab === "list" ? "on" : ""} onClick={() => setTab("list")} id="ef-tab-list"><Icon name="list" size={14}/> ETFs</button>
+      <button type="button" role="tab" aria-selected={tab === "basket"} className={tab === "basket" ? "on" : ""} onClick={() => setTab("basket")} id="ef-tab-basket"><Icon name="basket" size={14}/> Basket{basket && basket.length ? ` · ${basket.length}` : ""}</button>
+      <button type="button" role="tab" aria-selected={tab === "mine"} className={tab === "mine" ? "on" : ""} onClick={() => setTab("mine")} id="ef-tab-mine"><Icon name="star" size={14}/> My portfolios{nSaved ? ` · ${nSaved}` : ""}</button>
+    </div>);
+  if (tab === "mine") return (
+    <div className="ef" id="ef-saved">
+      <BrandBand product="ETF Analyser" title="My portfolios" accent="tracked every day" right={tabs}
+        info="Each saved ETF portfolio is tracked from the day you saved it, as 1 unit of every ETF. A SIP made from your basket is tracked like any AI ETF SIP."/>
+      <MyPortfolios app="etf" onOut={onOut} onCount={setNSaved}/>
+    </div>);
   if (err) return <div className="ef"><section className="card ef-empty" role="alert"><Icon name="info" size={18}/>{err}</section></div>;
   if (!d) return <div className="ef"><section className="card ef-empty"><AiSpark/> Hyperplane AI is reading the ETFs…</section></div>;
+  const panel = open && <Panel e={open} group={byKey.get(gkey(open.k, open.u))} onPick={e => setOpenRaw(e)} onClose={close} inBasket={inB.has(open.s)} onToggle={basket ? toggleB : null}/>;
+  if (tab === "basket") return basket == null ? <div className="ef"><section className="card ef-empty"><AiSpark/> Opening your basket…</section></div> : <>
+    <BasketView d={d} groups={groups} basket={basket} setBasket={setBasket} status={bkStatus} me={me} apps={apps} onOut={onOut} onBack={() => setTab("list")} onOpen={e => setOpen(e)}
+      tabs={tabs} onSaved={() => setNSaved(n => (n || 0) + 1)} onOpenMine={() => setTab("mine")}/>
+    {panel}</>;
 
   const bests = groups.map(g => g.best).filter(e => e.st != null);
   const up = bests.filter(e => dir(e.st) === 1).length, down = bests.filter(e => dir(e.st) === -1).length, side = bests.length - up - down;
@@ -149,6 +229,9 @@ function EtfView({ onOut }) {
   const nShown = secs.reduce((t, x) => t + x.rows.length, 0);
   const toggle = t => setShut(o => { const x = new Set(o); x.has(t) ? x.delete(t) : x.add(t); return x; });
   const SEC_COL = { Commodities: "#d4a72c", "Broad market": "var(--acc)", "Sectors & themes": "#8b5cf6", Strategy: "var(--mx-m)", International: "var(--mx-l)", Other: "var(--mx-c)" };
+  const addBtn = e => basket && <button type="button" className={`ef-add ${inB.has(e.s) ? "on" : ""}`} aria-pressed={inB.has(e.s)} data-add={e.s}
+    aria-label={inB.has(e.s) ? `Remove ${e.s} from the basket` : `Add ${e.s} to the basket`} title={inB.has(e.s) ? "In your basket — click to remove" : "Add to basket"}
+    onClick={x => { x.stopPropagation(); toggleB(e.s); }}><Icon name={inB.has(e.s) ? "check" : "plus"} size={13}/></button>;
 
   // the types (the table's groups), counted on every ETF whatever the search / trend filter says
   const typeStats = [...SECTIONS, ["Other", (d.classes || []).filter(c => !known.includes(c)), "list"]].map(([title, ks]) => {
@@ -161,13 +244,14 @@ function EtfView({ onOut }) {
 
   return (
     <div className="ef">
-      <BrandBand product="ETF Analyser" title="The best ETF" accent="for every market" info={I.app}
+      <BrandBand product="ETF Analyser" title="The best ETF" accent="for every market" info={I.app} right={tabs}
         sub={<><AiSpark/> {up} markets up · {side} sideways · {down} down <span className="ef-sub2">· {d.etfs.length} ETFs in {groups.length} markets</span></>}/>
 
       {/* owner round 7: "stats on the different types of ETF and how many ETFs there are inside each" */}
       <section className="ef-stats" id="ef-stats" aria-label="ETFs by type">
         <div className="ef-stat ef-stat-all"><span className="px-label">{only ? "Best ETFs" : "All ETFs"}</span><b>{only ? groups.length : d.etfs.length}</b><small>{only ? "one for each market" : `in ${groups.length} markets`}</small>
-          <span className="ef-sbar" aria-hidden="true"><i className="up" style={{ flexGrow: up }}/><i className="sd" style={{ flexGrow: side }}/><i className="dn" style={{ flexGrow: down }}/></span></div>
+          <span className="ef-sbar" aria-hidden="true"><i className="up" style={{ flexGrow: up }}/><i className="sd" style={{ flexGrow: side }}/><i className="dn" style={{ flexGrow: down }}/></span>
+          <em><span className="up">▲ {up}</span><span>◆ {side}</span><span className="dn">▼ {down}</span></em></div>
         {typeStats.map(t => (
           <button type="button" key={t.title} className="ef-stat" data-type={t.title} onClick={() => goType(t.title)} style={{ "--c": SEC_COL[t.title] }}>
             <span className="px-label"><i/>{t.title}</span><b>{only ? t.markets : t.etfs}</b><small>{only ? `best ETF${t.markets === 1 ? "" : "s"}, one per market` : `ETFs in ${t.markets} market${t.markets === 1 ? "" : "s"}`}</small>
@@ -196,14 +280,14 @@ function EtfView({ onOut }) {
                 <span className="dn">▼ {sec.rows.filter(r => dir(only ? r.g.best.st : r.e.st) === -1).length}</span></>}/>
             {!shut.has(sec.title) && sec.rows.map(({ g, e }) => only ? (
               <tr key={g.key} className={`hp-row ef-mrow t-${toneOf(e.st)}`} onClick={() => setOpen(e)} data-group={g.u} data-sym={e.s} data-sec={sec.title}>
-                <td><b>{g.u}</b><span className="sub ef-what">{aboutShort(g.u, g.k)}</span><span className="sub">{e.r && <Icon name="star" size={11}/>} <span className="sym">{e.s}</span>{e.n !== e.s ? ` · ${e.n}` : ""}</span></td>
+                <td><div className="ef-c1">{addBtn(e)}<div><b>{g.u}</b><span className="sub ef-what">{aboutShort(g.u, g.k)}</span><span className="sub">{e.r && <Icon name="star" size={11}/>} <span className="sym">{e.s}</span>{e.n !== e.s ? ` · ${e.n}` : ""}</span></div></div></td>
                 <td><Strength v={e.st}/></td>
                 <td><Arrows e={e}/></td>
                 <td className="num"><Vol e={e}/></td>
                 <td className="num">{g.items.length}</td>
               </tr>) : (
               <tr key={e.s} className={`hp-row ef-mrow ef-erow t-${toneOf(e.st)}`} onClick={() => setOpen(e)} data-group={g.u} data-sym={e.s} data-sec={sec.title}>
-                <td><span className="ef-tk">{e.r && <Icon name="star" size={11}/>}<span className="sym">{e.s}</span></span>{e.n !== e.s && <span className="sub">{e.n}</span>}</td>
+                <td><div className="ef-c1">{addBtn(e)}<div><span className="ef-tk">{e.r && <Icon name="star" size={11}/>}<span className="sym">{e.s}</span></span>{e.n !== e.s && <span className="sub">{e.n}</span>}</div></div></td>
                 <td className="ef-mkt"><b>{g.u}</b><span className="sub">{aboutShort(g.u, g.k)}</span></td>
                 <td><Strength v={e.st}/></td>
                 <td><Arrows e={e}/></td>
@@ -215,7 +299,15 @@ function EtfView({ onOut }) {
         <div className="ef-foot"><span>{only ? "Tickers of the best ETFs shown" : "Tickers of the ETFs shown"}</span><CopyBtns syms={secs.flatMap(x => x.rows.map(r => r.e.s))}/></div>
       </section>
       {!secs.length && <section className="card ef-none" id="ef-none">No ETF matches.</section>}
-      {open && <Panel e={open} group={byKey.get(gkey(open.k, open.u))} onPick={e => setOpenRaw(e)} onClose={close}/>}
+      {basket && basket.length > 0 && <div className="ef-bbar" id="ef-bbar" role="region" aria-label="Your basket">
+        <button type="button" className="ef-bbl" onClick={() => setDrawer(true)} id="ef-bbar-open" title="See the basket">
+          <span className="ef-bbi"><Icon name="basket" size={17}/><em key={bump} className="ef-bbn">{basket.length}</em></span>
+          <span className="ef-bbt"><b>{full ? `The basket holds up to ${BASKET_MAX} ETFs` : "Your basket"}</b><small>{basket.slice(0, 4).join(" · ")}{basket.length > 4 ? ` · +${basket.length - 4}` : ""}</small></span></button>
+        <button type="button" className="px-btn primary" onClick={() => setTab("basket")} id="ef-bbar-go"><AiSpark/> Analyse basket <Icon name="chevron" size={13}/></button>
+      </div>}
+      {drawer && <BasketDrawer list={(basket || []).map(s => d.etfs.find(e => e.s === s)).filter(Boolean)} onRemove={s => setBasket(basket.filter(x => x !== s))} onClear={() => setBasket([])}
+        onGo={() => { setDrawer(false); setTab("basket"); }} onClose={() => setDrawer(false)}/>}
+      {panel}
     </div>
   );
 }

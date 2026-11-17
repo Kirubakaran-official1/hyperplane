@@ -3,7 +3,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import { AiSpark, BrandBand, Icon, addCss, api, loadChunk, trackAction, useToast } from "../core.jsx";
 import { createPortal } from "react-dom";
 import { SwapPanel } from "../swap-ui.jsx";
-import { G_ZONES, Info, RELIABILITY, RG_INFO, StockLink, StockSearch, TrendGauge, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
+import { G_ZONES, Info, RELIABILITY, RG_INFO, StockLink, StockSearch, TrendGauge, cutOf, dirVal, fmtDT, signed, tc, trendWordOf } from "../core.jsx";
 import { LT_TF, PF_CAT, PF_CATS, PF_MIN_YEARS, PF_ORDER, StrengthTiles, analyseHolding, portfolioSummary, zDir } from "./portfolio-engine.jsx";
 import { placeLabels } from "../labels.js";
 import { CSS } from "./portfolio.css.js";
@@ -130,14 +130,14 @@ function TrendMap({ rows, onPick }) {
 }
 
 // PDF report (owner, 2026-10-17): the page hands report.js the same numbers and words it shows; report.js only draws.
-const PF_LONG = {
-  review: "The stock's strength is weak (-24% or lower), or its reliability is low (an unsteady price history). Look at these first.",
-  watch: "Mixed signs: the strength is between -24% and +24% (moving sideways), the quarterly view is negative, or the price rose very fast. Check these from time to time.",
-  intact: "The stock's strength is +24% or more and the quarterly view is not negative. The bigger picture is holding up well.",
+const PF_LONG = cut => ({
+  review: `The stock's strength is weak (-${cut}% or lower), or its reliability is low (an unsteady price history). Look at these first.`,
+  watch: `Mixed signs: the strength is between -${cut}% and +${cut}% (moving sideways), the quarterly view is negative, or the price rose very fast. Check these from time to time.`,
+  intact: `The stock's strength is +${cut}% or more and the quarterly view is not negative. The bigger picture is holding up well.`,
   new: "Less than 3 years of yearly price data, so Hyperplane AI gives no view on these yet.",
-};
-const PF_GUIDE = [
-  ["Stock strength", "A number from -100 to +100. Above +24% is an uptrend, below -24% is a downtrend, in between is sideways. Weak, Average, Good and Strong tell how strong the trend is (up to 30%, up to 60%, up to 80%, above 80%)."],
+});
+const PF_GUIDE = cut => [
+  ["Stock strength", `A number from -100 to +100. Above +${cut}% is an uptrend, below -${cut}% is a downtrend, in between is sideways. Weak, Average, Good and Strong tell how strong the trend is (up to 30%, up to 60%, up to 80%, above 80%).`],
   ["Monthly, quarterly and yearly views", "For each period Hyperplane AI checks whether the trend is going up, flat or going down and for how long (for example, going down for the last 3 quarters), and how strong today's price is for this month, quarter and year. The quarter counts most, then the year, then the month. Daily and weekly moves are left out."],
   ["Long-term regime", "Tells you whether the long-term regime of each stock is up or down. A monthly, quarterly or yearly trend that goes against it is not trusted yet, so it is shown as sideways. Turning down means it has started changing from up to down; changed to down means the change is complete. Turning up is not confirmed until it lasts a few more weeks."],
   ["Reliability", "High, Medium or Low: a 0–100 stability score from the stock's whole price history. Low means deep falls or an unsteady history, which means more risk."],
@@ -156,10 +156,10 @@ function reportModel(rows, sum, data, me) {
     customer: (me && me.name) || "", asOf: fmtDT(data.as_of), total: rows.length,
     generated: now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }),
     title: sum.title, tone: sum.tone, lines: sum.lines, avg: sum.avg, avgWord: trendWordOf(sum.avg), zones: G_ZONES,
-    cats: PF_CATS.map(([k, label, tone, desc]) => ({ key: k, label, tone, desc, long: PF_LONG[k], count: sum.counts[k],
+    cats: PF_CATS.map(([k, label, tone, desc]) => ({ key: k, label, tone, desc, long: PF_LONG(cutOf(data))[k], count: sum.counts[k],
       items: rows.filter(r => r.cat === k).sort((a, b) => k === "new" ? (b.s.yh ?? 0) - (a.s.yh ?? 0) : k === "review" ? a.lt - b.lt : b.lt - a.lt)
         .map(r => ({ n: r.s.n, s: r.s.s, v: k === "new" ? null : r.lt, extra: r.s.yh != null ? `${r.s.yh} yr` : "new" })) })),
-    dots, hidden: rows.length - dots.length, guide: PF_GUIDE,
+    dots, hidden: rows.length - dots.length, guide: PF_GUIDE(cutOf(data)),
     keys: (() => {
       const live = rows.filter(r => r.cat !== "new"), q = r => r.zone ? (r.tf.Q.tr == null ? null : zDir(r.tf.Q)) : r.tf.Q.d;
       const up = live.filter(r => q(r) >= 1).length, down = live.filter(r => q(r) <= -1).length;
@@ -366,13 +366,19 @@ function PortfolioView({ data, symbols, setSymbols, status, me, sent = 0, onOut 
           <div className="px-search"><StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Add a stock: name or ticker"/></div>
           <button type="button" className="px-btn" onClick={() => { setStage("build"); window.scrollTo(0, 0); }}>Edit list</button>
           <button type="button" className="px-btn" id="pf-save" onClick={() => { setSaving(v => !v); setSaveMsg(""); }}><Icon name="star" size={14}/> Save portfolio</button>
-          {sum && <button type="button" className="px-btn primary pf-dl" disabled={making === "busy"} onClick={() => {
-            setMaking("busy");
-            Promise.all([loadChunk(() => import("../report.js")), api("/app/api/portfolio/check").catch(() => null)])
-              .then(([{ downloadReport }, ck]) => { downloadReport({ ...reportModel(rows, sum, data, me), swaps: ck && ck.items ? ck.items : null }); setMaking(""); trackAction("portfolio", "report"); })
-              .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
-          }}><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            {making === "busy" ? "Preparing…" : "Download report"}</button>}
+          {/* round 23c (owner 2026-11-17: "download as Word + Markdown — 3 options"): the same report as PDF, Word or Markdown */}
+          {sum && <span className="hp-grp hp-dlg" role="group" aria-label="Download the report">
+            <span className="hp-dll">{making === "busy" ? "Preparing…" : "Download report"}</span>
+            {[["pdf", "PDF", "pf-dl"], ["docx", "Word", "pf-dl-docx"], ["md", "Markdown", "pf-dl-md"]].map(([fmt, l, id]) => (
+              <button key={fmt} type="button" className={`px-btn ${fmt === "pdf" ? "pf-dl" : ""}`} id={id} disabled={making === "busy"} title={`Download the report as ${l}`} onClick={() => {
+                setMaking("busy");
+                Promise.all([loadChunk(() => fmt === "pdf" ? import("../report.js") : import("../doc-export.js")), api("/app/api/portfolio/check").catch(() => null)])
+                  .then(([mod, ck]) => { const m = { ...reportModel(rows, sum, data, me), swaps: ck && ck.items ? ck.items : null };
+                    return fmt === "pdf" ? mod.downloadReport(m) : mod.downloadDoc(mod.docFromReport(m), fmt); })
+                  .then(() => { setMaking(""); trackAction("portfolio", "report"); })
+                  .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
+              }}>{fmt === "pdf" && <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}{l}</button>))}
+          </span>}
       </div>
       {saving && <SaveBar kind="analyser" defName={`My portfolio · ${rows.length} stocks`} inputs={{}} onCancel={() => setSaving(false)}
         holdings={rows.map(r => ({ kind: "stock", s: r.s.s, n: r.s.n, cap: r.s.cap, sec: r.s.sec }))}

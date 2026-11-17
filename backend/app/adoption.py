@@ -31,8 +31,11 @@ ACTIONS = {
     "builder": {"build": "Built a portfolio", "sent": "Sent it to the Analyser", "download": "Downloaded the plan"},
     "sip": {"build": "Built a SIP", "sent": "Sent it to the Analyser", "download": "Downloaded the SIP"},
     "msip": {"build": "Built a Momentum SIP", "sent": "Sent it to the Analyser", "download": "Downloaded the SIP"},
+    "planner": {"note": "Wrote a note", "task_done": "Completed a task", "export": "Downloaded notes"},
+    "etf": {"basket": "Made an ETF basket", "report": "Downloaded the basket report", "sip": "Made a SIP of the basket"},
 }
-SERVER_ACTIONS = {("portfolio", "list_saved"), ("builder", "build"), ("sip", "build"), ("msip", "build")}
+SERVER_ACTIONS = {("portfolio", "list_saved"), ("builder", "build"), ("sip", "build"), ("msip", "build"), ("planner", "note"), ("planner", "task_done"),
+                  ("etf", "basket")}
 SEGMENTS = (("champion", "Champion"), ("regular", "Regular"), ("casual", "Casual"), ("at_risk", "At risk"),
             ("dormant", "Dormant"), ("not_started", "Not started"))
 

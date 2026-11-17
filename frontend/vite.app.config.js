@@ -8,5 +8,6 @@ export default defineConfig({
   base: "/app/",
   plugins: [react()],
   server: { port: 5174, proxy: { "/app/api": "http://localhost:8100" } },
-  build: { outDir: "../dist/app", emptyOutDir: true },
+  // fonts stay files, never data: URLs — the CSP allows fonts from 'self' only (KaTeX's smallest formula fonts used to be inlined and blocked)
+  build: { outDir: "../dist/app", emptyOutDir: true, assetsInlineLimit: file => /\.(woff2?|ttf|otf|eot)$/i.test(file) ? false : undefined },
 });

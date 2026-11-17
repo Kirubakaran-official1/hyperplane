@@ -23,6 +23,7 @@ const EASE = { "Very high": "Very easy", High: "Easy", Moderate: "Fairly easy", 
 const REL = [["S", "High"], ["M", "Medium"], ["W", "Low"]];
 const REL_WORD = { S: "High", M: "Medium", W: "Low" };
 const ROLE = { core: "Core index", theme: "Theme", diversifier: "Diversifier", commodity: "Gold / silver" };
+const BASKET_ROLE = { core: "Broad market", theme: "Sector / theme", diversifier: "Diversifier", commodity: "Gold / silver" };
 const YEARS = [5, 10, 15, 20, 25];
 // AI ETF SIP Builder style (owner round 7: "focus, standard and more diversified as a slightly big chip-like selection"):
 // focus = only what is going up (the core only when it is going up too) · standard = the core index + what is going up ·
@@ -148,7 +149,8 @@ function AiNumbers({ res, hs, isStock, w }) {
   const top = shares(hs, isStock ? "sec" : "grp")[0];
   const third = isStock
     ? (() => { const hi = hs.filter(h => h.rel === "S").length; return ["High reliability", `${hi} of ${hs.length}`, "steady price history"]; })()
-    : (() => { const c = hs.filter(h => h.role === "core").reduce((t, h) => t + h.amt, 0) / (res.invested || 1) * 100; return ["Core index share", `${c.toFixed(0)}%`, "kept whatever the trend"]; })();
+    : (() => { const c = hs.filter(h => h.role === "core").reduce((t, h) => t + h.amt, 0) / (res.invested || 1) * 100;
+      return res.basket ? ["Broad market share", `${c.toFixed(0)}%`, `of each ${w}`] : ["Core index share", `${c.toFixed(0)}%`, "kept whatever the trend"]; })();
   return (
     <div className="sp-aix" id={`${res.app}-ainum`}>
       <div className="sp-aisp"><span className="px-label">Trend spread of the {isStock ? "stocks" : "holdings"}</span>
@@ -240,6 +242,156 @@ function HowToBuy({ res, onClose }) {
     </Modal>);
 }
 
+// the result page of a SIP (round 23: also the ETF Analyser's basket SIP — res.basket): band and top come from the caller
+export function SipResult({ res, mode = "etf", band, top = null, onEdit, onSaved, onOpenMine, apps = [], onAddToPortfolio, onOpenApp = () => {}, editLabel = "Edit inputs", defName }) {
+  const M = MODES[mode], APP = M.app, isStock = mode === "stock";
+  const [open, setOpen] = useState(null), [how, setHow] = useState(false);
+  const [sent, setSent] = useState(""), [saving, setSaving] = useState(false), [msg, setMsg] = useState("");
+  const [sim, setSimRaw] = useState({ rate: 0, step: 0 }), [shut, setShut] = useState(() => new Set());
+  const setSim = p => setSimRaw(o => ({ ...o, ...p }));
+  const [flt, setFltRaw] = useState(null);                          // { by: "sec" | "cap" | "grp" | "type", v } — the table filter
+  const setFlt = f => { setFltRaw(f); setTimeout(() => { const t = document.getElementById(`${APP}-table`); if (f && t) t.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 30); };
+  const canPf = apps.some(x => x.key === "portfolio"), canEtf = apps.some(x => x.key === "etf");
+  const w = WORD[res.freq], hs = res.holdings;
+  const stocks = hs.filter(h => h.kind === "stock"), etfs = hs.filter(h => h.kind === "etf");
+  const shown = h => !flt || FILTER_BY[flt.by](h) === flt.v;
+  const pick = by => v => setFlt(v ? { by, v } : null);
+  const styleOf = res.inputs && res.inputs.opts && res.inputs.opts.style;
+  const nCore = etfs.filter(h => h.role === "core").length, nExtra = etfs.filter(h => h.role === "theme" || h.role === "diversifier").length, nGold = etfs.filter(h => h.sleeve === "commodity").length;
+  const groups = isStock
+    ? CAPS.map(([k, l], i) => ({ k, label: l, color: CAP_COL[i], rows: stocks.filter(h => h.cap === k) }))
+    : res.basket ? [{ k: "core", label: "Broad market", color: "var(--acc)", rows: etfs.filter(h => h.role === "core") },
+       { k: "extra", label: "Sectors, themes, strategy & international", color: "#8b5cf6", rows: etfs.filter(h => h.role === "theme" || h.role === "diversifier") },
+       { k: "metal", label: "Gold & silver", color: "#d4a72c", rows: etfs.filter(h => h.sleeve === "commodity") }]
+    : [{ k: "core", label: "Core index · Nifty large, mid and small", color: "var(--acc)", rows: etfs.filter(h => h.role === "core") },
+       { k: "extra", label: "Strongest ETFs today · themes, strategy, international", color: "#8b5cf6", rows: etfs.filter(h => h.role === "theme" || h.role === "diversifier") },
+       { k: "metal", label: "Gold & silver", color: "#d4a72c", rows: etfs.filter(h => h.sleeve === "commodity") }];
+  const csv = () => {
+    const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = [["Group", "Type", "Name", "Ticker", isStock ? "Reliability" : "Role", "Long-term strength", "Qty each time", "Price per unit (₹)", `₹ per ${w}`, "Size %", "Why"],
+      ...hs.map(h => [h.grp, h.kind === "etf" ? "ETF" : "Stock", h.n, h.s, isStock ? REL_WORD[h.rel] : ROLE[h.role], h.st, h.every > 1 ? `1 every ${h.every} ${w}s` : h.units, h.p, h.amt, h.w, (h.why || []).join("; ")])];
+    const el = document.createElement("a");
+    el.href = URL.createObjectURL(new Blob(["﻿" + rows.map(r => r.map(q).join(",")).join("\n")], { type: "text/csv" }));
+    el.download = `Hyperplane-${isStock ? "Momentum-SIP" : "SIP"}-${new Date().toISOString().slice(0, 10)}.csv`; el.click(); trackAction(APP, "download");
+  };
+  const pdf = () => loadChunk(() => import("../sip-report.js")).then(({ downloadSipReport }) => { downloadSipReport(res, sim.rate, sim.step); trackAction(APP, "download"); }).catch(e => setMsg(e.message));
+  const doc = fmt => loadChunk(() => import("../doc-export.js")).then(({ downloadDoc, docFromSip }) => downloadDoc(docFromSip(res, { isStock, rate: sim.rate, step: sim.step,
+    rows: simulate(res.invested, res.per_year, res.years_plan, sim.step, sim.rate) }), fmt)).then(() => trackAction(APP, "download")).catch(e => setMsg(e.message));
+  const send = how_ => { setSent("busy"); onAddToPortfolio(stocks.map(h => h.s), how_).then(() => { setSent(how_); trackAction(APP, "sent"); }).catch(e => setSent(`Could not update the list: ${e.message}`)); };
+  const rows = simulate(res.invested, res.per_year, res.years_plan, sim.step, sim.rate);
+  const last = rows[rows.length - 1];
+  const secs = new Set(stocks.map(h => h.sec)).size;
+  return (
+    <div className="sp" id={`${APP}-result`}>
+      {band}
+      {top}
+      <div className="hp-actbar">
+        {/* round 16 (owner: "the buttons look awkward"): one slim row — your actions · one joined export group · how to buy · send on the right */}
+        <button type="button" className="px-btn" id={`${APP}-edit`} onClick={onEdit}><Icon name="list" size={14}/> {editLabel}</button>
+        <button type="button" className="px-btn" id={`${APP}-save`} onClick={() => { setSaving(v => !v); setMsg(""); }}><Icon name="star" size={14}/> Save</button>
+        <span className="hp-grp" role="group" aria-label="Export">
+          <button type="button" className="px-btn" onClick={pdf} id={`${APP}-pdf`}><Icon name="copy" size={14}/> PDF</button>
+        <button type="button" className="px-btn" onClick={() => doc("docx")} id={`${APP}-docx`} title="Download as Word">Word</button>
+        <button type="button" className="px-btn" onClick={() => doc("md")} id={`${APP}-md`} title="Download as Markdown">Markdown</button>
+          <button type="button" className="px-btn" onClick={csv} id={`${APP}-csv`}><Icon name="table" size={14}/> CSV</button>
+          <span className="tcopy"><span className="lbl">Tickers · {hs.length}</span><CopyBtns syms={hs.map(h => h.s)}/></span></span>
+        <button type="button" className="px-btn hp-link" id={`${APP}-how-btn`} onClick={() => setHow(true)}><Icon name="info" size={14}/> How to buy</button>
+        {/* round 20: Kite opens with this instalment's whole units (Customer Admin first — "<app>:zerodha") */}
+        <ZerodhaButton id={`${APP}-zr`} req={{ app: APP, source: APP, title: `This ${w}'s instalment · ${inrShort(res.amount)} ${isStock ? "Momentum SIP" : "SIP"}`,
+          lines: hs.map(h => ({ s: h.s, qty: h.units || 1, every: h.every || 1 })) }}/>
+        {canPf && stocks.length > 0 && <button type="button" className="px-btn primary" id={`${APP}-send`} disabled={sent === "busy"} onClick={() => setSent("ask")}>Send to AI Portfolio Analyser <Icon name="chevron" size={14}/></button>}
+      </div>
+      {saving && <SaveBar kind={APP} defName={defName || `${inrShort(res.amount)} ${M.word}`} inputs={res.inputs} holdings={hs} onCancel={() => setSaving(false)}
+        onDone={m => { setSaving(false); setMsg(m); onSaved && onSaved(); }}/>}
+      {msg && <SavedNote id={`${APP}-msg`} msg={msg} onOpen={onOpenMine} onClose={() => setMsg("")}/>}
+      {sent === "ask" && <div className="px-card sp-confirm" role="alert" id={`${APP}-ask`}>
+        <span>Put the {stocks.length} stocks in your AI Portfolio Analyser list?</span>
+        <button type="button" className="px-btn primary" onClick={() => send("add")}>Add to my list</button>
+        <button type="button" className="px-btn" onClick={() => send("replace")}>Replace my list</button>
+        <button type="button" className="px-btn" onClick={() => setSent("")}>Cancel</button></div>}
+      {(sent === "add" || sent === "replace") && <div className="px-card sp-confirm ok" id={`${APP}-done`}>
+        <span><Icon name="check" size={14}/> {sent === "replace" ? `Your Analyser list now holds these ${stocks.length} stocks.` : "Added to your Analyser list."}</span>
+        <button type="button" className="px-btn primary" onClick={() => onOpenApp("portfolio")}>Open the Analyser</button>
+        {etfs.length > 0 && canEtf && <button type="button" className="px-btn" onClick={() => onOpenApp("etf")}>ETFs in the ETF Analyser</button>}</div>}
+      {sent && !["ask", "busy", "add", "replace"].includes(sent) && <div className="pf-miss" role="alert">{sent}</div>}
+      {res.over_note && <div className="sp-over" id={`${APP}-over`}><Icon name="info" size={15}/>{res.over_note}</div>}
+
+      <section className="sp-kpis">
+        <div className="px-card sp-kpi"><span className="px-label">Each {w}</span><b>{inr(res.invested)}</b><small>{res.over ? `+${inr(res.over)} over` : `of ${inr(res.amount)}`}</small></div>
+        {isStock ? <div className="px-card sp-kpi"><span className="px-label">Stocks</span><b>{stocks.length}</b><small>across {secs} sectors</small></div>
+          : <div className="px-card sp-kpi sp-kpin" id={`${APP}-picked`}><span className="px-label">{res.basket ? "ETFs in your basket" : "ETFs picked for you"}</span>
+              <b>{etfs.length}{styleOf ? <small> · {STYLE_NAME[styleOf]}</small> : null}</b>
+              <span className="sp-pick" aria-hidden="true"><i style={{ flexGrow: nCore, background: "var(--acc)" }}/><i style={{ flexGrow: nExtra, background: "#8b5cf6" }}/><i style={{ flexGrow: nGold, background: "#d4a72c" }}/></span>
+              <small>{nCore} {res.basket ? "broad market" : "core index"} · {nExtra} {res.basket ? "others" : "strongest"} · {nGold} gold{nGold > 1 ? " & silver" : ""}</small></div>}
+        {isStock ? <div className="px-card sp-kpi"><span className="px-label">Average strength</span><b className={tc(res.st_avg)}>{plus(res.st_avg)}</b><small>{trendWordOf(res.st_avg)}</small></div>
+          : <div className="px-card sp-kpi"><span className="px-label">Split</span><b className="sp-kpi-sm">{res.sleeves.index}% equity · {res.sleeves.commodity}% gold</b><small>by money each {w}</small></div>}
+        <div className="px-card sp-kpi"><span className="px-label">Put in, {res.years_plan} years</span><b>{inrShort(last.put)}</b><small>{sim.step ? `with +${sim.step}% a year` : "same amount each time"}</small></div>
+      </section>
+
+      <section className="sp-row2">
+        <div className="px-card px-sumc sp-ai" id={`${APP}-ai`}>
+          <div className="px-label"><AiSpark/> Hyperplane AI summary <Info text={I.ai}/></div>
+          <ul className="px-points">{res.summary.map(([t, txt], i) => <li key={i} className={`pl-${t}`}>{txt}</li>)}
+            {res.notes.map((n, i) => <li key={`n${i}`} className="pl-mid">{n}</li>)}</ul>
+          <AiNumbers res={res} hs={hs} isStock={isStock} w={w}/>
+        </div>
+        <div className="px-card sp-ins" id={`${APP}-insights`}>
+          {isStock ? <><Bars title="Stocks by market cap" rows={shares(hs, "cap")} on={flt && flt.by === "cap" ? flt.v : null} onPick={pick("cap")} id={`${APP}-f-cap`}/>
+              <Bars title="Sectors" rows={shares(hs, "sec")} on={flt && flt.by === "sec" ? flt.v : null} onPick={pick("sec")} id={`${APP}-f-sec`}/></>
+            : <><Bars title="Where the money goes" rows={shares(hs, "type")} on={flt && flt.by === "type" ? flt.v : null} onPick={pick("type")} id={`${APP}-f-type`}/>
+              <Bars title="Markets" rows={shares(hs, "grp")} on={flt && flt.by === "grp" ? flt.v : null} onPick={pick("grp")} id={`${APP}-f-grp`}/></>}
+        </div>
+      </section>
+
+      <section className="px-card sp-tcard" id={`${APP}-table`}>
+        <div className="hp-tbar"><h3>Holdings<small>{flt ? `${hs.filter(shown).length} of ${hs.length}` : hs.length} · click one for its insights</small></h3>
+          {flt && <span className="sp-fchip" id={`${APP}-fchip`}>{flt.v}<button type="button" id={`${APP}-fclear`} onClick={() => setFltRaw(null)} aria-label="Clear the filter">Clear filter <Icon name="x" size={11}/></button></span>}
+          <button type="button" className="hp-gall" onClick={() => setShut(o => o.size ? new Set() : new Set(groups.map(g => g.k)))} id={`${APP}-gall`}>{shut.size ? "Show all groups" : "Collapse all groups"}</button></div>
+        <div className="hp-tw"><table className="hp-t">
+          <thead><tr><th>Instrument</th><th>{isStock ? "Reliability" : "Role"}</th><th>Long-term strength</th><th className="num">Qty each {w}</th>
+            <th className="num">Price per unit</th><th className="num">₹ per {w}</th><th className="num">Size</th></tr></thead>
+          <tbody>{groups.map(g => ({ ...g, rows: g.rows.filter(shown) })).filter(g => g.rows.length).map(g => { const amt = g.rows.reduce((t, h) => t + h.amt, 0); return <React.Fragment key={g.k}>
+            <GroupRow cols={7} open={!shut.has(g.k)} onToggle={() => setShut(o => { const x = new Set(o); x.has(g.k) ? x.delete(g.k) : x.add(g.k); return x; })}
+              color={g.color} label={g.label} id={`${APP}-grp-${g.k}`}
+              meta={<><span>{g.rows.length} holding{g.rows.length === 1 ? "" : "s"}</span><span><b>{inr(amt)}</b> a {w}</span><span><b>{(amt / res.invested * 100).toFixed(1)}%</b> of the SIP</span></>}/>
+            {!shut.has(g.k) && g.rows.map(h => <tr key={h.s} className="hp-row sp-in" onClick={() => setOpen(h)} data-sym={h.s} data-sec={h.sec || h.grp}>
+              <td>{h.kind === "stock" && isStock ? <StockLink sym={h.s} app="msip"><span className="sym">{h.s}</span></StockLink> : <span className="sym">{h.s}</span>}<span className="sub">{h.n !== h.s ? h.n : h.grp}{h.kind === "stock" ? ` · ${h.sec}` : ""}</span></td>
+              <td>{h.kind === "stock" ? <span className={`hp-rel ${h.rel}`}><i/>{REL_WORD[h.rel]}{h.rs != null ? ` · ${h.rs}` : ""}</span> : <span className="hp-rel">{(res.basket ? BASKET_ROLE : ROLE)[h.role] || "ETF"}</span>}</td>
+              <td><Strength v={h.st}/></td>
+              <td className="num"><b>{h.every > 1 ? `1 every ${h.every} ${w}s` : h.units}</b></td>
+              <td className="num">{inr2(h.p)}</td>
+              <td className="num"><b>{inr(h.amt)}</b></td>
+              <td className="num">{h.w}%</td></tr>)}
+          </React.Fragment>; })}</tbody>
+        </table></div>
+        <div className="tk-foot">{isStock ? "Each stock gets the same money every instalment; a costly share is bought every few instalments." : res.basket ? "Your basket, split as you chose; a costly unit is bought every few instalments." : "Core index ETFs are kept whatever the trend; a theme leaves only in a long-term downtrend."} Prices change daily — the money each {w} stays the same.</div>
+      </section>
+
+      <section className="px-card sp-sim" id={`${APP}-sim`}>
+        <div className="sp-hh"><b><Icon name="chart" size={15}/> Growth simulator</b><small>{res.years_plan} years <Info text={I.sim}/></small></div>
+        <div className="sp-simb">
+          <div className="sp-simc">
+            <span className="px-label">Assumed growth a year</span>
+            <div className="sp-rate" style={{ "--f": sim.rate / RATE_MAX }}>
+              <output className="sp-bub" htmlFor={`${APP}-rate`} id={`${APP}-rate-val`}>{sim.rate ? `${sim.rate}% a year` : "No growth"}</output>
+              <input type="range" className="al-range" min="0" max={RATE_MAX} step="1" value={sim.rate} onChange={e => setSim({ rate: +e.target.value })} aria-label="Assumed growth a year" id={`${APP}-rate`}
+                style={{ "--c": "var(--sp-ai)", "--v": `${sim.rate / RATE_MAX * 100}%` }}/>
+              <div className="sp-rticks" aria-hidden="true"><span>0%</span><span>5%</span><span>10%</span><span>15%</span></div>
+            </div>
+            <span className="px-label">Step-up: raise the instalment every year <Info text="Most people raise their SIP as their income grows. Each year the instalment goes up by this %."/></span>
+            <div className="sp-chips" role="group" aria-label="Step-up">{STEPUPS.map(v => <button key={v} type="button" className={sim.step === v ? "on" : ""} onClick={() => setSim({ step: v })} id={`${APP}-s-${v}`}>{v ? `+${v}% a year` : "Same amount"}</button>)}</div>
+            <div className="sp-simk"><div><small>You put in</small><b>{inrShort(last.put)}</b></div>
+              <div className="hl"><small>{sim.rate ? `At ${sim.rate}% a year` : "Without growth"}</small><b id={`${APP}-simval`}>{inrShort(last.val)}</b></div></div>
+          </div>
+          <div className="sp-stt"><div className="h"><span>Year</span><span className="num">Each {w}</span><span className="num">Put in</span><span className="num">{sim.rate ? `At ${sim.rate}%` : "Value"}</span></div>
+            {rows.map(r => <div key={r.y}><span>{r.y}</span><span className="num">{inr(r.each)}</span><span className="num">{inrShort(r.put)}</span><span className="num"><b>{inrShort(r.val)}</b></span></div>)}</div>
+        </div>
+      </section>
+      {open && <Insight h={open} freq={res.freq} onClose={() => setOpen(null)}/>}
+      {how && <HowToBuy res={res} onClose={() => setHow(false)}/>}
+    </div>);
+}
+
 function SipView({ apps = [], onAddToPortfolio, onOpenApp, onOut, onHelpdesk, mode = "etf" }) {
   const M = MODES[mode], APP = M.app, isStock = mode === "stock";
   const S_IN = `hp_${APP}_in_v4`, S_RES = `hp_${APP}_res_v4`;
@@ -252,12 +404,7 @@ function SipView({ apps = [], onAddToPortfolio, onOpenApp, onOut, onHelpdesk, mo
   const [info, setInfo] = useState(null), [infoErr, setInfoErr] = useState("");
   const [res, setResRaw] = useState(() => { try { return JSON.parse(sessionStorage.getItem(S_RES) || "null"); } catch { return null; } });
   const setRes = r => { setResRaw(r); try { r ? sessionStorage.setItem(S_RES, JSON.stringify(r)) : sessionStorage.removeItem(S_RES); } catch { /* ignore */ } };
-  const [busy, setBusy] = useState(false), [err, setErr] = useState(""), [open, setOpen] = useState(null), [how, setHow] = useState(false);
-  const [sent, setSent] = useState(""), [saving, setSaving] = useState(false), [msg, setMsg] = useState("");
-  const [nSaved, setNSaved] = useState(null), [sim, setSimRaw] = useState({ rate: 0, step: 0 }), [shut, setShut] = useState(() => new Set());
-  const setSim = p => setSimRaw(o => ({ ...o, ...p }));
-  const [flt, setFltRaw] = useState(null);                          // { by: "sec" | "cap" | "grp" | "type", v } — the table filter
-  const setFlt = f => { setFltRaw(f); setTimeout(() => { const t = document.getElementById(`${APP}-table`); if (f && t) t.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 30); };
+  const [busy, setBusy] = useState(false), [err, setErr] = useState(""), [nSaved, setNSaved] = useState(null);
   useEffect(() => {
     api(`/app/api/${APP}/info`).then(setInfo).catch(e => { if (e.status === 401) onOut(e.message); else setInfoErr(e.message || `Could not load the ${M.product}.`); });
     api(`/app/api/saved?kind=${APP}`).then(r => setNSaved(r.length)).catch(() => {});
@@ -298,13 +445,12 @@ function SipView({ apps = [], onAddToPortfolio, onOpenApp, onOut, onHelpdesk, mo
     : { amount: inp.amount, freq: inp.freq, opts: { gold: inp.opts.gold, caps: inp.opts.caps, style: inp.opts.style }, years: inp.years };
   const build = () => {
     if (problem) { setErr(problem); return; }
-    setBusy(true); setErr(""); setSent(""); setMsg("");
+    setBusy(true); setErr("");
     api(`/app/api/${APP}`, { method: "POST", json: body() })
-      .then(r => { setRes(r); setShut(new Set()); setFltRaw(null); window.scrollTo(0, 0); })
+      .then(r => { setRes(r); window.scrollTo(0, 0); })
       .catch(e => { if (e.status === 401) onOut(e.message); else setErr(e.message); })
       .finally(() => setBusy(false));
   };
-  const canPf = apps.some(x => x.key === "portfolio"), canEtf = apps.some(x => x.key === "etf");
   const tabs = (
     <div className="hp-tabs" role="tablist">
       <button type="button" role="tab" aria-selected={tab === "build"} className={tab === "build" ? "on" : ""} onClick={() => setTab("build")} id={`${APP}-tab-build`}><Icon name="sparkles" size={14}/> Build</button>
@@ -327,140 +473,10 @@ function SipView({ apps = [], onAddToPortfolio, onOpenApp, onOut, onHelpdesk, mo
       <MyPortfolios app={APP} onOut={onOut} onCount={setNSaved}/>
     </div>);
 
-  // ── result ──
-  if (res) {
-    const w = WORD[res.freq], hs = res.holdings;
-    const stocks = hs.filter(h => h.kind === "stock"), etfs = hs.filter(h => h.kind === "etf");
-    const shown = h => !flt || FILTER_BY[flt.by](h) === flt.v;
-    const pick = by => v => setFlt(v ? { by, v } : null);
-    const styleOf = res.inputs && res.inputs.opts && res.inputs.opts.style;
-    const nCore = etfs.filter(h => h.role === "core").length, nExtra = etfs.filter(h => h.role === "theme" || h.role === "diversifier").length, nGold = etfs.filter(h => h.sleeve === "commodity").length;
-    const groups = isStock
-      ? CAPS.map(([k, l], i) => ({ k, label: l, color: CAP_COL[i], rows: stocks.filter(h => h.cap === k) }))
-      : [{ k: "core", label: "Core index · Nifty large, mid and small", color: "var(--acc)", rows: etfs.filter(h => h.role === "core") },
-         { k: "extra", label: "Strongest ETFs today · themes, strategy, international", color: "#8b5cf6", rows: etfs.filter(h => h.role === "theme" || h.role === "diversifier") },
-         { k: "metal", label: "Gold & silver", color: "#d4a72c", rows: etfs.filter(h => h.sleeve === "commodity") }];
-    const csv = () => {
-      const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-      const rows = [["Group", "Type", "Name", "Ticker", isStock ? "Reliability" : "Role", "Long-term strength", "Qty each time", "Price per unit (₹)", `₹ per ${w}`, "Size %", "Why"],
-        ...hs.map(h => [h.grp, h.kind === "etf" ? "ETF" : "Stock", h.n, h.s, isStock ? REL_WORD[h.rel] : ROLE[h.role], h.st, h.every > 1 ? `1 every ${h.every} ${w}s` : h.units, h.p, h.amt, h.w, (h.why || []).join("; ")])];
-      const el = document.createElement("a");
-      el.href = URL.createObjectURL(new Blob(["﻿" + rows.map(r => r.map(q).join(",")).join("\n")], { type: "text/csv" }));
-      el.download = `Hyperplane-${isStock ? "Momentum-SIP" : "SIP"}-${new Date().toISOString().slice(0, 10)}.csv`; el.click(); trackAction(APP, "download");
-    };
-    const pdf = () => loadChunk(() => import("../sip-report.js")).then(({ downloadSipReport }) => { downloadSipReport(res, sim.rate, sim.step); trackAction(APP, "download"); }).catch(e => setMsg(e.message));
-    const send = how_ => { setSent("busy"); onAddToPortfolio(stocks.map(h => h.s), how_).then(() => { setSent(how_); trackAction(APP, "sent"); }).catch(e => setSent(`Could not update the list: ${e.message}`)); };
-    const rows = simulate(res.invested, res.per_year, res.years_plan, sim.step, sim.rate);
-    const last = rows[rows.length - 1];
-    const secs = new Set(stocks.map(h => h.sec)).size;
-    return (
-      <div className="sp" id={`${APP}-result`}>
-        <BrandBand product={M.product} title={isStock ? "Your Momentum SIP" : "Your SIP"} accent={`${inrShort(res.amount)} a ${w}`} sub={`${res.count} holdings`} right={<>{chip}{tabs}</>}/>
-        {risk}
-        <div className="hp-actbar">
-          {/* round 16 (owner: "the buttons look awkward"): one slim row — your actions · one joined export group · how to buy · send on the right */}
-          <button type="button" className="px-btn" id={`${APP}-edit`} onClick={() => setRes(null)}><Icon name="list" size={14}/> Edit inputs</button>
-          <button type="button" className="px-btn" id={`${APP}-save`} onClick={() => { setSaving(v => !v); setMsg(""); }}><Icon name="star" size={14}/> Save</button>
-          <span className="hp-grp" role="group" aria-label="Export">
-            <button type="button" className="px-btn" onClick={pdf} id={`${APP}-pdf`}><Icon name="copy" size={14}/> PDF</button>
-            <button type="button" className="px-btn" onClick={csv} id={`${APP}-csv`}><Icon name="table" size={14}/> CSV</button>
-            <span className="tcopy"><span className="lbl">Tickers · {hs.length}</span><CopyBtns syms={hs.map(h => h.s)}/></span></span>
-          <button type="button" className="px-btn hp-link" id={`${APP}-how-btn`} onClick={() => setHow(true)}><Icon name="info" size={14}/> How to buy</button>
-          {/* round 20: Kite opens with this instalment's whole units (Customer Admin first — "<app>:zerodha") */}
-          <ZerodhaButton id={`${APP}-zr`} req={{ app: APP, source: APP, title: `This ${w}'s instalment · ${inrShort(res.amount)} ${isStock ? "Momentum SIP" : "SIP"}`,
-            lines: hs.map(h => ({ s: h.s, qty: h.units || 1, every: h.every || 1 })) }}/>
-          {canPf && stocks.length > 0 && <button type="button" className="px-btn primary" id={`${APP}-send`} disabled={sent === "busy"} onClick={() => setSent("ask")}>Send to AI Portfolio Analyser <Icon name="chevron" size={14}/></button>}
-        </div>
-        {saving && <SaveBar kind={APP} defName={`${inrShort(res.amount)} ${M.word}`} inputs={res.inputs} holdings={hs} onCancel={() => setSaving(false)}
-          onDone={m => { setSaving(false); setMsg(m); setNSaved(n => (n || 0) + 1); }}/>}
-        {msg && <SavedNote id={`${APP}-msg`} msg={msg} onOpen={() => setTab("mine")} onClose={() => setMsg("")}/>}
-        {sent === "ask" && <div className="px-card sp-confirm" role="alert" id={`${APP}-ask`}>
-          <span>Put the {stocks.length} stocks in your AI Portfolio Analyser list?</span>
-          <button type="button" className="px-btn primary" onClick={() => send("add")}>Add to my list</button>
-          <button type="button" className="px-btn" onClick={() => send("replace")}>Replace my list</button>
-          <button type="button" className="px-btn" onClick={() => setSent("")}>Cancel</button></div>}
-        {(sent === "add" || sent === "replace") && <div className="px-card sp-confirm ok" id={`${APP}-done`}>
-          <span><Icon name="check" size={14}/> {sent === "replace" ? `Your Analyser list now holds these ${stocks.length} stocks.` : "Added to your Analyser list."}</span>
-          <button type="button" className="px-btn primary" onClick={() => onOpenApp("portfolio")}>Open the Analyser</button>
-          {etfs.length > 0 && canEtf && <button type="button" className="px-btn" onClick={() => onOpenApp("etf")}>ETFs in the ETF Analyser</button>}</div>}
-        {sent && !["ask", "busy", "add", "replace"].includes(sent) && <div className="pf-miss" role="alert">{sent}</div>}
-        {res.over_note && <div className="sp-over" id={`${APP}-over`}><Icon name="info" size={15}/>{res.over_note}</div>}
-
-        <section className="sp-kpis">
-          <div className="px-card sp-kpi"><span className="px-label">Each {w}</span><b>{inr(res.invested)}</b><small>{res.over ? `+${inr(res.over)} over` : `of ${inr(res.amount)}`}</small></div>
-          {isStock ? <div className="px-card sp-kpi"><span className="px-label">Stocks</span><b>{stocks.length}</b><small>across {secs} sectors</small></div>
-            : <div className="px-card sp-kpi sp-kpin" id={`${APP}-picked`}><span className="px-label">ETFs picked for you</span>
-                <b>{etfs.length}{styleOf ? <small> · {STYLE_NAME[styleOf]}</small> : null}</b>
-                <span className="sp-pick" aria-hidden="true"><i style={{ flexGrow: nCore, background: "var(--acc)" }}/><i style={{ flexGrow: nExtra, background: "#8b5cf6" }}/><i style={{ flexGrow: nGold, background: "#d4a72c" }}/></span>
-                <small>{nCore} core index · {nExtra} strongest · {nGold} gold{nGold > 1 ? " & silver" : ""}</small></div>}
-          {isStock ? <div className="px-card sp-kpi"><span className="px-label">Average strength</span><b className={tc(res.st_avg)}>{plus(res.st_avg)}</b><small>{trendWordOf(res.st_avg)}</small></div>
-            : <div className="px-card sp-kpi"><span className="px-label">Split</span><b className="sp-kpi-sm">{res.sleeves.index}% equity · {res.sleeves.commodity}% gold</b><small>by money each {w}</small></div>}
-          <div className="px-card sp-kpi"><span className="px-label">Put in, {res.years_plan} years</span><b>{inrShort(last.put)}</b><small>{sim.step ? `with +${sim.step}% a year` : "same amount each time"}</small></div>
-        </section>
-
-        <section className="sp-row2">
-          <div className="px-card px-sumc sp-ai" id={`${APP}-ai`}>
-            <div className="px-label"><AiSpark/> Hyperplane AI summary <Info text={I.ai}/></div>
-            <ul className="px-points">{res.summary.map(([t, txt], i) => <li key={i} className={`pl-${t}`}>{txt}</li>)}
-              {res.notes.map((n, i) => <li key={`n${i}`} className="pl-mid">{n}</li>)}</ul>
-            <AiNumbers res={res} hs={hs} isStock={isStock} w={w}/>
-          </div>
-          <div className="px-card sp-ins" id={`${APP}-insights`}>
-            {isStock ? <><Bars title="Stocks by market cap" rows={shares(hs, "cap")} on={flt && flt.by === "cap" ? flt.v : null} onPick={pick("cap")} id={`${APP}-f-cap`}/>
-                <Bars title="Sectors" rows={shares(hs, "sec")} on={flt && flt.by === "sec" ? flt.v : null} onPick={pick("sec")} id={`${APP}-f-sec`}/></>
-              : <><Bars title="Where the money goes" rows={shares(hs, "type")} on={flt && flt.by === "type" ? flt.v : null} onPick={pick("type")} id={`${APP}-f-type`}/>
-                <Bars title="Markets" rows={shares(hs, "grp")} on={flt && flt.by === "grp" ? flt.v : null} onPick={pick("grp")} id={`${APP}-f-grp`}/></>}
-          </div>
-        </section>
-
-        <section className="px-card sp-tcard" id={`${APP}-table`}>
-          <div className="hp-tbar"><h3>Holdings<small>{flt ? `${hs.filter(shown).length} of ${hs.length}` : hs.length} · click one for its insights</small></h3>
-            {flt && <span className="sp-fchip" id={`${APP}-fchip`}>{flt.v}<button type="button" id={`${APP}-fclear`} onClick={() => setFltRaw(null)} aria-label="Clear the filter">Clear filter <Icon name="x" size={11}/></button></span>}
-            <button type="button" className="hp-gall" onClick={() => setShut(o => o.size ? new Set() : new Set(groups.map(g => g.k)))} id={`${APP}-gall`}>{shut.size ? "Show all groups" : "Collapse all groups"}</button></div>
-          <div className="hp-tw"><table className="hp-t">
-            <thead><tr><th>Instrument</th><th>{isStock ? "Reliability" : "Role"}</th><th>Long-term strength</th><th className="num">Qty each {w}</th>
-              <th className="num">Price per unit</th><th className="num">₹ per {w}</th><th className="num">Size</th></tr></thead>
-            <tbody>{groups.map(g => ({ ...g, rows: g.rows.filter(shown) })).filter(g => g.rows.length).map(g => { const amt = g.rows.reduce((t, h) => t + h.amt, 0); return <React.Fragment key={g.k}>
-              <GroupRow cols={7} open={!shut.has(g.k)} onToggle={() => setShut(o => { const x = new Set(o); x.has(g.k) ? x.delete(g.k) : x.add(g.k); return x; })}
-                color={g.color} label={g.label} id={`${APP}-grp-${g.k}`}
-                meta={<><span>{g.rows.length} holding{g.rows.length === 1 ? "" : "s"}</span><span><b>{inr(amt)}</b> a {w}</span><span><b>{(amt / res.invested * 100).toFixed(1)}%</b> of the SIP</span></>}/>
-              {!shut.has(g.k) && g.rows.map(h => <tr key={h.s} className="hp-row sp-in" onClick={() => setOpen(h)} data-sym={h.s} data-sec={h.sec || h.grp}>
-                <td>{h.kind === "stock" && isStock ? <StockLink sym={h.s} app="msip"><span className="sym">{h.s}</span></StockLink> : <span className="sym">{h.s}</span>}<span className="sub">{h.n !== h.s ? h.n : h.grp}{h.kind === "stock" ? ` · ${h.sec}` : ""}</span></td>
-                <td>{h.kind === "stock" ? <span className={`hp-rel ${h.rel}`}><i/>{REL_WORD[h.rel]}{h.rs != null ? ` · ${h.rs}` : ""}</span> : <span className="hp-rel">{ROLE[h.role] || "ETF"}</span>}</td>
-                <td><Strength v={h.st}/></td>
-                <td className="num"><b>{h.every > 1 ? `1 every ${h.every} ${w}s` : h.units}</b></td>
-                <td className="num">{inr2(h.p)}</td>
-                <td className="num"><b>{inr(h.amt)}</b></td>
-                <td className="num">{h.w}%</td></tr>)}
-            </React.Fragment>; })}</tbody>
-          </table></div>
-          <div className="tk-foot">{isStock ? "Each stock gets the same money every instalment; a costly share is bought every few instalments." : "Core index ETFs are kept whatever the trend; a theme leaves only in a long-term downtrend."} Prices change daily — the money each {w} stays the same.</div>
-        </section>
-
-        <section className="px-card sp-sim" id={`${APP}-sim`}>
-          <div className="sp-hh"><b><Icon name="chart" size={15}/> Growth simulator</b><small>{res.years_plan} years <Info text={I.sim}/></small></div>
-          <div className="sp-simb">
-            <div className="sp-simc">
-              <span className="px-label">Assumed growth a year</span>
-              <div className="sp-rate" style={{ "--f": sim.rate / RATE_MAX }}>
-                <output className="sp-bub" htmlFor={`${APP}-rate`} id={`${APP}-rate-val`}>{sim.rate ? `${sim.rate}% a year` : "No growth"}</output>
-                <input type="range" className="al-range" min="0" max={RATE_MAX} step="1" value={sim.rate} onChange={e => setSim({ rate: +e.target.value })} aria-label="Assumed growth a year" id={`${APP}-rate`}
-                  style={{ "--c": "var(--sp-ai)", "--v": `${sim.rate / RATE_MAX * 100}%` }}/>
-                <div className="sp-rticks" aria-hidden="true"><span>0%</span><span>5%</span><span>10%</span><span>15%</span></div>
-              </div>
-              <span className="px-label">Step-up: raise the instalment every year <Info text="Most people raise their SIP as their income grows. Each year the instalment goes up by this %."/></span>
-              <div className="sp-chips" role="group" aria-label="Step-up">{STEPUPS.map(v => <button key={v} type="button" className={sim.step === v ? "on" : ""} onClick={() => setSim({ step: v })} id={`${APP}-s-${v}`}>{v ? `+${v}% a year` : "Same amount"}</button>)}</div>
-              <div className="sp-simk"><div><small>You put in</small><b>{inrShort(last.put)}</b></div>
-                <div className="hl"><small>{sim.rate ? `At ${sim.rate}% a year` : "Without growth"}</small><b id={`${APP}-simval`}>{inrShort(last.val)}</b></div></div>
-            </div>
-            <div className="sp-stt"><div className="h"><span>Year</span><span className="num">Each {w}</span><span className="num">Put in</span><span className="num">{sim.rate ? `At ${sim.rate}%` : "Value"}</span></div>
-              {rows.map(r => <div key={r.y}><span>{r.y}</span><span className="num">{inr(r.each)}</span><span className="num">{inrShort(r.put)}</span><span className="num"><b>{inrShort(r.val)}</b></span></div>)}</div>
-          </div>
-        </section>
-        {open && <Insight h={open} freq={res.freq} onClose={() => setOpen(null)}/>}
-        {how && <HowToBuy res={res} onClose={() => setHow(false)}/>}
-      </div>);
-  }
+  // ── result (round 23: its own component — the ETF Analyser shows a basket's SIP with the very same page) ──
+  if (res) return <SipResult res={res} mode={mode} apps={apps} onOpenApp={onOpenApp} onAddToPortfolio={onAddToPortfolio} top={risk}
+    band={<BrandBand product={M.product} title={isStock ? "Your Momentum SIP" : "Your SIP"} accent={`${inrShort(res.amount)} a ${WORD[res.freq]}`} sub={`${res.count} holdings`} right={<>{chip}{tabs}</>}/>}
+    onEdit={() => setRes(null)} onSaved={() => setNSaved(n => (n || 0) + 1)} onOpenMine={() => setTab("mine")}/>;
 
   // ── form (the AI Portfolio Builder layout: numbered steps on the left, How it works + Your plan on the right) ──
   if (infoErr) return <div className="sp"><section className="card sp-empty" role="alert"><Icon name="info" size={18}/>{infoErr}</section></div>;
