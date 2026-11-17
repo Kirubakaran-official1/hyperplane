@@ -33,6 +33,8 @@ fi
 
 echo "▶ Building the app (a few minutes the first time)..."
 cp deploy/android/twa-manifest.json "$WORK/twa-manifest.json"
+# The icons are read over the web. ICON_HOST=http://host.docker.internal takes them from this laptop's own stack (a new icon not deployed yet)
+if [ -n "${ICON_HOST:-}" ]; then sed -i "s#https://hyperplane.quantfriday.in/app/icons/#$ICON_HOST/app/icons/#g" "$WORK/twa-manifest.json"; fi
 docker run --rm -v "$(H "$WORK"):/work" -v "$(H "$KEYS"):/keys" -v hyperplane-apk-gradle:/root/.gradle hyperplane-apk-builder sh -c '
   set -e
   export BUBBLEWRAP_KEYSTORE_PASSWORD="$(cat /keys/keystore.pass)" BUBBLEWRAP_KEY_PASSWORD="$(cat /keys/keystore.pass)"

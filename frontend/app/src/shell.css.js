@@ -1211,6 +1211,8 @@ footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 @media (max-width:640px){.dp-pop{left:0;right:auto;width:100%}}
 @media (max-width:640px){.hide-sm{display:none}}
 @media (max-width:640px){.asof{margin-left:0;width:100%}}
+/* round 27d (owner's phone, 360 px): one row of title + icons (the title shrinks with …), the date as the only second row; menus stay on screen */
+@media (max-width:640px){.top{gap:6px 4px;flex-wrap:wrap}.top-here{flex:1 1 0;min-width:0;margin-right:2px}.th-t{min-width:0}.th-t b{overflow:hidden;text-overflow:ellipsis}.top .hd-bell-wrap,.top .nc{margin-left:0}.acct-btn{padding:0;gap:0}.acct-btn .caret{display:none}.top .dp,.top .asof{order:9;width:100%;margin:0 0 6px}.acct-menu{max-width:calc(100vw - 16px)}.zr-chip{height:32px}}
 @media (max-width:640px){.grid2{grid-template-columns:1fr}}
 @media (max-width:640px){.m-row .dirtag{display:none}}
 @media (max-width:640px){.t-tools .search{width:100%}}

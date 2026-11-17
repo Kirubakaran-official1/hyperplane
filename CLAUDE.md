@@ -2944,3 +2944,21 @@ the last completed candle CLOSED beyond the zone; strict ladder; back-test on pr
     the two buttons stacked. The ✓ list is gone.
   - On phones the picture is 280 px high, from the top.
   - Note: the picture shows lock-screen alerts (AI watch, SIP reminder). The app has no phone push yet; alerts arrive in the Inbox.
+- **Round 27d** (owner, on an Android 14/15 phone: "the app is not even opening … the logo is wrong … too many rows in the top nav …
+  the pop-up is not visible on mobile"):
+  - **The crash.** Version 1.0.0 closed at once on start: `IllegalArgumentException: Component class R.u does not exist`.
+    - `"enableSiteSettingsShortcut": false` leaves `ManageDataLauncherActivity` out of the manifest. R8 then renames it (`R.u`), and the
+      library's LauncherActivity still calls `setComponentEnabledSetting` on it.
+    - **Keep `enableSiteSettingsShortcut: true`** (Bubblewrap's default). It adds a harmless "Site settings" item on long-press.
+  - **Version 1.0.1** (code 2): the fix plus the right logo. It installs as an update over 1.0.0 with the same key.
+  - **Verified on an Android 14 emulator** (Play image, Chrome 113): the site link is verified, the app opens full screen with no address
+    bar, and it opens again from the launcher. The emulator image `hyperplane-android-emu` is test-only, from scratchpad `emu/`.
+  - **Icons** are now the full mark (core.jsx `Logo` at ≥ 36 px, two dots each side). The browser-tab favicon stays the small variant.
+    - `make_icons.py` draws them.
+    - `build-apk.sh` takes `ICON_HOST=http://host.docker.internal` to read the icons from the local stack before they are deployed.
+  - **Phone top bar (≤ 640 px):**
+    - one row: burger, the title (shrinks with …), Zerodha, help, community, bell, avatar (no caret);
+    - the date / day picker is the only second row;
+    - `.acct-menu` is at most 100vw − 16 px wide.
+    - Test: `mobile_top_test` (360 px, Android user agent: rows, the same row as the bell, no sideways scroll; the account menu, the Mobile
+      app pop-up, the day picker and the bell's list on screen).
