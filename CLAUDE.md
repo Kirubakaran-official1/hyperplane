@@ -2895,3 +2895,52 @@ the last completed candle CLOSED beyond the zone; strict ladder; back-test on pr
   subscriptions, after the owner's SEBI RA registration) is parked.
 - Test: `pwa_test` (manifest, icons and their sizes, no-cache, the helper in charge of `/app/` only, Chrome's installability check, `/app/api`
   never from the helper, sign-in under it, offline page with both page and helper offline, back online, admin pages outside).
+
+### Round 27 (owner 2026-11-18: "bring the option to download the app … like an APK … same like the Chrome install … Mobile App section under Account")
+- **The Android app is a Trusted Web Activity** (Google's Bubblewrap 1.27). It is a ~1.8 MB shell that opens `https://hyperplane.quantfriday.in/app/`
+  full screen in Chrome's engine: every screen and all data come live from the website, deploys reach it at its next open, and it shares
+  Chrome's sign-in. Package `in.quantfriday.hyperplane`, Android 7.0+ (minSdk 24, required by androidbrowserhelper), notifications off.
+  - Rebuild it only for a new name, icon or version: raise `appVersionCode` + `appVersion` (that key, not `appVersionName`) in
+    `deploy/android/twa-manifest.json`, then run `bash deploy/android/build-apk.sh`, then commit
+    `frontend/app/public/download/hyperplane.apk` + `frontend/public/.well-known/assetlinks.json`, push and deploy.
+- **Build in Docker only** (`deploy/android/Dockerfile`: JDK 17 + Node 20 + Android cmdline-tools in `cmdline-tools/latest`, platform 36,
+  build-tools 36.1.0). Three traps already solved:
+  - The tools must NOT be unpacked into the SDK root (their `source.properties` there hides the platform → "Failed to find target
+    android-36"). `$ANDROID_HOME/bin/sdkmanager` is a link, because Bubblewrap only checks that `bin/` exists.
+  - Gradle downloads itself with Java, which fails on one unreachable GitHub address (185.199.109.133 from this ISP). curl fetches it
+    into the `hyperplane-apk-gradle` volume and the wrapper is pointed at that file.
+  - The keystore password is made inside the container (Windows Python wrote a CR that keytool rejects).
+- **Signing key:** `secrets/android/hyperplane.keystore` + `keystore.pass` (git-ignored). **Never print or commit them.** The owner must keep a
+  backup; without it the app can never be updated in place. Its SHA-256 fingerprint is in `assetlinks.json`, which is public by design.
+- **Caddy:**
+  - `handle /.well-known/assetlinks.json`: JSON, no login. It used to fall into the dashboard's forward_auth; without it the app shows an
+    address bar.
+  - `/app/download/*.apk` is served as `application/vnd.android.package-archive`, `attachment; filename="Hyperplane.apk"`.
+- **Account window → Mobile app** (`shell.jsx` `MobileApp`, `#acct-mobile`):
+  - **Android app** (`#acct-mob-android`): downloads the APK, then shows the 3 install steps and the Play Store note.
+  - **iPhone app** (`#acct-mob-ios`): Apple allows no app file outside the App Store, so it shows the Add to Home Screen steps, with
+    "first open this page in Safari" in other iPhone browsers.
+  - The visitor's own phone is highlighted (user agent; `PHONE`). A computer gets "open this page on your phone".
+  - The section is hidden in `display-mode: standalone` (inside the installed app).
+  - Docs: the phone section names the Account → Mobile app path.
+- **Data vendor note (owner's question):** the APK and the installed app hold no data and no data code. Changing the data vendor touches only
+  the server's collector / publish side and never the apps. Whether a vendor licence counts the APK as a separate "mobile app" is a
+  contract question for the vendor.
+- **Test:** `pwa_test`, now with the Mobile app section on a computer, Android, iPhone Safari and iPhone Chrome, the APK and assetlinks
+  responses, hidden when installed (matchMedia overridden — headless Chrome ignores display-mode emulation), phone width and dark mode.
+- **Round 27b** (owner: "in the drop down bring the mobile app download as one more section … its own bigger pop-up with an image … all
+  your portfolios in your pocket"):
+  - The section left the Account window. The account menu has **Mobile app** (`#acct-mobile-it`, "Android · iPhone", hidden when
+    installed), which opens `MobilePop` (`#mob-pop`, `.modal.mob-pop`, 880 px, two columns; stacked under 760 px).
+  - **Left:** an animated phone picture, drawn in CSS / SVG — a "My portfolios" line, a cap ring, the AI watch. It shows no return numbers
+    on purpose.
+  - **Right:** "All your portfolios, in your pocket.", three ✓ points and two large buttons: **Download for Android** (`#mob-android`) and
+    **Add to iPhone** (`#mob-ios`). The steps (`#mob-steps-android` / `#mob-steps-ios`) open under them.
+  - Android is the filled button except on an iPhone. Reduced motion stops the animations.
+- **Round 27c** (owner: "use that image … remove the top company name … the right side feels heavy for a simple download"):
+  - The left side is the owner's picture, `app/public/img/mobile-app.webp` (1000 × 977, 38 KB). It is cropped from their 2160 × 2700 PNG
+    below the title. The drawn CSS phone is gone.
+  - The right side is only the eyebrow "Mobile app", "Hyperplane AI, in your pocket.", "Install it on your phone in a few seconds." and
+    the two buttons stacked. The ✓ list is gone.
+  - On phones the picture is 280 px high, from the top.
+  - Note: the picture shows lock-screen alerts (AI watch, SIP reminder). The app has no phone push yet; alerts arrive in the Inbox.

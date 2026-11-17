@@ -60,9 +60,61 @@ const COUNTRIES = ["India","United Arab Emirates","United States","United Kingdo
 const IN_STATES = ["Andaman and Nicobar Islands","Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chandigarh","Chhattisgarh","Dadra and Nagar Haveli and Daman and Diu","Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jammu and Kashmir","Jharkhand","Karnataka","Kerala","Ladakh","Lakshadweep","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Puducherry","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal"];
 
 
+// ─── account menu → Mobile app (round 27; its own pop-up since 27b) ───
+// Android: a real download — an app (APK) that opens this site full screen; every screen and all data still come from the website.
+// iPhone: Apple allows no app file outside the App Store, so its button shows the Add to Home Screen steps. Hidden inside the app.
+const PHONE = (() => {
+  const u = navigator.userAgent || "";
+  if (/iPhone|iPad|iPod/.test(u) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) return "ios";
+  return /Android/.test(u) ? "android" : "pc";
+})();
+const INSTALLED = () => !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+const PhoneIcon = ({ size = 15 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>;
+
+// round 27b (owner: "bring the mobile app download as one more section in the drop down … its own bigger pop-up … with an image …
+// all your portfolios in your pocket"); 27c: the owner's own picture on the left (its title cropped off), a short right side
+function MobilePop({ onClose }) {
+  const [how, setHow] = useState(PHONE === "ios" ? "ios" : null);
+  useEffect(() => { const k = e => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, []);
+  const notSafari = PHONE === "ios" && /CriOS|FxiOS|EdgiOS|OPiOS/.test(navigator.userAgent);
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal mob-pop" id="mob-pop" onClick={e => e.stopPropagation()} role="dialog" aria-label="Hyperplane mobile app">
+        <button className="x" onClick={onClose} aria-label="Close"><Icon name="x" size={16}/></button>
+        <div className="mob-art"><img src="/app/img/mobile-app.webp" alt="Hyperplane AI on a phone: portfolio alerts, SIP reminders and research" width="1000" height="977"/></div>
+        <div className="mob-body">
+          <span className="mob-eyebrow"><PhoneIcon size={13}/> Mobile app</span>
+          <h2 className="mob-h">Hyperplane AI,<br/><span>in your pocket.</span></h2>
+          <p className="mob-sub">Install it on your phone in a few seconds.</p>
+          <div className="mob-btns">
+            <a className={`mob-btn${PHONE !== "ios" ? " pri" : ""}`} id="mob-android" href="/app/download/hyperplane.apk" download="Hyperplane.apk" onClick={() => setHow("android")}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+              <span><small>Download for</small>Android</span></a>
+            <button type="button" className={`mob-btn${PHONE === "ios" ? " pri" : ""}`} id="mob-ios" onClick={() => setHow(h => h === "ios" ? null : "ios")}>
+              <PhoneIcon size={20}/><span><small>Add to</small>iPhone</span></button>
+          </div>
+          {PHONE === "pc" && !how && <p className="mob-note" id="mob-pc">Open this page on your phone to install the app there.</p>}
+          {how === "android" && <ol className="mob-steps" id="mob-steps-android">
+            <li>Open the downloaded <b>Hyperplane.apk</b> (from the notification or your Downloads).</li>
+            <li>If your phone asks, allow <b>Install unknown apps</b> for your browser (only once).</li>
+            <li>Tap <b>Install</b>, then open <b>Hyperplane</b> from your app list.</li>
+            <li className="note">Android may warn that the app comes from outside the Play Store. It is downloaded from this website and opens only Hyperplane.</li>
+          </ol>}
+          {how === "ios" && <ol className="mob-steps" id="mob-steps-ios">
+            {notSafari && <li className="note">First open this page in <b>Safari</b>: other browsers on iPhone cannot add the app.</li>}
+            <li>In <b>Safari</b>, tap the <b>Share</b> button (the square with an arrow).</li>
+            <li>Choose <b>Add to Home Screen</b>, then <b>Add</b>.</li>
+            <li>Open <b>Hyperplane</b> from your home screen.</li>
+          </ol>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── account menu: name ▾ → Account · Appearance · Sign out ───
 function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
-  const [open, setOpen] = useState(false); const [acct, setAcct] = useState(false);
+  const [open, setOpen] = useState(false); const [acct, setAcct] = useState(false); const [mob, setMob] = useState(false);
   const [theme, setTheme] = useTheme();
   const z = React.useContext(ZerodhaCtx);                // round 20c: the Zerodha key under the profile (customers with "<app>:zerodha")
   const zr = () => { setOpen(false); setAcct(false); z.setup(); };
@@ -84,6 +136,7 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
             <span className="acct-hint">{z.key ? "connected" : "connect"}</span></button>}
           <button type="button" role="menuitem" className="acct-it" onClick={() => { setOpen(false); onHelpdesk(); }}><HelpdeskIcon/>Helpdesk{unread > 0 && <span className="tab-n acct-n">{unread}</span>}</button>
           <button type="button" role="menuitem" className="acct-it" onClick={() => { setOpen(false); onDocs(); }}><GuideIcon/>Docs<span className="acct-hint">how to use · golden rules</span></button>
+          {!INSTALLED() && <button type="button" role="menuitem" className="acct-it" id="acct-mobile-it" onClick={() => { setOpen(false); setMob(true); }}><PhoneIcon/>Mobile app<span className="acct-hint">Android · iPhone</span></button>}
           <div className="acct-it static">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>Appearance
             <div className="sg acct-theme">{[["dark", "Dark"], ["light", "Light"]].map(([k, l]) => <button key={k} type="button" className={theme === k ? "on" : ""} onClick={() => setTheme(k)}>{l}</button>)}</div>
@@ -92,6 +145,7 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>Sign out</button>
         </div>
       )}
+      {mob && <MobilePop onClose={() => setMob(false)}/>}
       {acct && (
         <div className="overlay" onClick={() => setAcct(false)}>
           <div className="modal acct-modal" onClick={e => e.stopPropagation()} role="dialog" aria-label="Account">

@@ -513,7 +513,9 @@ const ALL_SECTIONS = [
     <p>Hyperplane installs on your phone like an app: its own icon in your app list, full screen, no browser bar. It updates by
       itself — every time you open it you get the latest version.</p>
     <ol className="g-steps">
-      <li><b>Android:</b> open Hyperplane in <b>Chrome</b>, press the <b>⋮ menu</b> (top right) → <b>Install app</b> (or <b>Add to Home screen</b> → <b>Install</b>).</li>
+      <li><b>Android:</b> open the menu under <b>your name</b> → <b>Mobile app</b> → <b>Download for Android</b>, open the downloaded
+        file and tap <b>Install</b> (allow <b>Install unknown apps</b> once if your phone asks). Or in <b>Chrome</b>: <b>⋮ menu</b> →
+        <b>Add to Home screen</b> → <b>Install</b>.</li>
       <li><b>iPhone:</b> open Hyperplane in <b>Safari</b>, press the <b>Share</b> button → <b>Add to Home Screen</b> → <b>Add</b>.</li>
       <li>Open <b>Hyperplane</b> from your app list or home screen. You stay signed in, just as in the browser.</li>
     </ol>

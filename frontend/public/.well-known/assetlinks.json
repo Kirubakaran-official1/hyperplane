@@ -1,0 +1,4 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": { "namespace": "android_app", "package_name": "in.quantfriday.hyperplane", "sha256_cert_fingerprints": ["A2:8C:2E:0E:59:A4:7E:C0:86:B0:3B:2F:E2:90:F7:3E:8F:87:C3:D1:AD:3B:9D:11:4B:7F:24:5F:11:1C:1D:63"] }
+}]

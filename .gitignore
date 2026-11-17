@@ -11,3 +11,6 @@ frontend/dist/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Android app build folder (round 27) — the APK itself is copied to frontend/app/public/download
+deploy/android/build/
