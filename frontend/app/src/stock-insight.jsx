@@ -20,6 +20,11 @@ addCss("stock-insight", `
 .si-bk{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px 0 10px;border:1px solid var(--b2);border-radius:999px;background:var(--s1);color:var(--t1);font:600 13px var(--sans);cursor:pointer}.si-bk:hover{border-color:var(--acc);color:var(--acc)}
 .si-why{padding:10px 14px;border-radius:10px;background:var(--adim);font-size:13.5px;line-height:20px;color:var(--t1)}.si-why b{color:var(--acc)}
 .si-in .px-item{margin:0}
+/* round 25c (owner 2026-11-17, Inbox screenshot: the research summary one word a line, the left side cut off): the card lays itself out by
+   the width it really has (the Inbox's reading pane, a pop-up), not by the screen — the Analyser's 3 columns need ~1000 px */
+.si-cq{container-type:inline-size;min-width:0}
+@container (max-width:1000px){.si-cq .px-item{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:20px}.si-cq .px-whyc{grid-column:1/-1}}
+@container (max-width:620px){.si-cq .px-item{grid-template-columns:1fr;gap:16px;padding:18px 16px 18px 20px}}
 .si-tabs{display:flex;gap:4px;padding:3px;border:1px solid var(--b2);border-radius:999px;background:var(--s2);align-self:flex-start}
 .si-tabs button{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 16px;border:0;border-radius:999px;background:none;color:var(--t2);font:600 13px var(--sans);cursor:pointer}
 .si-tabs button.on{background:var(--s1);color:var(--t1);box-shadow:0 1px 3px rgba(0,0,0,.12)}.si-tabs button .lk{color:var(--mixed)}
@@ -47,7 +52,7 @@ function Card({ r }) {
   const [sw, st] = grp(r.g.sec), [iw, it] = grp(r.g.ind);
   const isNew = r.cat === "new";
   return (
-    <article className={`px-item ${tone}`} id="si-card">
+    <div className="si-cq"><article className={`px-item ${tone}`} id="si-card">
       <div className="px-who">
         <div className="px-name"><b title={r.s.n}>{r.s.n}</b><em>{r.s.s}</em></div>
         <div className="px-where">{r.s.sec} › {r.s.ind}</div>
@@ -69,7 +74,7 @@ function Card({ r }) {
         <div className="px-aih"><AiSpark/><b>Hyperplane AI</b><span>Research summary</span></div>
         <ul className="px-why" id="si-why">{(isNew ? r.why.slice(0, 1) : r.why).map((w, i) => <li key={i}>{w}</li>)}</ul>
       </div>
-    </article>);
+    </article></div>);
 }
 
 // round 19j (owner 2026-11-12: "no pop on pop — handle it within one pop"): the insight is not a second window. It takes the place of

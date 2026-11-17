@@ -2875,3 +2875,23 @@ the last completed candle CLOSED beyond the zone; strict ladder; back-test on pr
   the other way → those marks cancel, item `consol_W<tf>`, "consolidation") and `guard` (the green gate: the price below the monthly or
   quarterly zone while that candle has not closed outside → not green, no marks change, item `gate_<tf>`; the result's 7th element).
   Latest local day: Default 271 / 1150 / 302 · Zone ladder 194 / 1365 / 164 (green / amber / red). ladder_test + scoring suites pass.
+
+### Round 25c (owner 2026-11-17: "in the inbox the content was not displaying properly")
+- The Stock insight card (`stock-insight.jsx`) is wrapped in `.si-cq` (`container-type: inline-size`): ≤ 1000 px of its own width → 2 columns
+  with the research summary on a full row; ≤ 620 px → 1 column. The `.px-item` grid used viewport media queries only, so inside the Inbox's
+  reading pane it overflowed and squeezed the summary to one word a line. `inbox_test` checks the card fits the pane.
+
+### Round 26 (owner 2026-11-17: "bring this as the mobile app … not a store app … any shortcut") — `/app` installs as a phone app
+- `frontend/app/public/` (Vite's default public dir for root `app`, served at `/app/…` by the existing `try_files`; `no-cache` already applies):
+  - `manifest.json`: Hyperplane, `id` / `start_url` / `scope` `/app/` (the admin dashboard stays outside), `display: standalone`, colours `#070d1a`.
+  - `icons/`: 192 / 512 (`any`), a maskable 512 and the 180 apple-touch icon, drawn from the logo SVG in `app/index.html` with headless Chrome
+    (scratchpad `make_icons.py`).
+  - `sw.js`: network-first for page loads only, with `offline.html` (logo inlined) as the only thing cached. It never touches `/app/api/*` or
+    files, so a deploy reaches the installed app at its next open and no data is kept on the phone. `skipWaiting` + `clients.claim`.
+- `app/index.html`: manifest link (written `/manifest.json`; Vite adds the `/app/` base), `theme-color`, apple-touch-icon, the
+  `*-web-app-capable` / title / status-bar metas. `main.jsx` registers `/app/sw.js` in production builds only (the CSP has no inline script).
+- Docs: "Use Hyperplane as an app on your phone" (Android Chrome → Install app; iPhone Safari → Share → Add to Home Screen).
+- Not built (owner: not now): store apps, phone notifications, app lock, a bottom bar. The business-model plan (model portfolios with
+  subscriptions, after the owner's SEBI RA registration) is parked.
+- Test: `pwa_test` (manifest, icons and their sizes, no-cache, the helper in charge of `/app/` only, Chrome's installability check, `/app/api`
+  never from the helper, sign-in under it, offline page with both page and helper offline, back online, admin pages outside).

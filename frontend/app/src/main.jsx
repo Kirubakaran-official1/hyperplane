@@ -15,6 +15,10 @@ addCss("shell", CSS + QUICK_CSS);
 // /app/portfolio/<ID>: a public portfolio — only that page, no sign-in, no app shell (owner 2026-11-07)
 const pub = /^\/app\/portfolio\/([A-Za-z0-9-]{1,40})\/?$/.exec(window.location.pathname);
 const PublicPortfolio = lazy(() => import("./public.jsx"));
+// round 26: the phone-app helper (Chrome → Install app: own icon, full screen). Pages come from the server first, so a
+// deploy reaches the installed app at its next open; it never stores any data.
+if ("serviceWorker" in navigator && import.meta.env.PROD)
+  window.addEventListener("load", () => navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" }).catch(() => {}));
 createRoot(document.getElementById("root")).render(pub
   ? <Suspense fallback={null}><PublicPortfolio code={decodeURIComponent(pub[1])}/></Suspense>
   : <App/>);

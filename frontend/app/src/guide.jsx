@@ -509,6 +509,16 @@ const ALL_SECTIONS = [
     </ol>
   </> },
 
+  { id: "phone", t: "Use Hyperplane as an app on your phone", body: <>
+    <p>Hyperplane installs on your phone like an app: its own icon in your app list, full screen, no browser bar. It updates by
+      itself — every time you open it you get the latest version.</p>
+    <ol className="g-steps">
+      <li><b>Android:</b> open Hyperplane in <b>Chrome</b>, press the <b>⋮ menu</b> (top right) → <b>Install app</b> (or <b>Add to Home screen</b> → <b>Install</b>).</li>
+      <li><b>iPhone:</b> open Hyperplane in <b>Safari</b>, press the <b>Share</b> button → <b>Add to Home Screen</b> → <b>Add</b>.</li>
+      <li>Open <b>Hyperplane</b> from your app list or home screen. You stay signed in, just as in the browser.</li>
+    </ol>
+  </> },
+
   { id: "faq", t: "Questions people ask", body: <>
     <dl className="g-faq">
       <dt>How often is the data updated?</dt><dd>Several times on trading days. The time is always shown as <b>Data as of</b> at the top.</dd>
