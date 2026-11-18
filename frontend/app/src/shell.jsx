@@ -68,7 +68,7 @@ const PHONE = (() => {
   if (/iPhone|iPad|iPod/.test(u) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) return "ios";
   return /Android/.test(u) ? "android" : "pc";
 })();
-const INSTALLED = () => !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+const INSTALLED = () => !!(window.matchMedia && window.matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches);   // the Android app runs full screen
 const PhoneIcon = ({ size = 15 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>;
 
 // round 27b (owner: "bring the mobile app download as one more section in the drop down … its own bigger pop-up … with an image …

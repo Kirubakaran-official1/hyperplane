@@ -2962,3 +2962,12 @@ the last completed candle CLOSED beyond the zone; strict ladder; back-test on pr
     - `.acct-menu` is at most 100vw − 16 px wide.
     - Test: `mobile_top_test` (360 px, Android user agent: rows, the same row as the bell, no sideways scroll; the account menu, the Mobile
       app pop-up, the day picker and the bell's list on screen).
+- **Round 27e** (owner: "a better experience while opening … the top notification bar shows … cover the whole screen"):
+  - **Android app 1.0.2** (code 3), `"display": "fullscreen"` (TWA immersive). The status bar and the navigation bar are hidden; a swipe
+    from the edge shows them briefly.
+    - Verified on the Android 14 emulator: `statusBars visible=false`.
+    - Android keeps the camera-cutout strip at the top black in this mode.
+    - Chrome shows a one-time "Running in Chrome · Got it" note on the first open; Android requires it for TWAs.
+  - **Loading screen:** `app/index.html` has `.hp-boot` inside `#root` (inline style + the full logo SVG; React replaces it on first
+    render). It uses the same dark as the splash, so the opening goes splash → logo + bar → app, with no white flash.
+  - `INSTALLED()` (shell.jsx) also matches `display-mode: fullscreen`, so the Mobile app menu item stays hidden inside the Android app.
