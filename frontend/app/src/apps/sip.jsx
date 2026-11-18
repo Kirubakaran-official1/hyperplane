@@ -275,8 +275,6 @@ export function SipResult({ res, mode = "etf", band, top = null, onEdit, onSaved
     el.download = `Hyperplane-${isStock ? "Momentum-SIP" : "SIP"}-${new Date().toISOString().slice(0, 10)}.csv`; el.click(); trackAction(APP, "download");
   };
   const pdf = () => loadChunk(() => import("../sip-report.js")).then(({ downloadSipReport }) => { downloadSipReport(res, sim.rate, sim.step); trackAction(APP, "download"); }).catch(e => setMsg(e.message));
-  const doc = fmt => loadChunk(() => import("../doc-export.js")).then(({ downloadDoc, docFromSip }) => downloadDoc(docFromSip(res, { isStock, rate: sim.rate, step: sim.step,
-    rows: simulate(res.invested, res.per_year, res.years_plan, sim.step, sim.rate) }), fmt)).then(() => trackAction(APP, "download")).catch(e => setMsg(e.message));
   const send = how_ => { setSent("busy"); onAddToPortfolio(stocks.map(h => h.s), how_).then(() => { setSent(how_); trackAction(APP, "sent"); }).catch(e => setSent(`Could not update the list: ${e.message}`)); };
   const rows = simulate(res.invested, res.per_year, res.years_plan, sim.step, sim.rate);
   const last = rows[rows.length - 1];
@@ -291,8 +289,6 @@ export function SipResult({ res, mode = "etf", band, top = null, onEdit, onSaved
         <button type="button" className="px-btn" id={`${APP}-save`} onClick={() => { setSaving(v => !v); setMsg(""); }}><Icon name="star" size={14}/> Save</button>
         <span className="hp-grp" role="group" aria-label="Export">
           <button type="button" className="px-btn" onClick={pdf} id={`${APP}-pdf`}><Icon name="copy" size={14}/> PDF</button>
-        <button type="button" className="px-btn" onClick={() => doc("docx")} id={`${APP}-docx`} title="Download as Word">Word</button>
-        <button type="button" className="px-btn" onClick={() => doc("md")} id={`${APP}-md`} title="Download as Markdown">Markdown</button>
           <button type="button" className="px-btn" onClick={csv} id={`${APP}-csv`}><Icon name="table" size={14}/> CSV</button>
           <span className="tcopy"><span className="lbl">Tickers · {hs.length}</span><CopyBtns syms={hs.map(h => h.s)}/></span></span>
         <button type="button" className="px-btn hp-link" id={`${APP}-how-btn`} onClick={() => setHow(true)}><Icon name="info" size={14}/> How to buy</button>

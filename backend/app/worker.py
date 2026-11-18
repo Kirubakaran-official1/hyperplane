@@ -23,6 +23,7 @@ from . import activity as act
 from . import tracking
 from . import zerodha
 from . import planner
+from . import push
 from . import config
 from . import etf
 from . import mailer
@@ -385,15 +386,23 @@ def main():
                         print(f"🔔 SIP reminders: {n} instalment item(s) in the Inbox", flush=True)
             except Exception:                            # noqa: BLE001
                 traceback.print_exc()
-            try:                                         # round 22: the Planner's "due today" Inbox summary + its clean-up, once a day after 07:00 IST
+            try:                                         # round 28: Planner reminders (15 min before a time · 8 am, then 12 · 4 · 7 while something is left)
+                with pool.connection() as c:             # — they replace round 22's one summary at 07:00 — and the phone notifications waiting
+                    soon, days = planner.run_reminders(c)
+                    sent, phones = push.drain(c)
+                if soon or days or sent:
+                    print(f"🔔 Planner reminders: {soon} timed · {days} day list(s) · phone messages {sent} → {phones} phone(s)", flush=True)
+            except Exception:                            # noqa: BLE001
+                traceback.print_exc()
+            try:                                         # round 22: the Planner's clean-up, once a day after 07:00 IST
                 t = now()
                 if t.hour >= 7 and get_meta("planner_digest_day") != t.date().isoformat():
                     with pool.connection() as c:
-                        n = planner.run_digest(c, t)
                         gone = planner.cleanup(c)
+                        planner.forget_reminders(c)
                     set_meta("planner_digest_day", t.date().isoformat())
-                    if n or gone["pages"] or gone["files"]:
-                        print(f"🗒 Planner: {n} due-today summaries · trash emptied of {gone['pages']} page(s) · {gone['files']} unused picture(s) removed", flush=True)
+                    if gone["pages"] or gone["files"]:
+                        print(f"🗒 Planner: trash emptied of {gone['pages']} page(s) · {gone['files']} unused picture(s) removed", flush=True)
             except Exception:                            # noqa: BLE001
                 traceback.print_exc()
             try:                                         # Buy on Zerodha: Zerodha's own NSE instrument list, once a day after 08:35 IST

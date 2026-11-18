@@ -35,7 +35,7 @@ echo "▶ Building the app (a few minutes the first time)..."
 cp deploy/android/twa-manifest.json "$WORK/twa-manifest.json"
 # The icons are read over the web. ICON_HOST=http://host.docker.internal takes them from this laptop's own stack (a new icon not deployed yet)
 if [ -n "${ICON_HOST:-}" ]; then sed -i "s#https://hyperplane.quantfriday.in/app/icons/#$ICON_HOST/app/icons/#g" "$WORK/twa-manifest.json"; fi
-docker run --rm -v "$(H "$WORK"):/work" -v "$(H "$KEYS"):/keys" -v hyperplane-apk-gradle:/root/.gradle hyperplane-apk-builder sh -c '
+docker run --rm -v "$(H "$WORK"):/work" -v "$(H "$ROOT/deploy/android"):/src:ro" -v "$(H "$KEYS"):/keys" -v hyperplane-apk-gradle:/root/.gradle hyperplane-apk-builder sh -c '
   set -e
   export BUBBLEWRAP_KEYSTORE_PASSWORD="$(cat /keys/keystore.pass)" BUBBLEWRAP_KEY_PASSWORD="$(cat /keys/keystore.pass)"
   bubblewrap update --skipVersionUpgrade --manifest=/work/twa-manifest.json --directory=/work > /tmp/update.log 2>&1 || { cat /tmp/update.log; exit 1; }
@@ -46,6 +46,7 @@ docker run --rm -v "$(H "$WORK"):/work" -v "$(H "$KEYS"):/keys" -v hyperplane-ap
   F="/root/.gradle/dl/$(basename "$U")"
   [ -s "$F" ] || { mkdir -p /root/.gradle/dl && curl -fsSL --retry 3 -o "$F.part" "$U" && mv "$F.part" "$F"; }
   sed -i "s|^distributionUrl=.*|distributionUrl=file\\\\://$F|" $P
+  node /src/patch-launcher.js | grep -q "in place" || { echo "camera strip override missing"; exit 1; }
   bubblewrap build --skipPwaValidation --manifest=/work/twa-manifest.json --directory=/work > /tmp/build.log 2>&1 || { tail -40 /tmp/build.log; exit 1; }
   keytool -list -v -keystore /keys/hyperplane.keystore -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" -alias hyperplane 2>/dev/null \
     | sed -n "s/^[[:space:]]*SHA256: //p" > /work/fingerprint.txt'

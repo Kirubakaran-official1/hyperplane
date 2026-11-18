@@ -46,6 +46,7 @@ from . import inbox
 from . import community as cm
 from . import zerodha as zr
 from . import planner as pl
+from . import push
 from . import vault
 from .detail import DETAIL_DAYS
 from .security import DUMMY_HASH, hash_password, verify_password
@@ -1567,7 +1568,7 @@ def _plan_of(r, plans):
 
 
 def _inbox_note(r, plans=None):
-    return {"id": f"n{r['id']}", "nid": r["id"], "src": {"announce": "announce", "mention": "mention", "planner_due": "planner"}.get(r["kind"], "alert"), "kind": r["kind"],
+    return {"id": f"n{r['id']}", "nid": r["id"], "src": {"announce": "announce", "mention": "mention", "planner_due": "planner", "planner_soon": "planner"}.get(r["kind"], "alert"), "kind": r["kind"],
             "app": r["app"] or inbox.app_of(r["kind"]), "type": r["type"] or "info", "status": r["status"], "title": r["title"],
             "body": r["body"], "ref": r["ref_id"], "at": (r.get("updated_at") or r["created_at"]).isoformat(), "created": r["created_at"].isoformat(),
             "plan": _plan_of(r, plans or {}), "read": r["read_at"] is not None,
@@ -2528,6 +2529,63 @@ def planner_state(c=Depends(need("planner"))):
     _rate("planner", str(c["id"]), 120, 60)
     with _own(c) as conn:
         return pl.state(conn, c["id"])
+
+
+# ── phone notifications (round 28): the public key, turn a phone on / off, a test message. The message itself is sent by the worker. ──
+class PushSubIn(SafeModel):
+    endpoint: str = Field(max_length=1000)
+    p256dh: str = Field(max_length=120)
+    auth: str = Field(max_length=40)
+    device: str = Field("", max_length=80)
+
+
+class PushEndIn(SafeModel):
+    endpoint: str = Field(max_length=1000)
+
+
+@app.get("/app/api/push/key")
+def push_key(c=Depends(customer)):
+    with _own(c) as conn:
+        r = conn.execute("SELECT push_public_key() AS k").fetchone()
+    if not r or not r["k"]:
+        raise HTTPException(503, "Phone notifications are not ready yet — please try again in a minute")
+    return {"key": r["k"]}
+
+
+@app.post("/app/api/push/subscribe")
+def push_subscribe(body: PushSubIn, c=Depends(customer)):
+    _rate("push", str(c["id"]), 20, 3600)
+    if not push.endpoint_ok(body.endpoint) or not push.keys_ok(body.p256dh, body.auth):
+        raise HTTPException(422, "This browser's notification address is not supported")
+    with _own(c) as conn:
+        conn.execute("SELECT push_subscribe(%s, %s, %s, %s, %s)", (c["id"], body.endpoint, body.p256dh, body.auth, body.device))
+    return {"ok": True}
+
+
+@app.post("/app/api/push/unsubscribe")
+def push_unsubscribe(body: PushEndIn, c=Depends(customer)):
+    _rate("push", str(c["id"]), 20, 3600)
+    with _own(c) as conn:
+        n = conn.execute("DELETE FROM push_subs WHERE customer_id = %s AND endpoint = %s", (c["id"], body.endpoint)).rowcount
+    return {"ok": True, "removed": n}
+
+
+@app.post("/app/api/push/status")
+def push_status(body: PushEndIn, c=Depends(customer)):
+    with _own(c) as conn:
+        on = conn.execute("SELECT 1 FROM push_subs WHERE customer_id = %s AND endpoint = %s", (c["id"], body.endpoint)).fetchone()
+        n = conn.execute("SELECT count(*) AS n FROM push_subs WHERE customer_id = %s", (c["id"],)).fetchone()["n"]
+    return {"on": bool(on), "phones": n}
+
+
+@app.post("/app/api/push/test")
+def push_test(c=Depends(customer)):
+    _rate("push-test", str(c["id"]), 5, 600)
+    with _own(c) as conn:
+        if not conn.execute("SELECT 1 FROM push_subs WHERE customer_id = %s", (c["id"],)).fetchone():
+            raise HTTPException(409, "Turn on notifications on this phone first")
+        push.queue(conn, c["id"], "Hyperplane notifications are on", "Your Planner reminders will appear here.", url="/app/planner", tag="hp-test")
+    return {"ok": True}
 
 
 @app.patch("/app/api/planner/prefs")

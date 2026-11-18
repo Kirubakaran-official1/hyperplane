@@ -9,6 +9,7 @@ from . import adoption
 from . import inbox
 from . import mailer
 from . import permissions as perms
+from . import push
 from . import scoring
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://hyperplane:hyperplane@db:5432/hyperplane")
@@ -873,6 +874,14 @@ CREATE TABLE IF NOT EXISTS pl_prefs (
     prefs       JSONB NOT NULL DEFAULT '{}'::jsonb,    -- {"digest": true} — its row also marks "the first notebooks were made"
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- round 28: Planner reminders already sent (a restart or a second worker never repeats one); kept 3 days
+CREATE TABLE IF NOT EXISTS pl_reminders (
+    customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    key         TEXT NOT NULL,                         -- t<task>@<day>T<HHMM> (15 min before a time) · d<day>@<hour> (day-only slots)
+    sent_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (customer_id, key)
+);
+CREATE INDEX IF NOT EXISTS pl_tasks_timed ON pl_tasks (due, time_from) WHERE time_from IS NOT NULL AND status NOT IN ('done', 'missed');
 -- round 20c: the admin-wide Publisher key is gone (each customer saves their own)
 DROP FUNCTION IF EXISTS portal_zerodha();
 DELETE FROM portal_config WHERE key = 'zerodha';
@@ -915,6 +924,8 @@ def init_db():
         c.execute(adoption.SCHEMA)                             # Adoption report: customer × day × application, 2 years
         adoption.backfill(c)
         c.execute(mailer.SCHEMA)                               # email outbox + "Forgot password" links
+        c.execute(push.SCHEMA)                                 # phone notifications: keys, phones, outbox (round 28)
+        push.ensure_keys(c)
         perms.sync_catalogue(c)
         perms.migrate_v2(c)
         _seed_roles(c)
@@ -1155,6 +1166,18 @@ def _setup_portal_role(c):
         c.execute(f"DROP POLICY IF EXISTS portal_own ON {table}")
         c.execute(sql.SQL(f"CREATE POLICY portal_own ON {table} TO {{}} USING (customer_id::text = current_setting('hp.cid', true)) "
                           "WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
+    # phone notifications (round 28): own phones only; the customer service may add only its own test message; never the private key
+    c.execute(sql.SQL("GRANT SELECT (id, customer_id, endpoint, device, created_at, last_ok), DELETE ON push_subs TO {}").format(role))
+    c.execute("ALTER TABLE push_subs ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON push_subs")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON push_subs TO {} USING (customer_id::text = current_setting('hp.cid', true))").format(role))
+    c.execute(sql.SQL("GRANT INSERT (customer_id, payload) ON push_outbox TO {}").format(role))
+    c.execute(sql.SQL("GRANT USAGE ON SEQUENCE push_outbox_id_seq TO {}").format(role))
+    c.execute("ALTER TABLE push_outbox ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON push_outbox")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON push_outbox FOR INSERT TO {} WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
+    c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION push_public_key() TO {}").format(role))
+    c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION push_subscribe(BIGINT, TEXT, TEXT, TEXT, TEXT) TO {}").format(role))
     own = "(owner_kind = 'customer' AND owner_id = current_setting('hp.cid', true))"
     in_own ="EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = ticket_id)"        # hd_tickets' own policy applies here
     policies = {

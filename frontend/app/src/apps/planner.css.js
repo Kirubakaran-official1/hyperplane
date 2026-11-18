@@ -675,9 +675,11 @@ button.pl-dc{border:0;font:500 12px var(--sans)}
 .pl-sb.done{background:var(--long);color:#fff;animation:plTick .25s ease}
 .pl-sb.missed{background:var(--shortd);color:var(--short);box-shadow:inset 0 0 0 1.4px color-mix(in srgb,var(--short) 55%,transparent)}
 .pl-sb:active{transform:scale(.92)}
-.pl-mb{flex:none;display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:6px;background:none;color:var(--t3);cursor:pointer;opacity:0;transition:opacity .12s,color .12s,background .12s}
-.pl-mb:hover{color:var(--short);background:var(--shortd)}
-.pl-trow:hover .pl-mb,.pl-trow:focus-within .pl-mb,.pl-trow.late .pl-mb{opacity:1}
+.pl-miss{flex:none;display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:6px;background:none;color:var(--t3);cursor:pointer;opacity:0;transition:opacity .12s,color .12s,background .12s}
+.pl-miss:hover{color:var(--short);background:var(--shortd)}
+/* round 27g (owner: "for the planner zoom bring the minimise to the right corner"): maximised, the button sits in the header's right corner */
+.pl-full>.pl-ch>.pl-maxb{margin-left:auto}
+.pl-trow:hover .pl-miss,.pl-trow:focus-within .pl-miss,.pl-trow.late .pl-miss{opacity:1}
 .pl-trow.missed .pl-tin{color:var(--t2);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--short) 60%,transparent)}
 .pl-trow{flex-wrap:nowrap}
 .pl-nbi{flex:none;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:color-mix(in srgb,var(--nb) 18%,var(--s1));color:var(--nb);font:700 10.5px var(--sans)}
@@ -700,7 +702,7 @@ button.pl-dc{border:0;font:500 12px var(--sans)}
 .pl-cit.missed i{background:var(--shortd);box-shadow:inset 0 0 0 1.5px var(--short)}
 .pl-ev.missed{opacity:.6}.pl-ev.missed b{text-decoration:line-through}
 @container plv (max-width:560px){ .pl-tabs2 button span{display:none} }
-@media (hover:none){ .pl-mb{opacity:1} }
+@media (hover:none){ .pl-miss{opacity:1} }
 /* round 22f — tabs under the notebooks, the full to-do view, pickers, several planners */
 .pl-rtabs{display:flex;flex-direction:column;gap:1px;margin-top:6px;padding-top:8px;border-top:1px solid var(--b1)}
 .pl-rtabs.min{align-items:center;gap:4px;margin-top:4px;padding-top:6px}

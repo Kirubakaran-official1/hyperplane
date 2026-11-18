@@ -518,6 +518,9 @@ const ALL_SECTIONS = [
         <b>Add to Home screen</b> → <b>Install</b>.</li>
       <li><b>iPhone:</b> open Hyperplane in <b>Safari</b>, press the <b>Share</b> button → <b>Add to Home Screen</b> → <b>Add</b>.</li>
       <li>Open <b>Hyperplane</b> from your app list or home screen. You stay signed in, just as in the browser.</li>
+      <li><b>Phone notifications</b> for your Planner reminders: your name → <b>Account</b> → <b>Phone notifications</b> → <b>Turn on</b>,
+        then <b>Allow</b>. A to-do or plan with a time reminds you 15 minutes before; day-only ones at 8 am, then at 12, 4 pm and 7 pm
+        while something is still left. Notes never remind. Switch it all off in the Planner (<b>Reminders in the Inbox</b>).</li>
     </ol>
   </> },
 

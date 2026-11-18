@@ -167,7 +167,7 @@ export default function Planner({ onOut }) {
     },
     merge: ids => setModal({ k: "merge", ids }),
     exportOf: (scope, ids) => setModal({ k: "export", scope, ids }),
-    setDigest: async on => { try { const r = await api("/app/api/planner/prefs", { method: "PATCH", json: { digest: on } }); setSt(s => ({ ...s, prefs: r })); say(on ? "Morning summary on" : "Morning summary off"); } catch (e) { fail(e); } },
+    setDigest: async on => { try { const r = await api("/app/api/planner/prefs", { method: "PATCH", json: { digest: on } }); setSt(s => ({ ...s, prefs: r })); say(on ? "Reminders on" : "Reminders off — nothing in the Inbox or on the phone"); } catch (e) { fail(e); } },
   }), [st, nb, openId, openPlan, today, load, say, fail]);
 
   // ── the filters, once, for every part: the notebook on the left, topics (notes), a date range, the search

@@ -433,8 +433,8 @@ def state(conn, cid):
 def prefs_set(conn, cid, digest):
     conn.execute("UPDATE pl_prefs SET prefs = prefs || %s::jsonb, updated_at = now() WHERE customer_id = %s", (json.dumps({"digest": bool(digest)}), cid))
     if not digest:
-        conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = 'Daily summary switched off', updated_at = now(), "
-                     "read_at = COALESCE(read_at, now()) WHERE customer_id = %s AND kind = 'planner_due' AND status = 'open'", (cid,))
+        conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = 'Reminders switched off', updated_at = now(), "
+                     "read_at = COALESCE(read_at, now()) WHERE customer_id = %s AND kind IN ('planner_due', 'planner_soon') AND status = 'open'", (cid,))
     return {"digest": bool(digest)}
 
 
@@ -1066,14 +1066,21 @@ def _due_body(rows, day):
 
 
 def settle(conn, cid):
-    """after a task changes: an open summary whose tasks are all done / moved closes by itself; one that still has some is brought up to date"""
+    """after a task changes: the day summary closes by itself once nothing is left, and a "starts in 15 min" reminder closes once its
+    to-do / plan is ticked, moved to another day or deleted"""
     it = conn.execute("SELECT id FROM customer_notifications WHERE customer_id = %s AND kind = 'planner_due' AND status = 'open' ORDER BY id DESC LIMIT 1",
                       (cid,)).fetchone()
-    if not it:
-        return
-    if not conn.execute("SELECT 1 FROM pl_tasks WHERE customer_id = %s AND status NOT IN ('done', 'missed') AND due IS NOT NULL AND due <= %s LIMIT 1", (cid, today())).fetchone():
+    if it and not conn.execute(LEFT_SQL + " LIMIT 1", (cid, today(), today())).fetchone():
         conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = 'All caught up — nothing due', updated_at = now(), "
                      "read_at = COALESCE(read_at, now()) WHERE id = %s", (it["id"],))
+    for n in conn.execute("SELECT id, ref_id, body FROM customer_notifications WHERE customer_id = %s AND kind = 'planner_soon' AND status = 'open'",
+                          (cid,)).fetchall():
+        t = conn.execute("SELECT status, due, start_on, archived_at FROM pl_tasks WHERE customer_id = %s AND id = %s",
+                         (cid, n["ref_id"] or 0)).fetchone()
+        on = date.fromisoformat(((n["body"] or {}).get("soon") or {}).get("day") or today().isoformat())
+        if not t or t["status"] in CLOSED or t["archived_at"] or not (t["due"] and (t["start_on"] or t["due"]) <= on <= t["due"]):
+            conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), updated_at = now(), read_at = COALESCE(read_at, now()), "
+                         "done_note = %s WHERE id = %s", ("Done" if t and t["status"] == "done" else "No longer due", n["id"]))
 
 
 def run_digest(conn, now=None):
@@ -1102,6 +1109,106 @@ def run_digest(conn, now=None):
             conn.execute("UPDATE customer_notifications SET status = 'done', done_at = now(), done_note = 'All caught up — nothing due', updated_at = now(), "
                          "read_at = COALESCE(read_at, now()) WHERE id = %s", (s["id"],))
     return made
+
+
+# ─────── round 28: reminders in the Inbox and on the phone (owner 2026-11-18: "like Teams — 15 min before; a day-only to-do at 8 am, then
+# 12, 4 and 7 for what is left; notes nothing") ───────
+SOON_MIN = 15                                            # a to-do / plan with a time: one reminder this many minutes before
+SLOTS = (8, 12, 16, 19)                                  # day-only to-dos and plans: 8 am, then 12 · 4 pm · 7 pm only while something is left
+# what is still left on a day: day-only (no time) to-dos due that day or earlier, and planner rows running that day or overdue
+LEFT_SQL = ("SELECT id, kind, title, due FROM pl_tasks WHERE customer_id = %s AND status NOT IN ('done', 'missed') AND archived_at IS NULL "
+            "AND time_from IS NULL AND due IS NOT NULL AND (due <= %s OR (kind = 'plan' AND COALESCE(start_on, due) <= %s)) "
+            "ORDER BY due, priority DESC, id")
+ON_SQL = ("JOIN effective_permissions e ON e.customer_id = t.customer_id AND e.key = 'planner:view' "
+          "LEFT JOIN pl_prefs p ON p.customer_id = t.customer_id WHERE COALESCE(p.prefs->>'digest', 'true') <> 'false' ")
+
+
+def _hm(t):
+    return f"{t.hour % 12 or 12}:{t.minute:02d} {'am' if t.hour < 12 else 'pm'}"
+
+
+SLOT_NAME = {8: "8 am", 12: "12 pm", 16: "4 pm", 19: "7 pm"}
+
+
+def _once(conn, cid, key):
+    """True the first time only — pl_reminders remembers each reminder sent, so a restart never repeats one"""
+    return conn.execute("INSERT INTO pl_reminders (customer_id, key) VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING key", (cid, key)).fetchone() is not None
+
+
+def run_reminders(conn, now=None, push_queue=None):
+    """the worker, every few seconds (admin connection). Returns (timed reminders, day reminders) written."""
+    from . import push
+    send = push_queue or push.queue
+    now = (now or datetime.now(IST)).astimezone(IST)
+    day, at = now.date(), now.time().replace(second=0, microsecond=0)
+    soon_n = day_n = 0
+    # the Planner taken away (Access manager): its open reminders close (switched off: prefs_set closes them; nothing left: settle)
+    conn.execute("UPDATE customer_notifications n SET status = 'done', done_at = now(), updated_at = now(), read_at = COALESCE(read_at, now()), "
+                 "done_note = 'The Planner is no longer on your plan' WHERE n.kind IN ('planner_due', 'planner_soon') AND n.status = 'open' "
+                 "AND NOT EXISTS (SELECT 1 FROM effective_permissions e WHERE e.customer_id = n.customer_id AND e.key = 'planner:view')")
+    # ── a time is set: one reminder in the 15 minutes before it, on its day (a planner row: every day it runs) ──
+    until = (datetime.combine(day, at) + timedelta(minutes=SOON_MIN)).time() if at < time(23, 45) else time(23, 59, 59)
+    rows = conn.execute("SELECT t.customer_id, t.id, t.kind, t.title, t.note, t.time_from, t.time_to FROM pl_tasks t " + ON_SQL +
+                        "AND t.status NOT IN ('done', 'missed') AND t.archived_at IS NULL AND t.time_from IS NOT NULL AND t.time_from > %s "
+                        "AND t.time_from <= %s AND t.due IS NOT NULL AND COALESCE(t.start_on, t.due) <= %s AND t.due >= %s "
+                        "AND (t.kind = 'plan' OR t.due = %s) ORDER BY t.time_from LIMIT 2000", (at, until, day, day, day)).fetchall()
+    for r in rows:
+        if not _once(conn, r["customer_id"], f"t{r['id']}@{day.isoformat()}T{r['time_from']:%H%M}"):
+            continue
+        mins = max(1, round((datetime.combine(day, r["time_from"]) - datetime.combine(day, at)).total_seconds() / 60))
+        when = _hm(r["time_from"]) + (f" – {_hm(r['time_to'])}" if r["time_to"] else "")
+        note = re.sub(r"\s+", " ", r["note"] or "").strip()[:160]
+        body = {"planner": True, "day": day.isoformat(), "soon": {"id": r["id"], "t": r["title"][:120], "at": when, "in": mins, "note": note,
+                "kind": r["kind"], "day": day.isoformat()}, "today": [{"id": r["id"], "t": r["title"][:120]}], "late": [], "n_today": 1, "n_late": 0}
+        nid = conn.execute("INSERT INTO customer_notifications (customer_id, kind, title, body, app, type, ref_id) "
+                           "VALUES (%s, 'planner_soon', %s, %s, 'planner', 'info', %s) RETURNING id",
+                           (r["customer_id"], f"In {mins} min · {when}: {r['title'][:100]}", json.dumps(body), r["id"])).fetchone()["id"]
+        send(conn, r["customer_id"], r["title"][:100], f"{when} · in {mins} min" + (f"\n{note}" if note else ""), url=f"/app/inbox?n={nid}", tag=f"pl-t{r['id']}")
+        soon_n += 1
+    # ── day-only: 8 am, then 12 · 4 pm · 7 pm while something is left (the latest slot reached; earlier missed ones are not sent late) ──
+    slot = max([h for h in SLOTS if now.hour >= h], default=None)
+    if slot is not None and now.hour < slot + 3:
+        who = conn.execute("SELECT DISTINCT t.customer_id FROM pl_tasks t " + ON_SQL +
+                           "AND t.status NOT IN ('done', 'missed') AND t.archived_at IS NULL AND t.time_from IS NULL AND t.due IS NOT NULL "
+                           "AND (t.due <= %s OR (t.kind = 'plan' AND COALESCE(t.start_on, t.due) <= %s))", (day, day)).fetchall()
+        for w in who:
+            cid = w["customer_id"]
+            if not _once(conn, cid, f"d{day.isoformat()}@{slot}"):
+                continue
+            for h in SLOTS:
+                if h < slot:
+                    _once(conn, cid, f"d{day.isoformat()}@{h}")
+            rows = conn.execute(LEFT_SQL + " LIMIT 200", (cid, day, day)).fetchall()
+            if not rows:
+                continue
+            late = [r for r in rows if r["due"] < day]
+            now_ = [r for r in rows if r["due"] >= day]
+            todo = [r for r in now_ if r["kind"] == "todo"]
+            plans = [r for r in now_ if r["kind"] == "plan"]
+            parts = [p for p in (f"{len(todo)} to-do{'' if len(todo) == 1 else 's'}" if todo else "",
+                                 f"{len(plans)} plan{'' if len(plans) == 1 else 's'}" if plans else "", f"{len(late)} overdue" if late else "") if p]
+            head = "Today in your Planner" if slot == SLOTS[0] else "Still to do today"
+            title = f"{head} · {SLOT_NAME[slot]}: " + " · ".join(parts)
+            body = {"planner": True, "day": day.isoformat(), "slot": slot, "today": [{"id": r["id"], "t": r["title"][:120]} for r in now_[:20]],
+                    "late": [{"id": r["id"], "t": r["title"][:120], "d": r["due"].isoformat()} for r in late[:20]], "n_today": len(now_), "n_late": len(late)}
+            it = conn.execute("SELECT id FROM customer_notifications WHERE customer_id = %s AND kind = 'planner_due' AND status = 'open' "
+                              "ORDER BY id DESC LIMIT 1", (cid,)).fetchone()
+            if it:                                           # one summary item, brought up to date and shown as new again
+                conn.execute("UPDATE customer_notifications SET title = %s, body = %s, updated_at = now(), read_at = NULL WHERE id = %s",
+                             (title, json.dumps(body), it["id"]))
+                nid = it["id"]
+            else:
+                nid = conn.execute("INSERT INTO customer_notifications (customer_id, kind, title, body, app, type) "
+                                   "VALUES (%s, 'planner_due', %s, %s, 'planner', 'info') RETURNING id", (cid, title, json.dumps(body))).fetchone()["id"]
+            first = ", ".join(r["title"][:40] for r in (now_ + late)[:3])
+            send(conn, cid, f"{head} · {SLOT_NAME[slot]}", " · ".join(parts) + (f"\n{first}" if first else ""), url=f"/app/inbox?n={nid}", tag="pl-day")
+            day_n += 1
+    return soon_n, day_n
+
+
+def forget_reminders(conn):
+    """the worker, once a day: what was sent more than 3 days ago is no longer needed to stop a repeat"""
+    return conn.execute("DELETE FROM pl_reminders WHERE sent_at < now() - interval '3 days'").rowcount
 
 
 def cleanup(conn):

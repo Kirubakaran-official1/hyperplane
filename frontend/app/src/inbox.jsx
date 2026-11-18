@@ -35,7 +35,7 @@ const TABS = [["action", "Action"], ["info", "Updates"], ["done", "Done"]];
 const HOW = { swapped: "Swapped", removed: "Removed", recovered: "Trend recovered" };
 const inr = v => v == null ? "—" : `₹${Math.round(v).toLocaleString("en-IN")}`;
 const tabOf = x => x.status === "done" ? "done" : x.type === "action" ? "action" : "info";
-const kindOf = x => x.src === "planner" ? "TASKS DUE" : x.src === "helpdesk" ? "HELPDESK QUERY" : x.src === "announce" ? "ANNOUNCEMENT" : x.src === "mention" ? "MENTION" : x.body && x.body.order ? "SIP ORDER" : "PORTFOLIO CHANGE";
+const kindOf = x => x.src === "planner" ? (x.body && x.body.soon ? "REMINDER" : "TASKS DUE") : x.src === "helpdesk" ? "HELPDESK QUERY" : x.src === "announce" ? "ANNOUNCEMENT" : x.src === "mention" ? "MENTION" : x.body && x.body.order ? "SIP ORDER" : "PORTFOLIO CHANGE";
 const pfName = x => x.src === "alert" ? (x.title.split(":")[0] || "").trim() : x.src === "planner" ? "Planner" : x.src === "helpdesk" ? "Helpdesk queries" : x.src === "mention" ? "Community" : "Announcements";
 const age = iso => {
   const m = Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
@@ -51,6 +51,7 @@ const summary = x => {
   const b = x.body || {};
   if (x.src === "helpdesk") return b.snippet || `${b.messages || 0} message${b.messages === 1 ? "" : "s"}`;
   if (x.src === "announce") return (b.text || "").slice(0, 90);
+  if (x.src === "planner" && b.soon) return `${b.soon.at}${b.soon.note ? ` · ${b.soon.note}` : ""}`;
   if (x.src === "planner") return `${b.n_today || 0} due today · ${b.n_late || 0} late${(b.today || []).length ? ` · ${(b.today || []).map(t => t.t).slice(0, 3).join(", ")}` : ""}`;
   if (x.src === "mention") return (b.text || "").slice(0, 110);
   if (b.order) return `Order ready · ${inr(b.total)}`;
@@ -144,7 +145,7 @@ function Flow({ x }) {
     : x.src === "announce"
     ? [["Sent by Hyperplane", dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at]]
     : x.src === "planner"
-    ? [["Your daily summary", dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at], ["Done", x.done_at ? `${dt(x.done_at)}${x.done_note ? ` · ${x.done_note}` : ""}` : "Open", x.status === "done"]]
+    ? [[x.body && x.body.soon ? "Reminder from your Planner" : "Your Planner's list", dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at], ["Done", x.done_at ? `${dt(x.done_at)}${x.done_note ? ` · ${x.done_note}` : ""}` : "Open", x.status === "done"]]
     : x.src === "mention"
     ? [[`Mentioned by ${x.body.by}`, dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at], ["Done", x.done_at ? dt(x.done_at) : "Open", x.status === "done"]]
     : [["Raised by Hyperplane AI", dt(x.at), true], ["Seen", x.read_at ? dt(x.read_at) : "Not yet", !!x.read_at],
@@ -223,6 +224,7 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
   const facts = x.src === "helpdesk"
     ? [["Ticket", `HD-${x.hid}`], ["Severity", (b.severity || "").replace(/^./, c => c.toUpperCase())], ["Status", x.status === "done" ? "Closed" : "Open"], ["Messages", b.messages || 0], ["Raised on", day(x.created)]]
     : x.src === "announce" ? [["From", "Hyperplane"], ["Sent on", day(x.at)], ["Type", "Information"]]
+    : x.src === "planner" && b.soon ? [["Application", m.name], ["Starts", b.soon.at], ["On", day(b.soon.day || x.at)], ["Type", b.soon.kind === "plan" ? "Plan" : "To-do"]]
     : x.src === "planner" ? [["Application", m.name], ["Due today", b.n_today || 0], ["Late", b.n_late || 0], ["For", day(b.day || x.at)]]
     : x.src === "mention" ? [["From", b.by], ["Where", b.thread ? "A thread in the Community" : "Community chat"], ["Sent on", day(x.at)]]
     : b.order ? [["Application", m.name], ["Plan", pfName(x)], ["This instalment", inr(b.total)], ["Raised on", day(x.at)]]
@@ -247,13 +249,15 @@ function Detail({ x, apps, onOpen, onHelpdesk, onCommunity, onChange, onBack }) 
           : tab === "activity" ? <Activity x={x}/> : <>
           {x.src === "announce" && <div className="ib-msg" id="ib-text">{b.text}</div>}
           {x.src === "planner" && <><div className="ib-msg" id="ib-planner">
-            {(b.late || []).length > 0 && <><b>Late</b><ul className="ib-pl">{b.late.map(t => <li key={t.id}>{t.t} <span className="sub">· was due {day(t.d)}</span></li>)}</ul></>}
-            {(b.today || []).length > 0 && <><b>Due today</b><ul className="ib-pl">{b.today.map(t => <li key={t.id}>{t.t}</li>)}</ul></>}
+            {b.soon && <div id="ib-soon"><b>{b.soon.t}</b><div className="sub">{b.soon.at} · {x.status === "done" ? (x.done_note || "Done") : "starts soon"}</div>
+              {b.soon.note && <p style={{ margin: "8px 0 0" }}>{b.soon.note}</p>}</div>}
+            {!b.soon && (b.late || []).length > 0 && <><b>Late</b><ul className="ib-pl">{b.late.map(t => <li key={t.id}>{t.t} <span className="sub">· was due {day(t.d)}</span></li>)}</ul></>}
+            {!b.soon && (b.today || []).length > 0 && <><b>{b.slot && b.slot > 8 ? "Still to do today" : "Due today"}</b><ul className="ib-pl">{b.today.map(t => <li key={t.id}>{t.t}</li>)}</ul></>}
             {!(b.late || []).length && !(b.today || []).length && "Nothing is due."}</div>
             <div className="ib-act">{has && <button type="button" className="px-btn primary" id="ib-planner-open" onClick={() => onOpen("planner", "today")}>Open the Planner</button>}
               {x.status !== "done" ? <button type="button" className="px-btn" onClick={() => set("done")} disabled={busy} id="ib-done"><Icon name="check" size={14}/> Mark done</button>
                 : <button type="button" className="px-btn" onClick={() => set("reopen")} disabled={busy} id="ib-reopen">Reopen</button>}</div>
-            <p className="ib-note">Ticking the tasks off in the Planner closes this summary by itself. You can switch the daily summary off in the Planner.</p></>}
+            <p className="ib-note">{b.soon ? "Ticking it off in the Planner closes this reminder by itself." : "Ticking the tasks off in the Planner closes this list by itself."} You can switch reminders off in the Planner.</p></>}
           {x.src === "mention" && <><div className="ib-msg" id="ib-text"><b>{b.by}</b>{b.admin ? " · Hyperplane" : ""}<br/>{b.text}</div>
             <div className="ib-act"><button type="button" className="px-btn primary" id="ib-community" onClick={() => { if (x.status !== "done") set("done"); onCommunity(b.mid, b.thread); }}>Open in the Community</button>
               {x.status !== "done" ? <button type="button" className="px-btn" onClick={() => set("done")} disabled={busy} id="ib-done"><Icon name="check" size={14}/> Mark done</button>

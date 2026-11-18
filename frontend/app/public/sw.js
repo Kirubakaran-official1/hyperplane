@@ -15,6 +15,27 @@ self.addEventListener("activate", e => {
     .then(() => self.clients.claim()));
 });
 
+// round 28: phone notifications (Planner reminders). The message arrives encrypted for this phone; the browser decrypts it.
+self.addEventListener("push", e => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch (err) { m = { title: "Hyperplane", body: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(m.title || "Hyperplane", {
+    body: m.body || "", icon: "/app/icons/icon-192.png", badge: "/app/icons/badge-96.png",
+    tag: m.tag || undefined, renotify: !!m.tag, data: { url: m.url || "/app/inbox" },
+  }));
+});
+
+// a tap opens the item: in the app when it is already open (it moves there), else a new window
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || "/app/inbox", self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
+    const win = list.find(c => c.url.startsWith(self.location.origin + "/app"));
+    if (win) return win.focus().then(w => (w || win).navigate(url));
+    return self.clients.openWindow(url);
+  }));
+});
+
 self.addEventListener("fetch", e => {
   const r = e.request;
   if (r.mode !== "navigate" || new URL(r.url).pathname.startsWith("/app/api/")) return;

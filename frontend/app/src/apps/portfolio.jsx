@@ -366,19 +366,14 @@ function PortfolioView({ data, symbols, setSymbols, status, me, sent = 0, onOut 
           <div className="px-search"><StockSearch stocks={data.stocks} onPick={add} added={added} keepOpen placeholder="Add a stock: name or ticker"/></div>
           <button type="button" className="px-btn" onClick={() => { setStage("build"); window.scrollTo(0, 0); }}>Edit list</button>
           <button type="button" className="px-btn" id="pf-save" onClick={() => { setSaving(v => !v); setSaveMsg(""); }}><Icon name="star" size={14}/> Save portfolio</button>
-          {/* round 23c (owner 2026-11-17: "download as Word + Markdown — 3 options"): the same report as PDF, Word or Markdown */}
-          {sum && <span className="hp-grp hp-dlg" role="group" aria-label="Download the report">
-            <span className="hp-dll">{making === "busy" ? "Preparing…" : "Download report"}</span>
-            {[["pdf", "PDF", "pf-dl"], ["docx", "Word", "pf-dl-docx"], ["md", "Markdown", "pf-dl-md"]].map(([fmt, l, id]) => (
-              <button key={fmt} type="button" className={`px-btn ${fmt === "pdf" ? "pf-dl" : ""}`} id={id} disabled={making === "busy"} title={`Download the report as ${l}`} onClick={() => {
-                setMaking("busy");
-                Promise.all([loadChunk(() => fmt === "pdf" ? import("../report.js") : import("../doc-export.js")), api("/app/api/portfolio/check").catch(() => null)])
-                  .then(([mod, ck]) => { const m = { ...reportModel(rows, sum, data, me), swaps: ck && ck.items ? ck.items : null };
-                    return fmt === "pdf" ? mod.downloadReport(m) : mod.downloadDoc(mod.docFromReport(m), fmt); })
-                  .then(() => { setMaking(""); trackAction("portfolio", "report"); })
-                  .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
-              }}>{fmt === "pdf" && <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}{l}</button>))}
-          </span>}
+          {/* round 27g (owner: "the Word + Markdown downloads were meant for the Planner — the AI Portfolio Analyser is PDF only") */}
+          {sum && <button type="button" className="px-btn pf-dl" id="pf-dl" disabled={making === "busy"} title="Download the report as PDF" onClick={() => {
+            setMaking("busy");
+            Promise.all([loadChunk(() => import("../report.js")), api("/app/api/portfolio/check").catch(() => null)])
+              .then(([mod, ck]) => mod.downloadReport({ ...reportModel(rows, sum, data, me), swaps: ck && ck.items ? ck.items : null }))
+              .then(() => { setMaking(""); trackAction("portfolio", "report"); })
+              .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
+          }}><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>{making === "busy" ? "Preparing…" : "Download PDF"}</button>}
       </div>
       {saving && <SaveBar kind="analyser" defName={`My portfolio · ${rows.length} stocks`} inputs={{}} onCancel={() => setSaving(false)}
         holdings={rows.map(r => ({ kind: "stock", s: r.s.s, n: r.s.n, cap: r.s.cap, sec: r.s.sec }))}

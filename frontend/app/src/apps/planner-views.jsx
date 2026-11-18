@@ -5,6 +5,7 @@
 // Widget · NotebookRail (with the tabs) · to-dos (TodoCard, TodoBoard, TodoRow, TodoAdd, TimeChip) · planners (PlannerWidget, PlannerTiles,
 // PlannerTable) · NotesCard · the download / merge / confirm pop-ups.
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { PhonePush } from "../push.jsx";
 import { api } from "../core.jsx";
 import { DateChip, DatePop, Float, Modal, Menu, NB_COLORS, NbDot, PI, addDays, ago, clean, dayLong, dayShort, diffDays, useFloat } from "./planner-lib.jsx";
 
@@ -122,8 +123,11 @@ export function NotebookRail({ st, nb, setNb, ops, counts, onPicked, min, onMin,
             onKeyDown={e => { if (e.key === "Escape") { setName(""); setAdding(false); } }}/></form>}
       </div>
       {tabs}
-      <label className={`hp-switch pl-dig ${st.prefs.digest ? "on" : ""}`} title="Each morning the Inbox lists what is due today and what is late">
-        <input type="checkbox" checked={st.prefs.digest} onChange={e => ops.setDigest(e.target.checked)} id="pl-digest"/>Morning summary in the Inbox</label>
+      {/* round 28: reminders — 15 min before a to-do / plan with a time; 8 am, then 12 · 4 pm · 7 pm for the day's list while something is left */}
+      <label className={`hp-switch pl-dig ${st.prefs.digest ? "on" : ""}`}
+        title="15 minutes before a to-do or plan with a time. Day-only ones: a list at 8 am, then at 12, 4 pm and 7 pm while something is still left. Notes never remind.">
+        <input type="checkbox" checked={st.prefs.digest} onChange={e => ops.setDigest(e.target.checked)} id="pl-digest"/>Reminders in the Inbox</label>
+      {st.prefs.digest && <div className="pl-push"><PhonePush id="pl-push"/></div>}
     </nav>);
 }
 
@@ -134,7 +138,7 @@ export function StatusBtn({ t, ops }) {
     aria-label={st_ === "open" ? `Mark “${t.title}” done` : `Back to open: “${t.title}”`} title={st_ === "open" ? "Done" : st_ === "done" ? "Done — click to reopen" : "Missed — click to reopen"} data-sb={st_}>
     {st_ === "done" ? <PI n="tick" s={12}/> : st_ === "missed" ? <PI n="calx" s={12}/> : <PI n="tick" s={11} className="pl-sbh"/>}</button>;
 }
-export const MissBtn = ({ t, ops }) => <button type="button" className="pl-mb" onClick={() => ops.task.patch(t.id, { status: "missed" })} title="Missed it" aria-label={`Mark “${t.title}” missed`} data-miss={t.id}><PI n="calx" s={14}/></button>;
+export const MissBtn = ({ t, ops }) => <button type="button" className="pl-miss" onClick={() => ops.task.patch(t.id, { status: "missed" })} title="Missed it" aria-label={`Mark “${t.title}” missed`} data-miss={t.id}><PI n="calx" s={14}/></button>;
 
 // a to-do's time (optional): pick the start from a 24-hour list, then the length — 15 minutes to 4 hours (no hour forced)
 const QUARTERS = Array.from({ length: 96 }, (_, i) => `${String(Math.floor(i / 4)).padStart(2, "0")}:${String(i % 4 * 15).padStart(2, "0")}`);

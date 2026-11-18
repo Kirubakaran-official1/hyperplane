@@ -1,0 +1,9 @@
+
+    // round 27f (owner: "the top bar is empty and black … match the app's background"): full screen, drawn into the camera-cutout strip
+    // too, so it is not a black band. The page keeps that strip clear and paints it in its own background (shell.css.js --sat).
+    @Override
+    protected androidx.browser.trusted.TrustedWebActivityDisplayMode getDisplayMode() {
+        return new androidx.browser.trusted.TrustedWebActivityDisplayMode.ImmersiveMode(false,
+                android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES);
+    }
+}

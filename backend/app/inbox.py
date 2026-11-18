@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
 APP_OF_KIND = {"analyser": "portfolio", "portfolio": "portfolio", "builder": "builder", "sip": "sip", "msip": "msip", "etf": "etf", "announce": "hyperplane",
-               "mention": "community", "planner_due": "planner"}
+               "mention": "community", "planner_due": "planner", "planner_soon": "planner"}
 
 
 def app_of(kind):

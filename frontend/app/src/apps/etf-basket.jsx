@@ -376,10 +376,10 @@ export function BasketView({ d, groups, basket, setBasket, status, me, apps = []
       `${Object.entries(sum.types).map(([k, v]) => `${k}: ${v}`).join(", ")}.${sum.twice.length ? " Two ETFs follow the same market — they move together." : ""}`],
     ["Best of market", `${sum.bestN} of ${rows.length}`, sum.bestN === rows.length ? "c-good" : "c-mid"],
   ].filter(Boolean);
-  const report = fmt => {
+  const report = () => {
     setMaking("busy");
-    loadChunk(() => fmt === "pdf" ? import("../report.js") : import("../doc-export.js"))
-      .then(mod => fmt === "pdf" ? mod.downloadReport(reportModel(rows, sum, d, me)) : mod.downloadDoc(mod.docFromReport(reportModel(rows, sum, d, me)), fmt))
+    loadChunk(() => import("../report.js"))
+      .then(mod => mod.downloadReport(reportModel(rows, sum, d, me)))
       .then(() => { setMaking(""); trackAction("etf", "report"); })
       .catch(e => setMaking(`Could not make the report: ${e.message || e}`));
   };
@@ -392,12 +392,9 @@ export function BasketView({ d, groups, basket, setBasket, status, me, apps = []
         <button type="button" className="px-btn" id="ef-bk-save" onClick={() => { setSaving(v => !v); setSaveMsg(""); }}><Icon name="star" size={14}/> Save portfolio</button>
         {canSip && <button type="button" className="px-btn" id="ef-bk-mksip" onClick={() => { setStage("sip"); window.scrollTo(0, 0); }}><Icon name="clock" size={14}/> Make it a SIP</button>}
         {canBuy && <button type="button" className={`px-btn zr-btn ${buy ? "on" : ""}`} id="ef-bk-buybtn" aria-expanded={buy} onClick={() => setBuy(v => !v)}><Icon name="out" size={14}/> Buy on Zerodha</button>}
-        <span className="hp-grp hp-dlg" role="group" aria-label="Download the report">
-          <span className="hp-dll">{making === "busy" ? "Preparing…" : "Download report"}</span>
-          {[["pdf", "PDF", "ef-bk-dl"], ["docx", "Word", "ef-bk-dl-docx"], ["md", "Markdown", "ef-bk-dl-md"]].map(([fmt, l, id]) => (
-            <button key={fmt} type="button" className="px-btn" id={id} disabled={making === "busy"} title={`Download the report as ${l}`} onClick={() => report(fmt)}>
-              {fmt === "pdf" && <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>}{l}</button>))}
-        </span>
+        {/* round 27g (owner: "PDF only, like the Analyser" — Word and Markdown stay in the Planner) */}
+        <button type="button" className="px-btn" id="ef-bk-dl" disabled={making === "busy"} title="Download the report as PDF" onClick={report}>
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>{making === "busy" ? "Preparing…" : "Download PDF"}</button>
       </div>
       {saving && <SaveBar kind="etf" defName={`My ETF portfolio · ${rows.length} ETFs`} inputs={{}} holdings={rows.map(r => ({ kind: "etf", s: r.e.s }))} onCancel={() => setSaving(false)}
         onDone={m => { setSaving(false); setSaveMsg(m); onSaved && onSaved(); }}/>}

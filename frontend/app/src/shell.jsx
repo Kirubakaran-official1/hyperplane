@@ -1,6 +1,7 @@
 // Hyperplane customer app — SHELL: sign-in, side menu, top bar, past-days picker, data loading and the lazily loaded
 // applications (micro-frontends in ./apps). It must never import the dashboard code.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PhonePush } from "./push.jsx";
 import { Helpdesk, HelpdeskIcon, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
 import { Community, CommunityButton, CommunityIcon, useCommunityUnread } from "../../shared/community.jsx";
 import { NotifyCenter, useNotifications } from "./notify.jsx";
@@ -162,6 +163,7 @@ function AccountMenu({ me, onSignOut, unread = 0, onHelpdesk, onDocs }) {
               {z && <div id="acct-zr-row"><span className="lbl">Zerodha</span><span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 {z.key ? <span>Connected · encrypted key ID <b style={{ fontFamily: "var(--mono)" }}>{z.key.id}</b></span> : <span>Not connected</span>}
                 <button type="button" className="px-btn zr-btn sm" onClick={zr} id="acct-zr-manage">{z.key ? "Change or remove key" : "Connect Zerodha"}</button></span></div>}
+              <div className="acct-pushrow"><span className="lbl">Phone notifications</span><PhonePush id="acct-push"/></div>
               <div><span className="lbl">Appearance</span><div className="sg">{[["dark", "Dark"], ["light", "Light"]].map(([k, l]) => <button key={k} type="button" className={theme === k ? "on" : ""} onClick={() => setTheme(k)}>{l}</button>)}</div></div>
             </div>
             <p className="sub">To change your email or password, or to renew your access, raise a query in the <b>Helpdesk</b>.</p>
@@ -687,6 +689,9 @@ function Home({ me, onOut, reloadMe }) {
   useEffect(() => {
     if (route0.code) openCode(route0);
     else if (!route0.view && face) goPath(`/app/${APP_SLUG[face] || ""}`, true);
+    // round 28: a phone notification opens /app/inbox?n=<item> — that item opens
+    const nq = route0.view === "inbox" && new URLSearchParams(window.location.search).get("n");
+    if (nq && /^\d{1,12}$/.test(nq)) setIbReq({ id: `n${nq}`, n: Date.now() });
     if (window.location.search) try { window.history.replaceState(null, "", window.location.pathname); } catch { /* ignore */ }   // ?signup used up
   }, []);
   // Activity log: which application is open (once per visit) and a minute heartbeat while the page is visible

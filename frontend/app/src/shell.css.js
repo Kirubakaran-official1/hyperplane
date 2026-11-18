@@ -171,6 +171,15 @@ input:focus,select:focus{outline:none;border-color:var(--acc);box-shadow:var(--d
 .acct-rows>div{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--b1)}
 .acct-rows>div:last-child{border-bottom:0}
 .acct-f{display:flex;justify-content:flex-end;margin-top:12px}
+/* round 28: phone notifications switch (Account window, Planner) */
+.hp-push{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;font-size:12px;line-height:1.45;color:var(--t2);min-width:0}
+.hp-push-t{flex:1 1 170px;min-width:0}
+.hp-push-t i.ok{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--long);margin-right:6px;vertical-align:1px}
+.hp-push-b{display:inline-flex;gap:6px;flex-wrap:wrap}
+.hp-push-m{flex-basis:100%;color:var(--t3)}
+.acct-rows>div.acct-pushrow{flex-wrap:wrap;align-items:flex-start}.acct-pushrow .hp-push{flex:1 1 220px;justify-content:flex-end;text-align:right}
+.pl-push{padding:4px 4px 2px}
+.hp-push .px-btn.sm{height:28px;padding:0 10px;font-size:12px}
 .modal.mob-pop{max-width:960px;padding:0;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);overflow:hidden;border-radius:16px}
 .mob-pop>.x{z-index:2;border-radius:50%;background:color-mix(in srgb,var(--bg) 80%,transparent);backdrop-filter:blur(4px)}
 .mob-art{background:#070c18;display:flex;align-items:center;justify-content:center;padding:40px 18px 22px}
@@ -1353,4 +1362,13 @@ footer{border-top:1px solid var(--b1);padding-top:14px;margin-top:18px}
 @media (max-width:640px){.hp-actbar .px-btn.primary{margin-left:0;width:100%;justify-content:center}}
 @media (max-width:640px){.hp-band{padding:8px 12px}.hp-actbar{padding:0}}
 .sp.sp>*,.ef.ef>*{margin-top:0;margin-bottom:0}
+/* round 27f (owner: "the top bar is empty and black … match the app's background"): the Android app draws into the camera-cutout strip;
+   the page keeps that strip clear and paints it in its own background. --sat is 0 everywhere else (normal browsers, desktop). */
+:root{--sat:env(safe-area-inset-top,0px)}
+html{padding:var(--sat) env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}
+body::before{content:"";position:fixed;left:0;right:0;top:0;height:var(--sat);background:var(--bg);z-index:2147483000;pointer-events:none}
+html .sn,html .ap,html .dt-overlay,html .pl-edp{top:var(--sat)}
+html .overlay{padding-top:calc(16px + var(--sat))}
+html .bd-tabs,html .fbar,html .tk-tabs,html .pq-top{top:var(--sat)}
+html .pl-side,html .g-toc{top:calc(12px + var(--sat))}
 `;

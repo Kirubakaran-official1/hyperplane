@@ -2971,3 +2971,79 @@ the last completed candle CLOSED beyond the zone; strict ladder; back-test on pr
   - **Loading screen:** `app/index.html` has `.hp-boot` inside `#root` (inline style + the full logo SVG; React replaces it on first
     render). It uses the same dark as the splash, so the opening goes splash → logo + bar → app, with no white flash.
   - `INSTALLED()` (shell.jsx) also matches `display-mode: fullscreen`, so the Mobile app menu item stays hidden inside the Android app.
+- **Round 27f** (owner: "the top bar is empty and black … don't use that space but match the app's background"):
+  - **Android app 1.0.3** (code 4). `deploy/android/patch-launcher.js` adds `getDisplayMode()` → `ImmersiveMode(false,
+    LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES)` (from `cutout.java.txt`) to the generated LauncherActivity after every `bubblewrap update`;
+    the build stops if it is missing. The library's metadata hard-codes the default cutout mode, which shows a black band.
+  - **Page side** (`index.html` `viewport-fit=cover`; end of shell.css.js):
+    - `--sat` = `env(safe-area-inset-top)`, which is 0 in any normal browser. `html` is padded by it.
+    - `body::before` is a fixed band of `var(--bg)` over the strip.
+    - Sticky bars (`.bd-tabs`, `.fbar`, `.tk-tabs`, `.pq-top`; `.pl-side` / `.g-toc` + 12 px) and top-anchored panels (`.sn`, `.ap`,
+      `.dt-overlay`, `.pl-edp`; `.overlay` padding) start below it.
+  - **Tests:** `cutout_test` (no inset → nothing moves; a 49 px inset via `Emulation.setSafeAreaInsetsOverride` → the top bar below it, the
+    band, the sticky top, the side menu, the dark band = the page background). On the Android 14 emulator the strip is no longer black.
+
+### Round 27g (owner 2026-11-18: "the PDF / Word / Markdown downloads were for the Hyperplane Planner, not the AI Portfolio Analyser … minimise at the right corner of a maximised widget")
+- **The Planner's pop-ups were empty.** The "Missed it" to-do button (`MissBtn`) used the class `pl-mb`. The modal body
+  (`planner-lib.jsx` `Modal`) uses the same class, so every Planner pop-up body became 26 × 26 px with `opacity:0`. Download notes showed
+  only its footer.
+  - The button is now `pl-miss`. **Never reuse a `pl-*` class name for two things.**
+  - Download notes again shows What · Format (PDF · Word · Markdown) · Files · Include pictures.
+- **AI Portfolio Analyser:** a single **Download PDF** button again (`#pf-dl`). The Word / Markdown buttons from round 23c are gone there.
+  The ETF basket, SIP and Builder reports still offer all three (owner to confirm).
+- **A maximised Planner widget** has its minimise button in the header's right corner (`.pl-full>.pl-ch>.pl-maxb{margin-left:auto}`).
+- **Tests** (`downloads_test`): the Analyser is PDF only and the PDF downloads; the Planner window shows its three formats and each one
+  downloads; the minimise button sits within 24 px of the right corner.
+- **Round 27g, part 2** (owner: "PDF only, like the Analyser"): the ETF basket (`#ef-bk-dl` "Download PDF"), both SIP Builders (`#sip-pdf`,
+  `#msip-pdf`) and the AI Portfolio Builder (`#bd-pdf` + Excel) are PDF only too. **Only the Hyperplane Planner offers PDF · Word ·
+  Markdown.** `doc-export.js` stays for the Builder's PDF and the Planner. `downloads_test` checks it (`pdf_only`).
+
+### Round 28 (owner 2026-11-18): Planner reminders in the Inbox and on the phone ("like Teams — 15 min before … a day-only to-do at 8 am, then 12, 4 and 7 … notes nothing")
+- **Rules** (`planner.run_reminders(conn, now)`, run by the worker every loop, about every 15 s; owner answers: Inbox + phone; "8 am list,
+  then only what's left"):
+  - **A to-do or plan row with a time (`time_from`):** one `planner_soon` Inbox item in the 15 minutes before it, on its day. A planner
+    row reminds on each day it runs (start_on … due). The item has `ref_id` = the task, and the body has `soon {t, at, in, note, kind,
+    day}` (the note's first 160 characters).
+    - The phone gets the title, "9:30 am – 10:00 am · in 14 min" and the note.
+    - It closes by itself when the task is ticked, moved or deleted (`planner.settle`, done_note "Done" / "No longer due").
+  - **Day-only items** (no time: to-dos due today or overdue, planner rows running today or overdue):
+    - At **8 am** "Today in your Planner · 8 am: N to-dos · N plans · N overdue". Then at **12 pm, 4 pm and 7 pm** "Still to do today
+      · …", only while something is left.
+    - It is ONE `planner_due` Inbox item, updated and marked unread again at each slot; it closes when nothing is left.
+    - The latest slot reached is sent; earlier missed slots are marked, never sent late. Nothing is sent more than 3 h after a slot.
+  - **Notes never remind.** The Planner switch (`pl_prefs.digest`, now "Reminders in the Inbox") turns everything off.
+  - `pl_reminders` (customer, key `t<id>@<day>T<HHMM>` / `d<day>@<hour>`) means nothing is ever repeated; rows go after 3 days.
+  - This replaces round 22's single 07:00 digest (`run_digest` is kept but no longer called; the worker's 07:00 block now only cleans up).
+- **Phone notifications (Web Push)** — `backend/app/push.py`, with no new package:
+  - It implements RFC 8291 (aes128gcm) and RFC 8292 (VAPID ES256) with `cryptography`. pywebpush 2.5 needs cryptography ≥ 47 and the
+    Zerodha sealing is pinned to 44.
+  - **Verified byte-for-byte against RFC 8291's example** (every intermediate and the body), the VAPID signature verifies, and a phone-side
+    decrypt round-trips. Test: scratchpad `push_crypto_check.py`, run in the api container.
+  - **Tables:**
+    - `push_keys`: one VAPID pair, made at start-up, admin only. The portal gets just `push_public_key()`.
+    - `push_subs`: own rows (RLS); the portal may SELECT (no keys), DELETE, and subscribe through the SECURITY DEFINER `push_subscribe()`,
+      which moves a phone to the new account and keeps at most 10 per customer.
+    - `push_outbox`: the portal may INSERT only its own test message; **only the worker reads the private key and sends**. After sending,
+      the payload is blanked and only the result is kept; rows go after 7 days.
+  - **Delivery addresses:** only real push services are accepted (fcm.googleapis.com, android.googleapis.com, *.push.apple.com, Mozilla,
+    *.notify.windows.com; https, default port). A 404 / 410 removes the phone; 20 failures remove it.
+  - **Routes** (signed in): `GET /app/api/push/key`, `POST …/subscribe {endpoint, p256dh, auth, device}` (422 for a bad address or keys),
+    `…/unsubscribe`, `…/status {endpoint}`, `…/test` (409 without a phone; 5 per 10 min).
+- **Frontend:**
+  - `sw.js` handles `push`: `showNotification` with icon `icon-192`, badge `icons/badge-96.png` (white glyph) and data.url. On
+    `notificationclick` it focuses and navigates an open /app window, else opens one.
+  - `/app/inbox?n=<id>` opens that Inbox item (shell first paint; the query string is then tidied).
+  - `push.jsx` `PhonePush` shows a state with plain words: on (Send a test · Turn off) · off (Turn on) · blocked (how to allow it in the
+    phone's settings) · ios (add to the Home Screen first) · no.
+    - It sits under the Planner's "Reminders in the Inbox" switch (on a phone: inside the **All notebooks** menu) and in the Account
+      window ("Phone notifications").
+  - The Inbox shows a REMINDER chip, `#ib-soon` (title, time, note), Starts / On / Type facts, and "Still to do today" for later slots.
+- **Android app 1.0.4** (code 5): `enableNotifications: true` (notification delegation, so they show as Hyperplane; Android 13+ asks once,
+  `POST_NOTIFICATIONS`).
+- **Tests:**
+  - `reminders_test`, with `reminders_logic.py` in the api container: a fixed clock 30 days ahead, so the live worker never touches it,
+    and the transaction is rolled back. It covers every rule above, the routes, validation, own rows, the move, the 10 cap, the
+    worker's drain with a stand-in push service, the screens, the link, and the helper showing a pushed message.
+  - **End to end on the Android 14 emulator** (scratchpad `push_e2e.py` + `emu/push_e2e.sh` + `emu/cdp.js`): Chrome at
+    http://localhost:8080 (a `node` TCP relay to the laptop + `adb reverse`) signs in over Chrome remote debugging, a real tap on
+    Turn on → Allow, FCM endpoint saved → worker "1 of 1 phone(s)" → **the notification arrived on the phone**.
