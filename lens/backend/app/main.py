@@ -293,7 +293,7 @@ def fyers_callback(request: Request, auth_code: str = "", state: str = "", s: st
             fy.finish_login(c, state[:100], auth_code[:2000])
     except ValueError as e:
         return _page("Fyers is not connected", str(e), False)
-    return _page("Fyers connected ✓", "The Data Lab can use Fyers until tomorrow 6 am. You can close this tab.", True)
+    return _page("Fyers connected ✓", "The Data Lab can use Fyers until 6:30 am tomorrow. You can close this tab.", True)
 
 
 @app.get("/internal/admin/fyers/status")

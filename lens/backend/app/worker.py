@@ -48,8 +48,9 @@ def run_one(c):
             raise fy.NotConnected("Fyers is not connected")
         KINDS[job["kind"]](c, f, job)
         finish(c, job["id"], "done", "Finished")
-    except fy.QuotaWait:
-        finish(c, job["id"], "waiting", "Today's Fyers allowance is used up — this continues after midnight", tomorrow())
+    except fy.QuotaWait as e:
+        why = str(e) if "limit was hit" in str(e) else "Today's Fyers allowance is used up"
+        finish(c, job["id"], "waiting", f"{why} — this continues after midnight", tomorrow())
     except fy.NotConnected as e:
         finish(c, job["id"], "waiting", f"{e} — continues once Fyers is connected again", datetime.now(fy.IST) + timedelta(minutes=2))
     except lab.Stop as e:

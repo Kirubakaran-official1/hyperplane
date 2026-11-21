@@ -101,14 +101,14 @@ export function FyersLab({ api, notify }) {
 
       {sub === "connect" && <div className="fl-grid">
         <div className="fl-card"><h3>Fyers app</h3>
-          <p>From your Fyers API dashboard (myapi.fyers.in). The redirect address must be exactly the Redirect URL of that app: usually Fyers' own page (below). An individual Fyers app can only be signed in by its creator.</p>
+          <p>From your Fyers API dashboard (myapi.fyers.in). The redirect address must be exactly the app's Redirect URL. Best: your own, https://lens.quantfriday.in/api/fyers/callback (the sign-in then finishes by itself). With Fyers' own page you paste the address once after signing in. Only the app's creator can sign in with it.</p>
           <label className="fl-f">App ID<input id="fl-app" value={form.app_id} onChange={e => setForm({ ...form, app_id: e.target.value.trim() })} placeholder="e.g. XB12345-100"/></label>
           <label className="fl-f">App secret {s.secret_set && <span className="fl-pill on">saved</span>}<input id="fl-secret" type="password" value={form.secret}
             onChange={e => setForm({ ...form, secret: e.target.value })} placeholder={s.secret_set ? "Leave empty to keep the saved one" : "Paste the secret"} autoComplete="off"/></label>
           <label className="fl-f">Redirect address<input id="fl-redirect" value={form.redirect_uri} onChange={e => setForm({ ...form, redirect_uri: e.target.value.trim() })}/></label>
           <label className="fl-f">Plan<select id="fl-plan" value={form.plan} onChange={e => setForm({ ...form, plan: e.target.value })}>
-            <option value="standard">Standard (free): 50 a minute, 5,000 a day, 10 expired-contract minute requests a day</option>
-            <option value="prime">Prime: 500 a minute, 5,00,000 a day</option></select></label>
+            <option value="standard">Standard (free): 50 a minute, 5,000 a day · minute history: last 1 year · expired F&O minutes: 10 requests a day</option>
+            <option value="prime">Prime: 500 a minute, 5,00,000 a day · minute history from Jul 2017 · expired F&O from Oct 2018</option></select></label>
           <div className="fl-row"><button type="button" className="ln-btn go" id="fl-save" disabled={busy} onClick={async () => {
             const json = { app_id: form.app_id, redirect_uri: form.redirect_uri, plan: form.plan, ...(form.secret ? { secret: form.secret } : {}) };
             if (await post("settings", json, "Saved")) setForm(f => ({ ...f, secret: "" }));
@@ -116,7 +116,7 @@ export function FyersLab({ api, notify }) {
         </div>
         <div className="fl-card"><h3>Connection</h3>
           <div className="fl-row">{conn}{s.token_at && <small style={{ color: "var(--t3)" }}>signed in {fmtDT(s.token_at)}</small>}</div>
-          <p>Fyers' sign-in lasts one day (until 6 am).</p>
+          <p>Fyers' sign-in lasts one day (until 6:30 am).</p>
           {s.token_bad && <div className="fl-warn">Fyers refused the last sign-in: {s.token_bad}</div>}
           <div className="fl-row">
             <button type="button" className="ln-btn go" id="fl-connect" disabled={busy || !s.app_id || !s.secret_set} onClick={async () => {
@@ -141,7 +141,7 @@ export function FyersLab({ api, notify }) {
         <div className="fl-k" id="fl-usage">
           <div><span>Requests today</span><b>{n(u.calls)}</b><small>{n(u.left_day)} left of {n(u.cap_day)} (80% of the plan)</small></div>
           {u.cap_expired != null && <div><span>Expired-contract minute requests</span><b>{u.expired} / {u.cap_expired}</b><small>{u.left_expired} left today</small></div>}
-          <div><span>Limit hits (-429)</span><b>{n(u.limited)}</b><small>each one waits and tries again</small></div>
+          <div><span>Limit hits (-429)</span><b>{n(u.limited)}</b><small>after 2 in a day the Lab stops until tomorrow (Fyers blocks after 3)</small></div>
           <div><span>Failed requests</span><b>{n(u.failed)}</b><small>today</small></div>
           <div><span>Average answer time</span><b>{u.avg_ms} ms</b><small>today</small></div>
           <div><span>Last 60 minutes</span><b>{peak}/min peak</b><small>{avg}/min on average · limit {st.limits.per_min}/min</small></div>

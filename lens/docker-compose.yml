@@ -54,6 +54,7 @@ services:
       DATABASE_URL: postgresql://lens:${LENS_DB_PASSWORD}@lens-db:5432/lens
       LENS_SECRET: ${LENS_SECRET}
       MARKET_DIR: /data/market
+      FYERS_LIMIT_WAIT: ${FYERS_LIMIT_WAIT:-65}
       FYERS_API_BASE: ${FYERS_API_BASE:-https://api-t1.fyers.in}
       TZ: Asia/Kolkata
     volumes:

@@ -38,6 +38,10 @@ PLANS = {
     "prime": {"per_sec": 10, "per_min": 500, "per_day": 500000, "expired_per_day": None},
 }
 SHARE = 0.8
+# Fyers (API standards, Nov 2026): "if the per-minute rate limit is exceeded more than 3 times in a day, the user is blocked for the rest
+# of the day" — so after a limit hit the next request waits a whole minute, and after 2 hits in a day the Data Lab stops until tomorrow
+LIMIT_WAIT = int(os.environ.get("FYERS_LIMIT_WAIT", "65"))
+MAX_LIMIT_HITS = 2
 INDICES = {   # underlying (spot) symbol, option strike step, first day of expired F&O minute data
     "NIFTY": {"spot": "NSE:NIFTY50-INDEX", "step": 50, "fno_from": "2018-10-10"},
     "BANKNIFTY": {"spot": "NSE:NIFTYBANK-INDEX", "step": 100, "fno_from": "2018-10-10"},
@@ -111,12 +115,13 @@ def settings(c):
 
 
 def token_valid(s, now=None):
-    """an access token works until 06:00 IST the next morning (Fyers' daily reset) — or until Fyers refused it"""
+    """an access token works until 06:30 IST the next morning (Fyers: "Access tokens expire daily at 6:30 AM") — or until Fyers refused it"""
     if not s["token_enc"] or not s["token_at"] or s["token_bad"]:
         return False
     now = now or datetime.now(IST)
     at = s["token_at"].astimezone(IST)
-    reset = datetime.combine(at.date() + timedelta(days=1 if at.hour >= 6 else 0), datetime.min.time(), IST).replace(hour=6)
+    after = (at.hour, at.minute) >= (6, 30)
+    reset = datetime.combine(at.date() + timedelta(days=1 if after else 0), datetime.min.time(), IST).replace(hour=6, minute=30)
     return now < reset
 
 
@@ -262,7 +267,12 @@ class Fyers:
             log_call(self.c, name, symbol, params or {}, st, j, ms, expired=expired, rows=rows, job_id=self.job_id)
             code = j.get("code") if isinstance(j, dict) else None
             if st == 429 or code == -429:
-                time.sleep(backoff); backoff = min(backoff * 2, 120)
+                hits = self.c.execute("SELECT count(*) AS n FROM fyers_calls WHERE (code = -429 OR http = 429) AND at >= date_trunc('day', now() "
+                                      "AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'").fetchone()["n"]
+                if hits >= MAX_LIMIT_HITS:
+                    raise QuotaWait(f"Fyers' limit was hit {hits} times today — stopped until tomorrow (a 4th time would block the account for the day)")
+                time.sleep(LIMIT_WAIT)                                   # a whole minute: Fyers' per-minute window starts again
+                self.sec.clear(); self.min.clear()
                 continue
             if st == 401 or code in (-8, -15, -16, -17, -300):          # the day's token is no longer valid
                 self.c.execute("UPDATE fyers_settings SET token_bad = %s WHERE id = 1", (str(j.get("message", "token refused"))[:200],))

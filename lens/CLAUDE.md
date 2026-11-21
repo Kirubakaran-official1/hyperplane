@@ -63,6 +63,17 @@ can sign in. Then `blocked` / `approved` as needed. Lens users have no roles; th
 - the Admin-tab split.
 
 ## Phase 3: Fyers Data Lab (2026-11-21)
+**Fyers documentation facts (read 2026-11-21, fyers.in/api-docs/v3):**
+- Data limits:
+  - Standard: 5/s, 50/min, 5,000/day; expired F&O minute data 10 requests/day; index minute history the last 1 year; daily the last 5
+    years; expired F&O daily the last 2 years.
+  - Prime: 10/s, 500/min, 5,00,000/day; minute history from 3 Jul 2017; expired F&O from 10 Oct 2018 (NSE), 7 Aug 2023 (BSE).
+- Minute candles: 100 days per request. Day candles: 366 days. `expiry-dates`: ≤366 days per request.
+- Expired data answers have `columns` + `candles`; Greeks can be null; `s` = ok / no_data / error; bad input → 422, code -50.
+- Tokens expire at 06:30 IST. Token errors are -8, -15, -16, -17. The login endpoint allows 10 requests per 2 minutes per IP.
+- `redirect_uri` must equal the app's Redirect URL. Fyers recommends a URL you control. The default is Fyers' page.
+- Fyers is behind Cloudflare: Python's default "Python-urllib" identity gets error 1010 (HTTP 403), so every request sends `UA`.
+
 **Screen:** Hyperplane ⚙ Admin → 🔭 Lens admin → 📊 Fyers Data Lab (`frontend/src/fyerslab.jsx`). The admin server passes
 `/api/admin/lens/fyers/*` to `lens-api /internal/admin/fyers/*`. Sub-tabs: Connection, Usage & limits, Tests, Bulk download, Data checks,
 Depth & coverage, Compliance.
@@ -81,12 +92,14 @@ Depth & coverage, Compliance.
   `POST /internal/admin/fyers/code` → `finish_from_link`.
 - Without a `state` in the pasted text, the newest Connect click of the last 10 minutes is used. A code alone, with no Connect just
   before, is refused.
-- `token_valid`: the token works until 06:00 IST the next morning, or until Fyers refuses it (`token_bad`).
+- `token_valid`: the token works until 06:30 IST the next morning (Fyers docs), or until Fyers refuses it (`token_bad`).
 - The app secret and the token are sealed with AES-256-GCM (HKDF from LENS_SECRET). They are never returned to the screen.
 
 **Limits:**
 - 80% of the plan (`PLANS`): Standard 4/s, 40/min, 4000/day and 8 expired-contract minute requests/day; Prime 8/s, 400/min.
-- Sliding windows of 1.05 s and 61 s. -429 → wait, doubling up to 120 s.
+- Sliding windows of 1.05 s and 61 s.
+- -429 → wait `LIMIT_WAIT` (65 s, a full window). After **2** hits in a day → `QuotaWait` until tomorrow. Fyers blocks a user for the
+  day after the per-minute limit is exceeded more than 3 times.
 - Every call is logged in `fyers_calls`, and the day's counts come from there (`usage`).
 - Day allowance used up → `QuotaWait` → the job is `waiting` until 00:05 IST.
 
