@@ -198,11 +198,24 @@ def _http(method, url, headers=None, body=None, timeout=30):
 
 def log_call(c, endpoint, symbol, params, http, j, ms, expired=False, rows=0, note="", job_id=None):
     code = j.get("code") if isinstance(j, dict) else None
-    ok = 200 <= http < 300 and isinstance(j, dict) and j.get("s") == "ok"
+    ok = 200 <= http < 300 and isinstance(j, dict) and j.get("s") in ("ok", "no_data")
+    if not ok and not note:
+        note = why(j)
     c.execute("INSERT INTO fyers_calls (endpoint, symbol, params, expired, http, code, ok, ms, rows, note, job_id) "
               "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
               (endpoint, symbol[:80], json.dumps(params)[:2000], expired, http, code if isinstance(code, int) else None, ok, ms, rows,
                note[:300] or ("" if ok else str((j or {}).get("message", ""))[:300]), job_id))
+
+
+def why(j):
+    """Fyers' reason for a refusal, with the field it names (422 / -50 "Invalid input" carries a data object saying which)"""
+    if not isinstance(j, dict):
+        return ""
+    msg = str(j.get("message") or j.get("title") or j.get("s") or "")
+    det = j.get("data")
+    if det and not isinstance(det, list):
+        msg += f" — {json.dumps(det, default=str)[:220]}"
+    return msg
 
 
 def usage(c, plan):

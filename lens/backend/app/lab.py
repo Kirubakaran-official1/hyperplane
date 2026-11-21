@@ -89,6 +89,10 @@ class Stop(Exception):
     """the admin paused or cancelled the job"""
 
 
+class Refused(RuntimeError):
+    """Fyers refused one request (e.g. a date outside the plan's history): that sample is noted, the test goes on"""
+
+
 def rss_mb():
     return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)       # Linux: KB
 
@@ -280,15 +284,17 @@ def spot_range(c, idx, expiry, days=7):
 def candles(f, kind, symbol, frm, to, expired):
     """one request: minute candles of one symbol between two dates"""
     if kind == "spot" or not expired:
-        j = f.call("history", "/data/history", {"symbol": symbol, "resolution": "1", "date_format": 1, "range_from": frm.isoformat(),
-                                                "range_to": to.isoformat(), "cont_flag": 1, "oi_flag": 1}, symbol=symbol)
+        p = {"symbol": symbol, "resolution": "1", "date_format": 1, "range_from": frm.isoformat(), "range_to": to.isoformat(), "cont_flag": 1}
+        if kind != "spot":
+            p["oi_flag"] = 1                          # open interest only for futures / options (an index has none)
+        j = f.call("history", "/data/history", p, symbol=symbol)
     else:
         p = {"symbol": symbol, "resolution": "1", "date_format": 1, "range_from": frm.isoformat(), "range_to": to.isoformat(), "include_oi": 1}
         if kind == "opt":
             p["include_greeks"] = 1
         j = f.call("historical-data", "/data/history/fno/expired/historical-data", p, symbol=symbol, expired=True)
     if isinstance(j, dict) and j.get("s") not in ("ok", "no_data") and j.get("code") not in (None, 200):
-        raise RuntimeError(str(j.get("message") or j.get("code"))[:200])
+        raise Refused(f"{fy.why(j)[:200]} ({symbol} {frm} → {to})")
     return fy._candles(j)
 
 
@@ -298,7 +304,14 @@ def probe_depth(c, f, job):
     for idx, meta in fy.INDICES.items():
         job_check(c, job["id"])
         lo, hi = date(2005, 1, 1), today - timedelta(days=5)              # spot: binary search on "a 5-day window has minute candles"
-        has = lambda day: bool(candles(f, "spot", meta["spot"], day, day + timedelta(days=5), False)[1])
+        refusals = []
+
+        def has(day):
+            try:
+                return bool(candles(f, "spot", meta["spot"], day, day + timedelta(days=5), False)[1])
+            except Refused as e:                       # outside the plan's history (Standard: the last year only)
+                refusals.append(str(e))
+                return False
         if has(lo):
             hi = lo
         else:
@@ -308,8 +321,11 @@ def probe_depth(c, f, job):
                     hi = mid
                 else:
                     lo = mid
-        c.execute("INSERT INTO fyers_depth (idx, kind, earliest, note) VALUES (%s, 'spot', %s, 'binary search, ±7 days') "
-                  "ON CONFLICT (idx, kind) DO UPDATE SET earliest = EXCLUDED.earliest, note = EXCLUDED.note, checked_at = now()", (idx, hi))
+        found = has(hi)
+        note = "binary search, ±7 days" + (f"; Fyers refused older dates: {refusals[-1][:120]}" if refusals else "")
+        c.execute("INSERT INTO fyers_depth (idx, kind, earliest, note) VALUES (%s, 'spot', %s, %s) "
+                  "ON CONFLICT (idx, kind) DO UPDATE SET earliest = EXCLUDED.earliest, note = EXCLUDED.note, checked_at = now()",
+                  (idx, hi if found else None, note if found else f"no minute data found; {refusals[-1][:160] if refusals else ''}"))
         c.commit()
         progress(c, job["id"], step=f"{idx}: index minute data from {hi}")
         start = d(meta["fno_from"]) - timedelta(days=60)
@@ -329,9 +345,12 @@ def probe_depth(c, f, job):
                     best = min(lst, key=lambda s: abs((parse_strike(s, meta["step"], atm)[0] or 1e9) - (atm or 0))) if atm else lst[0]
                     sym = best
                 if sym:
-                    _, rows = candles(f, kind, sym, e - timedelta(days=7), e, True)
-                    earliest = e if rows else None
-                    note = f"{sym}: {len(rows)} minute candles in its last week" if rows else f"{sym}: listed, but no minute candles"
+                    try:
+                        _, rows = candles(f, kind, sym, e - timedelta(days=7), e, True)
+                        earliest = e if rows else None
+                        note = f"{sym}: {len(rows)} minute candles in its last week" if rows else f"{sym}: listed, but no minute candles"
+                    except Refused as ex:
+                        note = f"Fyers refused: {ex}"
             c.execute("INSERT INTO fyers_depth (idx, kind, earliest, note) VALUES (%s, %s, %s, %s) "
                       "ON CONFLICT (idx, kind) DO UPDATE SET earliest = EXCLUDED.earliest, note = EXCLUDED.note, checked_at = now()", (idx, kind, earliest, note))
             c.commit()
@@ -350,7 +369,8 @@ def probe_coverage(c, f, job):
         for year in sorted({e.year for e in all_e}):
             ys = [e for e in all_e if e.year == year]
             for e in (ys[0], ys[len(ys) // 2]) if len(ys) > 1 else ys:
-                if c.execute("SELECT 1 FROM fyers_coverage WHERE idx = %s AND expiry = %s AND rows IS NOT NULL", (idx, e)).fetchone():
+                if c.execute("SELECT 1 FROM fyers_coverage WHERE idx = %s AND expiry = %s AND (rows IS NOT NULL OR note LIKE 'Fyers refused%%')",
+                             (idx, e)).fetchone():
                     continue
                 job_check(c, job["id"])
                 i = all_e.index(e)
@@ -365,7 +385,13 @@ def probe_coverage(c, f, job):
                           (idx, e, weekly, len(strikes), len(con_["futures"]), "no ATM CE listed" if not ce else ""))
                 c.commit()
                 if ce:
-                    cols, rows = candles(f, "opt", ce[0], e - timedelta(days=6), e, True)
+                    try:
+                        cols, rows = candles(f, "opt", ce[0], e - timedelta(days=6), e, True)
+                    except Refused as ex:
+                        c.execute("UPDATE fyers_coverage SET note = %s, checked_at = now() WHERE idx = %s AND expiry = %s", (f"Fyers refused: {ex}"[:300], idx, e))
+                        c.commit()
+                        progress(c, job["id"], step=f"{idx} {e}: refused")
+                        continue
                     days_ = len({datetime.fromtimestamp(_ts(r[0]), fy.IST).date() for r in rows}) if rows else 0
                     missing = 100.0 * (1 - len(rows) / (days_ * MINUTES_PER_DAY)) if days_ else 100.0
                     has_oi, has_g = "oi" in cols or "open_interest" in cols, any(g in cols for g in ("iv", "delta"))
@@ -420,6 +446,19 @@ def plan_bulk(c, f, job):
                 progress(c, job["id"], phase="listing contracts", step=f"{idx} {e}", listed=_counts(c)["total"])
 
 
+def pack_finished(c):
+    """every expiry whose option pieces are all finished but whose parts are still there (e.g. the worker stopped while packing) → packed"""
+    for r in c.execute("SELECT idx, expiry FROM fyers_manifest WHERE kind = 'opt' GROUP BY idx, expiry "
+                       "HAVING bool_and(status IN ('done', 'no_data')) AND bool_or(status = 'done')").fetchall():
+        if os.path.isdir(os.path.join(MARKET, "options", r["idx"], r["expiry"].isoformat(), "_parts")):
+            out = pack_expiry(r["idx"], r["expiry"])
+            if out:
+                c.execute("UPDATE fyers_manifest SET path = %s, bytes = 0 WHERE idx = %s AND kind = 'opt' AND expiry = %s AND status = 'done'",
+                          (out, r["idx"], r["expiry"]))
+                c.execute("UPDATE fyers_manifest SET bytes = %s WHERE id = (SELECT min(id) FROM fyers_manifest WHERE path = %s)", (os.path.getsize(out), out))
+                c.commit()
+
+
 def _counts(c):
     return c.execute("SELECT count(*) AS total, count(*) FILTER (WHERE status IN ('done', 'no_data')) AS finished, "
                      "count(*) FILTER (WHERE status = 'failed') AS failed, coalesce(sum(bytes), 0)::bigint AS bytes FROM fyers_manifest").fetchone()
@@ -430,6 +469,7 @@ def run_bulk(c, f, job, minutes=None):
     straight to its file; a finished expiry's options are packed into one file. minutes = stop after that long (the P4 speed test)."""
     t0, n0, b0 = time.monotonic(), 0, 0
     today = datetime.now(fy.IST).date()
+    pack_finished(c)
     while True:
         job_check(c, job["id"])
         if minutes and time.monotonic() - t0 > minutes * 60:
@@ -480,6 +520,7 @@ def run_bulk(c, f, job, minutes=None):
         rate = n0 / el * 60
         progress(c, job["id"], phase="downloading", done=k["finished"], total=k["total"], failed=k["failed"], gb=round(k["bytes"] / 1e9, 3),
                  per_min=round(rate, 1), eta_min=round((k["total"] - k["finished"]) / rate) if rate > 0 else None, step=r["symbol"])
+    pack_finished(c)
     return n0, b0, time.monotonic() - t0
 
 
