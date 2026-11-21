@@ -334,8 +334,9 @@ class FyersSettingsIn(Model):
 
 @app.post("/internal/admin/fyers/settings")
 def fyers_settings(body: FyersSettingsIn, _=Depends(hp_admin)):
-    if body.redirect_uri is not None and not re.match(r"^(https://[a-z0-9.-]+|http://(127\.0\.0\.1|localhost)(:\d+)?)/api/fyers/callback$", body.redirect_uri):
-        raise HTTPException(422, "The redirect address must be https://<lens address>/api/fyers/callback")
+    lens_cb = r"^(https://[a-z0-9.-]+|http://(127\.0\.0\.1|localhost)(:\d+)?)/api/fyers/callback$"
+    if body.redirect_uri is not None and body.redirect_uri != fy.FYERS_PAGE and not re.match(lens_cb, body.redirect_uri):
+        raise HTTPException(422, f"The redirect address must be Fyers' page ({fy.FYERS_PAGE}) or https://<lens address>/api/fyers/callback")
     sets, args = [], []
     for k, v in (("app_id", body.app_id), ("redirect_uri", body.redirect_uri), ("plan", body.plan)):
         if v is not None:
@@ -357,6 +358,21 @@ def fyers_connect(who=Depends(hp_admin)):
             return {"url": fy.login_url(c, who)}
     except ValueError as e:
         raise HTTPException(409, str(e))
+
+
+class LinkIn(Model):
+    link: str = Field(max_length=6000)
+
+
+@app.post("/internal/admin/fyers/code")
+def fyers_code(body: LinkIn, _=Depends(hp_admin)):
+    """the address pasted from Fyers' page after the sign-in (when the app's Redirect URL is Fyers' own page)"""
+    try:
+        with pool.connection() as c:
+            fy.finish_from_link(c, body.link)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"ok": True}
 
 
 @app.post("/internal/admin/fyers/disconnect")

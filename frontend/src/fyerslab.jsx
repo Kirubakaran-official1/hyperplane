@@ -28,6 +28,7 @@ const CSS = `
 .fl label.hp-switch{display:inline-flex;align-items:center;gap:6px;margin-right:14px;font-size:13px;font-weight:600;color:var(--t1);cursor:pointer}
 .fl-warn{font-size:12.5px;color:var(--mixed);background:color-mix(in srgb,var(--mixed) 10%,transparent);border-radius:8px;padding:8px 10px}
 `;
+const FYERS_PAGE = "https://trade.fyers.in/api-login/redirect-uri/index.html";     // a Fyers app's default Redirect URL
 const fmtDT = s => s ? new Date(s).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 const n = v => v == null ? "—" : Number(v).toLocaleString("en-IN");
 const KIND = { depth: "History depth", coverage: "Coverage", speed: "Speed test", bulk: "Bulk download", quality: "Data checks", nightly: "Nightly top-up" };
@@ -65,11 +66,11 @@ function Jobs({ jobs, act, kinds }) {
 
 export function FyersLab({ api, notify }) {
   const [st, setSt] = useState(null), [sub, setSub] = useState("connect"), [busy, setBusy] = useState(false);
-  const [form, setForm] = useState(null), [consent, setConsent] = useState(null);
+  const [form, setForm] = useState(null), [consent, setConsent] = useState(null), [link, setLink] = useState("");
   const [scope, setScope] = useState({ indices: ["NIFTY", "BANKNIFTY", "SENSEX"], strikes: 25, full_chain: false, spot: true, futures: true, options: true });
   const load = () => api("/api/admin/lens/fyers/status").then(s => {
     setSt(s);
-    setForm(f => f || { app_id: s.settings.app_id, secret: "", redirect_uri: s.settings.redirect_uri || "https://lens.quantfriday.in/api/fyers/callback", plan: s.settings.plan });
+    setForm(f => f || { app_id: s.settings.app_id, secret: "", redirect_uri: s.settings.redirect_uri || FYERS_PAGE, plan: s.settings.plan });
     setConsent(c => c || { on: s.settings.consent.on || "", ref: s.settings.consent.ref || "", note: s.settings.consent.note || "" });
   }).catch(e => notify(e.message, "err"));
   const live = st && st.jobs.some(j => ["queued", "running"].includes(j.status));
@@ -100,7 +101,7 @@ export function FyersLab({ api, notify }) {
 
       {sub === "connect" && <div className="fl-grid">
         <div className="fl-card"><h3>Fyers app</h3>
-          <p>From your Fyers API dashboard (myapi.fyers.in). Register the redirect address below in that app. An individual Fyers app can only be signed in by its creator.</p>
+          <p>From your Fyers API dashboard (myapi.fyers.in). The redirect address must be exactly the Redirect URL of that app: usually Fyers' own page (below). An individual Fyers app can only be signed in by its creator.</p>
           <label className="fl-f">App ID<input id="fl-app" value={form.app_id} onChange={e => setForm({ ...form, app_id: e.target.value.trim() })} placeholder="e.g. XB12345-100"/></label>
           <label className="fl-f">App secret {s.secret_set && <span className="fl-pill on">saved</span>}<input id="fl-secret" type="password" value={form.secret}
             onChange={e => setForm({ ...form, secret: e.target.value })} placeholder={s.secret_set ? "Leave empty to keep the saved one" : "Paste the secret"} autoComplete="off"/></label>
@@ -115,7 +116,7 @@ export function FyersLab({ api, notify }) {
         </div>
         <div className="fl-card"><h3>Connection</h3>
           <div className="fl-row">{conn}{s.token_at && <small style={{ color: "var(--t3)" }}>signed in {fmtDT(s.token_at)}</small>}</div>
-          <p>Fyers' sign-in lasts one day (until 6 am). Connect opens Fyers in a new tab; after you sign in there, come back here.</p>
+          <p>Fyers' sign-in lasts one day (until 6 am).</p>
           {s.token_bad && <div className="fl-warn">Fyers refused the last sign-in: {s.token_bad}</div>}
           <div className="fl-row">
             <button type="button" className="ln-btn go" id="fl-connect" disabled={busy || !s.app_id || !s.secret_set} onClick={async () => {
@@ -123,6 +124,16 @@ export function FyersLab({ api, notify }) {
             }}>{s.connected ? "Reconnect Fyers" : "Connect Fyers"}</button>
             {s.connected && <button type="button" className="ln-btn" onClick={() => post("disconnect", {}, "Disconnected")}>Disconnect</button>}
           </div>
+          {s.redirect_uri === FYERS_PAGE ? <>
+            <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: "var(--t2)", lineHeight: 1.7 }}>
+              <li><b>Connect Fyers</b> opens Fyers in a new tab: sign in there.</li>
+              <li>Fyers then shows its own page. Copy the <b>whole address</b> from that tab's address bar.</li>
+              <li>Paste it here and press <b>Finish connecting</b> (within 10 minutes).</li></ol>
+            <label className="fl-f">Address from Fyers' page<input id="fl-link" value={link} onChange={e => setLink(e.target.value)} placeholder="https://trade.fyers.in/api-login/redirect-uri/index.html?s=ok&code=200&auth_code=…" autoComplete="off"/></label>
+            <div className="fl-row"><button type="button" className="ln-btn go" id="fl-finish" disabled={busy || !link.trim()} onClick={async () => {
+              if (await post("code", { link: link.trim() }, "Fyers connected")) setLink("");
+            }}>Finish connecting</button></div>
+          </> : <p>After you sign in on Fyers, it returns to Lens by itself and shows "Fyers connected"; then come back here.</p>}
         </div>
       </div>}
 

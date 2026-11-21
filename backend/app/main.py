@@ -1708,7 +1708,7 @@ def lens_logins(result: str = Query("all", pattern="^(all|ok|failed)$"), user_id
 
 
 # Fyers Data Lab (Lens, Phase 3): connection, limits, probes, bulk download, data checks — all run by Lens's own worker
-LENS_FYERS_POST = {"settings", "connect", "disconnect", "consent", "jobs"}
+LENS_FYERS_POST = {"settings", "connect", "code", "disconnect", "consent", "jobs"}
 
 
 @app.get("/api/admin/lens/fyers/status")

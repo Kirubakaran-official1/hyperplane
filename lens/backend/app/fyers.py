@@ -25,6 +25,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 IST = timezone(timedelta(hours=5, minutes=30))
+# Fyers' own sign-in landing page (the default Redirect URL of a Fyers app): it only shows the address with the code, so the admin
+# copies that address from the browser bar and pastes it into the Data Lab (owner 2026-11-21: "this is my redirect URL … it works")
+FYERS_PAGE = "https://trade.fyers.in/api-login/redirect-uri/index.html"
 API = os.environ.get("FYERS_API_BASE", "https://api-t1.fyers.in")
 # published plan limits (FYERS, Nov 2026) — the limiter uses 80% of them
 PLANS = {
@@ -143,6 +146,25 @@ def finish_login(c, state, auth_code):
     name = ((prof or {}).get("data") or {}).get("name") or ""
     c.execute("UPDATE fyers_settings SET profile = %s WHERE id = 1", (name[:120],))
     return row["by_admin"]
+
+
+def finish_from_link(c, link):
+    """the address copied from Fyers' page after the sign-in (or just the code). Without a state in it, the newest Connect click of the
+    last 10 minutes is used — a code alone is never enough without an admin's Connect just before."""
+    link = (link or "").strip()
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(link).query) if "auth_code=" in link else {}
+    code = (q.get("auth_code") or [link if link and "=" not in link and " " not in link and "/" not in link else ""])[0]
+    if not code:
+        raise ValueError("Paste the whole address from the browser bar of Fyers' page (it has auth_code= in it)")
+    if (q.get("s") or [""])[0] == "error":
+        raise ValueError("Fyers' page says the sign-in did not complete — click Connect Fyers again")
+    state = (q.get("state") or [""])[0]
+    if not state:
+        r = c.execute("SELECT state FROM fyers_oauth WHERE created_at > now() - interval '10 minutes' ORDER BY created_at DESC LIMIT 1").fetchone()
+        if not r:
+            raise ValueError("Click Connect Fyers first, then paste the address within 10 minutes")
+        state = r["state"]
+    return finish_login(c, state, code)
 
 
 # ── HTTP ──

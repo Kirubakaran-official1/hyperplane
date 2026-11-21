@@ -76,6 +76,11 @@ Depth & coverage, Compliance.
 - The admin clicks Connect → `login_url` stores a one-time `state` (10 min).
 - Fyers redirects to `https://lens.quantfriday.in/api/fyers/callback` (public Lens route) → `finish_login` checks the state (single
   use), exchanges the code and stores the token.
+- **Owner's flow:** the owner's Fyers app keeps Fyers' own page (`FYERS_PAGE`, `https://trade.fyers.in/api-login/redirect-uri/index.html`)
+  as its Redirect URL. After Connect, the admin copies the whole address from that page and pastes it into "Finish connecting".
+  `POST /internal/admin/fyers/code` → `finish_from_link`.
+- Without a `state` in the pasted text, the newest Connect click of the last 10 minutes is used. A code alone, with no Connect just
+  before, is refused.
 - `token_valid`: the token works until 06:00 IST the next morning, or until Fyers refuses it (`token_bad`).
 - The app secret and the token are sealed with AES-256-GCM (HKDF from LENS_SECRET). They are never returned to the screen.
 
