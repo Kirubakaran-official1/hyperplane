@@ -1,0 +1,85 @@
+# Hyperplane LENS — its own stack next to Hyperplane on the same server:   docker compose up -d --build
+#   lens-web     Caddy: the Lens pages + /api → lens-api. Reached through Hyperplane's Caddy (front door, HTTPS) on the network qf-edge
+#   lens-api     FastAPI: sign-up with approval, sign-in; admin data for Hyperplane's admin dashboard (Admin → Lens admin)
+#   lens-db      PostgreSQL 16 — Lens's own database (never Hyperplane's)
+#   lens-backup  nightly database dump into ./backups
+name: lens
+
+x-logs: &logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  lens-web:
+    build: ./frontend
+    image: lens-web
+    restart: unless-stopped
+    logging: *logs
+    # only this computer can reach it directly (for testing); visitors come through the front door
+    ports:
+      - "127.0.0.1:${LENS_LOCAL_PORT:-8081}:80"
+    networks: [default, qf-edge]
+    depends_on: [lens-api]
+    mem_limit: 64m
+
+  lens-api:
+    build: ./backend
+    image: lens-api
+    restart: unless-stopped
+    logging: *logs
+    environment:
+      DATABASE_URL: postgresql://lens:${LENS_DB_PASSWORD}@lens-db:5432/lens
+      LENS_SECRET: ${LENS_SECRET}
+      # the shared key Hyperplane's admin server uses for Admin → Lens admin (the same value is in Hyperplane's .env)
+      LENS_ADMIN_KEY: ${LENS_ADMIN_KEY}
+      TZ: Asia/Kolkata
+    # qf-edge: Hyperplane's admin server reaches lens-api:8000/internal/… here (private network only)
+    networks: [default, qf-edge]
+    depends_on:
+      lens-db:
+        condition: service_healthy
+    mem_limit: 256m
+
+  lens-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logs
+    environment:
+      POSTGRES_DB: lens
+      POSTGRES_USER: lens
+      POSTGRES_PASSWORD: ${LENS_DB_PASSWORD}
+      TZ: Asia/Kolkata
+    command: >
+      postgres -c shared_buffers=128MB -c effective_cache_size=1GB -c work_mem=8MB
+               -c maintenance_work_mem=64MB -c max_connections=30 -c timezone=Asia/Kolkata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lens -d lens"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+
+  lens-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logs
+    environment:
+      PGPASSWORD: ${LENS_DB_PASSWORD}
+      TZ: Asia/Kolkata
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+      - ./deploy/backup.sh:/backup.sh:ro
+    entrypoint: ["sh", "/backup.sh"]
+    depends_on:
+      lens-db:
+        condition: service_healthy
+    mem_limit: 128m
+
+networks:
+  qf-edge:
+    external: true          # made once on the server: docker network create qf-edge (deploy/setup.sh does it)

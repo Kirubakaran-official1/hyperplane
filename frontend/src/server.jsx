@@ -12,6 +12,7 @@ import { AccessTab } from "./access.jsx";
 import { PortfoliosTab } from "./portfolios.jsx";
 import { AdoptionTab } from "./adoption.jsx";
 import { ScoringTab } from "./scoring.jsx";
+import { LensAdmin } from "./lens.jsx";
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 let onUnauthorized = () => {};
@@ -1060,7 +1061,27 @@ function ZerodhaTab({ notify }) {
     </div>);
 }
 
-function AdminArea({ snaps, notify, ...adminProps }) {
+// owner 2026-11-21: "the Admin tab … split into 2: Hyperplane admin and Lens admin" — Lens (Hyperplane LENS, folder lens/) is a separate
+// application; its admin (lens.jsx) asks Lens's own server, so a stopped Lens never affects the Hyperplane admin
+function AdminArea(props) {
+  const [area, setArea] = useState(() => pref("hp_admin_area", "hyperplane"));
+  const pick = k => { setArea(k); setPref("hp_admin_area", k); };
+  const seg = (k, label) => (
+    <button key={k} type="button" id={`adm-area-${k}`} aria-pressed={area === k} onClick={() => pick(k)} style={{ display: "inline-flex", alignItems: "center", gap: 6,
+      height: 32, padding: "0 16px", borderRadius: 999, border: 0, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
+      background: area === k ? "var(--acc)" : "transparent", color: area === k ? "#fff" : "var(--t2)" }}>{label}</button>);
+  return (
+    <div>
+      <div style={{ padding: "12px 22px 0" }}>
+        <div role="group" aria-label="Which application" style={{ display: "inline-flex", gap: 2, padding: 3, borderRadius: 999, background: "var(--s2)", border: "1px solid var(--b1)" }}>
+          {seg("hyperplane", "🛰 Hyperplane admin")}{seg("lens", "🔭 Lens admin")}
+        </div>
+      </div>
+      {area === "lens" ? <LensAdmin api={api} notify={props.notify}/> : <HyperplaneAdmin {...props}/>}
+    </div>);
+}
+
+function HyperplaneAdmin({ snaps, notify, ...adminProps }) {
   const [sub, setSub] = useState(() => pref("hp_admin_sub", "system"));
   const [pending, setPending] = useState(0);
   const pick = k => { setSub(k); setPref("hp_admin_sub", k); };

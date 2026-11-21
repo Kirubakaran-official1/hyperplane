@@ -3127,3 +3127,18 @@ the last completed candle CLOSED beyond the zone; strict ladder; back-test on pr
   - `r29_emu.py` + `emu/app29.sh`: APK 1.0.5 on the Android 14 emulator → Allow → hand-over read over Chrome remote debugging →
     registered on the **local** stack → real FCM from the laptop's worker → notifications drawn by `in.quantfriday.hyperplane` → tap →
     the Inbox item → also with the app's process killed.
+
+### Hyperplane LENS (2026-11-21): lens/ folder, own docker stack, admin in ⚙ Admin → 🔭 Lens admin
+- **Hyperplane LENS** (the back-testing lab) lives in **`lens/`** of this repo (owner: "same Hyperplane git, different docker … if Lens
+  stops it must not affect Hyperplane"). It has its own compose project `lens`, database, secrets (`lens/.env`) and sign-in. Never share
+  data, accounts or secrets with it. Notes: `lens/CLAUDE.md`.
+- **Front door:** `frontend/Caddyfile` has `{$LENS_DOMAIN} { reverse_proxy lens-web:80 }` (`LENS_DOMAIN` in `.env`; unset =
+  `http://lens.localhost`). The `web` and `api` services join the external network `qf-edge`.
+- **Admin** (owner: "the Admin tab split into 2: Hyperplane admin and Lens admin"):
+  - `server.jsx` `AdminArea` has the segmented switch `#adm-area-hyperplane` / `#adm-area-lens` (remembered as `hp_admin_area`).
+    `HyperplaneAdmin` holds the old sub-tabs unchanged. `frontend/src/lens.jsx` `LensAdmin` shows tiles + People (Approve / Block,
+    Excel) + Sign-ins (filter, Excel) + Fyers Data Lab (next).
+  - `main.py` `/api/admin/lens/{summary,users,users/{id},logins}` (`admin_user`) → `_lens()` → `http://lens-api:8000/internal/admin/*`
+    with `LENS_ADMIN_KEY`. Lens down / not set up → 503 with a plain message; nothing else depends on Lens.
+- **Deploy:** `deploy/deploy.sh` makes `qf-edge` (`|| true`). After Hyperplane is up, and only when `lens/.env` exists, it runs
+  `cd lens && docker compose up -d --build`. A failure only warns. First time: `bash lens/deploy/setup.sh`.

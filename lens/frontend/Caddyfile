@@ -1,0 +1,35 @@
+# Lens's own small web server inside its stack: the built pages + /api → lens-api. Only /api/* is passed on — lens-api's
+# /internal/* (Hyperplane's admin dashboard, over the private network) is never reachable from outside.
+# Hyperplane's Caddy (the server's front door, HTTPS) sends lens.quantfriday.in here over the docker network qf-edge.
+{
+	auto_https off
+	admin off
+	# the front door (Hyperplane's Caddy, on the private docker network) already set the visitor's address and https: keep them
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
+	encode zstd gzip
+	request_body /api/* {
+		max_size 64KB
+	}
+	handle /api/* {
+		reverse_proxy lens-api:8000
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+	@html path / /index.html /admin*
+	header @html Cache-Control "no-cache"
+}

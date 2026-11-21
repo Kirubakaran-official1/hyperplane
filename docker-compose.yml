@@ -43,6 +43,10 @@ services:
       DOMAIN: ${DOMAIN}
       # old web address that should forward to DOMAIN (e.g. hyperplane.duckdns.org); unset = an unused local placeholder
       OLD_DOMAIN: ${OLD_DOMAIN:-http://old-address.localhost}
+      # Hyperplane LENS's address (a separate app, folder ~/lens); unset = an unused local placeholder
+      LENS_DOMAIN: ${LENS_DOMAIN:-http://lens.localhost}
+    # qf-edge: the shared network to Lens's own web server (lens-web) — made once by deploy.sh
+    networks: [default, qf-edge]
     volumes:
       - ./data/caddy:/data
     depends_on:
@@ -53,6 +57,8 @@ services:
   api:
     <<: *app
     mem_limit: 512m
+    # qf-edge: ⚙ Admin → Lens admin asks Lens's server (lens-api) over this private network
+    networks: [default, qf-edge]
 
   # Customer edition (/app): its own process, restricted database login, own secret.
   # No config.ini, no data folder, no admin secrets.
@@ -140,3 +146,7 @@ services:
       DUCKDNS_TOKEN: ${DUCKDNS_TOKEN}
     entrypoint: ["sh", "-c", "apk add --no-cache curl >/dev/null && while true; do curl -fsS \"https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAIN}&token=$${DUCKDNS_TOKEN}&ip=\" && echo; sleep 300; done"]
     mem_limit: 64m
+
+networks:
+  qf-edge:
+    external: true          # shared with Hyperplane LENS (deploy.sh makes it: docker network create qf-edge)

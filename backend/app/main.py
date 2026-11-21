@@ -23,6 +23,8 @@ import os
 import re
 import shutil
 import time as _time
+import urllib.error
+import urllib.request
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
 
@@ -1650,6 +1652,57 @@ async def _helpdesk_body_cap(request: Request, call_next):
         if too_big:
             return JSONResponse({"detail": "This request is too large"}, status_code=413)
     return await call_next(request)
+
+
+# ── Hyperplane LENS (owner 2026-11-21: "the Admin tab split into 2: Hyperplane admin and Lens admin") ──
+# Lens is a separate application with its own database (folder lens/, its own docker stack). Its data is asked from its server over
+# the private docker network qf-edge with the shared key LENS_ADMIN_KEY (in both .env files); Hyperplane never opens Lens's database.
+# Lens stopped or not set up = these routes answer 503 with a plain message; nothing else in Hyperplane depends on Lens.
+LENS_API = os.environ.get("LENS_API_URL", "http://lens-api:8000")
+
+
+def _lens(path, method="GET", body=None, who=""):
+    key = os.environ.get("LENS_ADMIN_KEY", "")
+    if len(key) < 32:
+        raise HTTPException(503, "Lens is not set up on this server yet (bash lens/deploy/setup.sh)")
+    req = urllib.request.Request(LENS_API + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"x-lens-admin-key": key, "x-lens": "1", "x-hp-admin": who, "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.loads(e.read() or b"{}").get("detail")
+        except ValueError:
+            d = None
+        raise HTTPException(e.code if e.code < 500 else 502, d if isinstance(d, str) else "Lens answered with an error")
+    except (urllib.error.URLError, OSError, ValueError):
+        raise HTTPException(503, "Lens is not running right now — Hyperplane is not affected")
+
+
+class LensStatusIn(BaseModel):
+    status: str = Field(pattern="^(approved|blocked|pending)$")
+
+
+@app.get("/api/admin/lens/summary")
+def lens_summary(user=Depends(admin_user)):
+    return _lens("/internal/admin/summary")
+
+
+@app.get("/api/admin/lens/users")
+def lens_users(user=Depends(admin_user)):
+    return _lens("/internal/admin/users")
+
+
+@app.post("/api/admin/lens/users/{uid}")
+def lens_user_status(uid: int, body: LensStatusIn, user=Depends(admin_user)):
+    return _lens(f"/internal/admin/users/{uid}", "POST", {"status": body.status}, who=user["name"])
+
+
+@app.get("/api/admin/lens/logins")
+def lens_logins(result: str = Query("all", pattern="^(all|ok|failed)$"), user_id: int | None = None, limit: int = Query(300, ge=1, le=1000),
+                user=Depends(admin_user)):
+    return _lens(f"/internal/admin/logins?result={result}&limit={limit}" + (f"&user_id={user_id}" if user_id else ""))
 
 
 @app.exception_handler(RuntimeError)

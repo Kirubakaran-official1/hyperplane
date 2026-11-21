@@ -15,6 +15,14 @@
 	}
 }
 
+# Hyperplane LENS (2026-11-21) — a separate QuantFriday application with its own stack (folder ~/lens, its own repo, database and
+# sign-in). This front door only passes its visitors on, with HTTPS; Lens's own Caddy (lens-web, on the docker network qf-edge) does
+# the rest. LENS_DOMAIN in .env, e.g. lens.quantfriday.in. If Lens is not running, only this address shows an error.
+{$LENS_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy lens-web:80
+}
+
 # Old address → new address, keeping the path (/app, /app/…, bookmarks). Customers sign in once on the new address
 # (sign-in cookies belong to one address). Caddy also gets a certificate for the old name so https:// links keep working.
 {$OLD_DOMAIN} {
