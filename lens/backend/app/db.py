@@ -58,3 +58,6 @@ def init_db():
     with pool.connection() as c:
         c.execute("SELECT pg_advisory_xact_lock(727101)")
         c.execute(SCHEMA)
+        from . import fyers, lab                      # Fyers Data Lab (Phase 3): settings, call log, jobs, manifest, probe results
+        c.execute(fyers.SCHEMA)
+        c.execute(lab.SCHEMA)

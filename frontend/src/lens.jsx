@@ -2,11 +2,12 @@
 // application (folder lens/, its own database and sign-in); this tab shows its data, asked from Lens's server by /api/admin/lens/* (main.py).
 //   People    everyone who asked for Lens access: Approve / Block (requests waiting come first)
 //   Sign-ins  every Lens sign-in attempt: who, when, result, device, address — filter by result, or one person's from People
-//   Fyers Data Lab   the next step
+//   Fyers Data Lab   connect Fyers, test what its API allows, the bulk download, data checks (fyerslab.jsx)
 // Lens stopped = a plain "Lens is not running" here; nothing else in the dashboard depends on Lens.
 import React, { useEffect, useState } from "react";
 import { exportRows } from "./access.jsx";
 import { fmtDay } from "./access/shared.jsx";
+import { FyersLab } from "./fyerslab.jsx";
 
 const CSS = `
 .ln-adm{padding:18px 22px 40px;display:flex;flex-direction:column;gap:14px}
@@ -130,7 +131,7 @@ export function LensAdmin({ api, notify }) {
           <button key={k} type="button" role="tab" aria-selected={tab === k} id={`ln-tab-${k}`} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
         {tab === "people" && <People api={api} notify={notify} onChanged={loadSum} onShowLogins={u => { setWho(u); setTab("logins"); }}/>}
         {tab === "logins" && <SignIns api={api} notify={notify} who={who} onClear={() => setWho(null)}/>}
-        {tab === "fyers" && <div className="ln-down" id="ln-fyers">The Fyers Data Lab comes next: connect Fyers, test what the API allows, then download the data.</div>}
+        {tab === "fyers" && <FyersLab api={api} notify={notify}/>}
       </>}
     </div>);
 }

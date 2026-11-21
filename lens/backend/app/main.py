@@ -13,14 +13,16 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import fyers as fy
 from .db import init_db, pool
 from .security import hash_password, verify_password
 
@@ -267,3 +269,171 @@ def admin_logins(user_id: int | None = None, result: str = "all", limit: int = 3
         return c.execute("SELECT l.id, l.at, l.email, l.ok, l.reason, l.ip, l.device, u.name FROM lens_logins l "
                          f"LEFT JOIN lens_users u ON u.id = l.user_id WHERE {' AND '.join(where)} ORDER BY l.at DESC LIMIT %s",
                          (*args, limit)).fetchall()
+
+
+# ── Fyers Data Lab (Phase 3) — run from Hyperplane's admin (Admin → Lens admin → Fyers Data Lab) ──
+# Fyers sends the admin back here after their sign-in (the redirect address registered in the Fyers API dashboard). The state must be
+# one this server made for an admin in the last 10 minutes (used once); the code is exchanged for the day's token, stored sealed.
+def _page(title, text, ok):
+    color = "#059669" if ok else "#dc2626"
+    return HTMLResponse(f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fyers · Hyperplane LENS</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#f3f6fa;font:15px/1.5 Inter,system-ui,sans-serif;color:#0f1b2d}}
+.c{{max-width:420px;margin:16px;padding:28px;background:#fff;border:1px solid #dfe6ef;border-radius:12px;text-align:center}}
+h1{{font-size:20px;margin:0 0 8px;color:{color}}}p{{margin:0;color:#4b5f7a}}</style></head>
+<body><div class="c"><h1>{title}</h1><p>{text}</p></div></body></html>""", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/fyers/callback")
+def fyers_callback(request: Request, auth_code: str = "", state: str = "", s: str = ""):
+    _rate("fyers-callback", _ip(request), 20, 600)
+    if not auth_code or s == "error":
+        return _page("Fyers sign-in stopped", "Fyers did not complete the sign-in. Close this tab and try again from Admin → Lens admin → Fyers Data Lab.", False)
+    try:
+        with pool.connection() as c:
+            fy.finish_login(c, state[:100], auth_code[:2000])
+    except ValueError as e:
+        return _page("Fyers is not connected", str(e), False)
+    return _page("Fyers connected ✓", "The Data Lab can use Fyers until tomorrow 6 am. You can close this tab.", True)
+
+
+@app.get("/internal/admin/fyers/status")
+def fyers_status(_=Depends(hp_admin)):
+    with pool.connection() as c:
+        st = fy.settings(c)
+        return {
+            "settings": {"app_id": st["app_id"], "secret_set": bool(st["secret_enc"]), "redirect_uri": st["redirect_uri"], "plan": st["plan"],
+                         "connected": fy.token_valid(st), "token_at": st["token_at"], "token_bad": st["token_bad"], "profile": st["profile"],
+                         "consent": {"on": st["consent_on"], "ref": st["consent_ref"], "note": st["consent_note"], "by": st["consent_by"]}},
+            "limits": {k: (int(v * fy.SHARE) if v else None) for k, v in fy.PLANS[st["plan"]].items()},
+            "usage": fy.usage(c, st["plan"]),
+            "per_min": c.execute("SELECT to_char(date_trunc('minute', at) AT TIME ZONE 'Asia/Kolkata', 'HH24:MI') AS t, count(*) AS n, "
+                                 "count(*) FILTER (WHERE code = -429 OR http = 429) AS limited FROM fyers_calls WHERE at > now() - interval '60 minutes' "
+                                 "GROUP BY 1 ORDER BY 1").fetchall(),
+            "calls": c.execute("SELECT at, endpoint, symbol, http, code, ok, ms, rows, note FROM fyers_calls ORDER BY id DESC LIMIT 40").fetchall(),
+            "jobs": c.execute("SELECT id, kind, status, params, progress, message, by_admin, created_at, started_at, ended_at, wait_until "
+                              "FROM fyers_jobs ORDER BY id DESC LIMIT 25").fetchall(),
+            "manifest": c.execute("SELECT kind, status, count(*) AS n, coalesce(sum(rows), 0) AS rows, coalesce(sum(bytes), 0) AS bytes "
+                                  "FROM fyers_manifest GROUP BY 1, 2 ORDER BY 1, 2").fetchall(),
+            "failures": c.execute("SELECT id, kind, symbol, range_from, range_to, attempts, last_error FROM fyers_manifest WHERE status = 'failed' "
+                                  "ORDER BY updated_at DESC LIMIT 50").fetchall(),
+            "depth": c.execute("SELECT idx, kind, earliest, note, checked_at FROM fyers_depth ORDER BY idx, kind").fetchall(),
+            "coverage": c.execute("SELECT idx, expiry, weekly, strikes, futures, rows, missing_pct, has_oi, has_greeks, note FROM fyers_coverage "
+                                  "ORDER BY idx, expiry").fetchall(),
+            "quality": c.execute("SELECT path, kind, idx, rows, days, missing_pct, dup_ts, bad_ohlc, nonpos, zero_vol_pct, first_ts, last_ts, checked_at "
+                                 "FROM fyers_quality ORDER BY path LIMIT 2000").fetchall(),
+            "indices": {k: {"spot": v["spot"], "from": v["fno_from"]} for k, v in fy.INDICES.items()},
+        }
+
+
+class FyersSettingsIn(Model):
+    app_id: str | None = Field(None, max_length=40, pattern=r"^[A-Za-z0-9-]{5,40}$")
+    secret: str | None = Field(None, max_length=120)
+    redirect_uri: str | None = Field(None, max_length=200)
+    plan: str | None = Field(None, pattern="^(standard|prime)$")
+
+
+@app.post("/internal/admin/fyers/settings")
+def fyers_settings(body: FyersSettingsIn, _=Depends(hp_admin)):
+    if body.redirect_uri is not None and not re.match(r"^(https://[a-z0-9.-]+|http://(127\.0\.0\.1|localhost)(:\d+)?)/api/fyers/callback$", body.redirect_uri):
+        raise HTTPException(422, "The redirect address must be https://<lens address>/api/fyers/callback")
+    sets, args = [], []
+    for k, v in (("app_id", body.app_id), ("redirect_uri", body.redirect_uri), ("plan", body.plan)):
+        if v is not None:
+            sets.append(f"{k} = %s"); args.append(v)
+    if body.secret:
+        sets.append("secret_enc = %s"); args.append(fy.seal(body.secret))
+    if body.app_id is not None or body.secret:                      # another app: the old token no longer belongs to it
+        sets += ["token_enc = ''", "token_at = NULL"]
+    if sets:
+        with pool.connection() as c:
+            c.execute(f"UPDATE fyers_settings SET {', '.join(sets)}, updated_at = now() WHERE id = 1", args)
+    return {"ok": True}
+
+
+@app.post("/internal/admin/fyers/connect")
+def fyers_connect(who=Depends(hp_admin)):
+    try:
+        with pool.connection() as c:
+            return {"url": fy.login_url(c, who)}
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/internal/admin/fyers/disconnect")
+def fyers_disconnect(_=Depends(hp_admin)):
+    with pool.connection() as c:
+        c.execute("UPDATE fyers_settings SET token_enc = '', token_at = NULL, token_bad = NULL, updated_at = now() WHERE id = 1")
+    return {"ok": True}
+
+
+class ConsentIn(Model):
+    on: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    ref: str = Field("", max_length=200)
+    note: str = Field("", max_length=1000)
+
+
+@app.post("/internal/admin/fyers/consent")
+def fyers_consent(body: ConsentIn, who=Depends(hp_admin)):
+    if body.on and not body.ref.strip():
+        raise HTTPException(422, "Give the reference of Fyers' written consent (email / letter)")
+    with pool.connection() as c:
+        c.execute("UPDATE fyers_settings SET consent_on = %s, consent_ref = %s, consent_note = %s, consent_by = %s, updated_at = now() WHERE id = 1",
+                  (body.on, body.ref.strip(), body.note.strip(), who if body.on else ""))
+    return {"ok": True}
+
+
+class JobIn(Model):
+    kind: str = Field(pattern="^(depth|coverage|quality|bulk|speed)$")
+    indices: list[str] = Field(default_factory=lambda: list(fy.INDICES), max_length=3)
+    strikes: int = Field(25, ge=1, le=60)
+    full_chain: bool = False
+    spot: bool = True
+    futures: bool = True
+    options: bool = True
+    minutes: int = Field(10, ge=1, le=30)
+    start: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")       # download from this date (default: the first day Fyers has)
+
+
+@app.post("/internal/admin/fyers/jobs")
+def fyers_job(body: JobIn, who=Depends(hp_admin)):
+    if not body.indices or any(i not in fy.INDICES for i in body.indices):
+        raise HTTPException(422, "Choose NIFTY, BANKNIFTY and / or SENSEX")
+    if body.start and body.start > datetime.now(fy.IST).date().isoformat():
+        raise HTTPException(422, "The start date is in the future")
+    with pool.connection() as c:
+        s = fy.settings(c)
+        if body.kind in ("bulk", "speed") and not s["consent_on"]:
+            raise HTTPException(409, "Record Fyers' written consent first (Compliance) — storing a copy of Fyers data needs it")
+        if c.execute("SELECT 1 FROM fyers_jobs WHERE kind = %s AND status IN ('queued', 'running', 'waiting', 'paused')", (body.kind,)).fetchone():
+            raise HTTPException(409, "This one is already queued or running — pause or cancel it first")
+        jid = c.execute("INSERT INTO fyers_jobs (kind, params, by_admin) VALUES (%s, %s, %s) RETURNING id",
+                        (body.kind, json.dumps(body.model_dump(exclude={"kind"})), who)).fetchone()["id"]
+    return {"ok": True, "id": jid}
+
+
+class JobAction(Model):
+    action: str = Field(pattern="^(pause|resume|cancel|retry_failed)$")
+
+
+@app.post("/internal/admin/fyers/jobs/{jid}")
+def fyers_job_action(jid: int, body: JobAction, _=Depends(hp_admin)):
+    err = None
+    with pool.connection() as c:
+        j = c.execute("SELECT status, kind FROM fyers_jobs WHERE id = %s FOR UPDATE", (jid,)).fetchone()
+        if not j:
+            err = HTTPException(404, "No such job")
+        elif body.action == "pause" and j["status"] in ("queued", "running", "waiting"):
+            c.execute("UPDATE fyers_jobs SET status = 'paused', message = 'Pausing…' WHERE id = %s", (jid,))
+        elif body.action == "resume" and j["status"] in ("paused", "failed", "waiting"):
+            c.execute("UPDATE fyers_jobs SET status = 'queued', message = '', wait_until = NULL WHERE id = %s", (jid,))
+        elif body.action == "cancel" and j["status"] not in ("done", "cancelled"):
+            c.execute("UPDATE fyers_jobs SET status = 'cancelled', message = 'Cancelled', ended_at = now() WHERE id = %s", (jid,))
+        elif body.action == "retry_failed" and j["kind"] == "bulk":
+            c.execute("UPDATE fyers_manifest SET status = 'pending', attempts = 0 WHERE status = 'failed'")
+            if j["status"] in ("done", "failed"):
+                c.execute("UPDATE fyers_jobs SET status = 'queued', message = '', ended_at = NULL WHERE id = %s", (jid,))
+        else:
+            err = HTTPException(409, f"Not possible while it is {j['status']}")
+    if err:
+        raise err
+    return {"ok": True}

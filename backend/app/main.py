@@ -28,7 +28,7 @@ import urllib.request
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -1675,6 +1675,8 @@ def _lens(path, method="GET", body=None, who=""):
             d = json.loads(e.read() or b"{}").get("detail")
         except ValueError:
             d = None
+        if isinstance(d, list) and d and isinstance(d[0], dict):            # a form check: the first problem, in words
+            d = f"{'.'.join(str(x) for x in d[0].get('loc', [])[1:])}: {d[0].get('msg', '')}".strip(": ")
         raise HTTPException(e.code if e.code < 500 else 502, d if isinstance(d, str) else "Lens answered with an error")
     except (urllib.error.URLError, OSError, ValueError):
         raise HTTPException(503, "Lens is not running right now — Hyperplane is not affected")
@@ -1703,6 +1705,27 @@ def lens_user_status(uid: int, body: LensStatusIn, user=Depends(admin_user)):
 def lens_logins(result: str = Query("all", pattern="^(all|ok|failed)$"), user_id: int | None = None, limit: int = Query(300, ge=1, le=1000),
                 user=Depends(admin_user)):
     return _lens(f"/internal/admin/logins?result={result}&limit={limit}" + (f"&user_id={user_id}" if user_id else ""))
+
+
+# Fyers Data Lab (Lens, Phase 3): connection, limits, probes, bulk download, data checks — all run by Lens's own worker
+LENS_FYERS_POST = {"settings", "connect", "disconnect", "consent", "jobs"}
+
+
+@app.get("/api/admin/lens/fyers/status")
+def lens_fyers_status(user=Depends(admin_user)):
+    return _lens("/internal/admin/fyers/status")
+
+
+@app.post("/api/admin/lens/fyers/{action}")
+def lens_fyers_post(action: str, body: dict = Body(default={}), user=Depends(admin_user)):
+    if action not in LENS_FYERS_POST:
+        raise HTTPException(404, "Not found")
+    return _lens(f"/internal/admin/fyers/{action}", "POST", body, who=user["name"])
+
+
+@app.post("/api/admin/lens/fyers/jobs/{jid}")
+def lens_fyers_job(jid: int, body: dict = Body(default={}), user=Depends(admin_user)):
+    return _lens(f"/internal/admin/fyers/jobs/{jid}", "POST", body, who=user["name"])
 
 
 @app.exception_handler(RuntimeError)

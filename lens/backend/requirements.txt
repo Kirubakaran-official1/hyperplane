@@ -5,3 +5,4 @@ psycopg-pool==3.2.6
 itsdangerous==2.2.0
 cryptography==44.0.0
 tzdata==2024.2
+duckdb==1.1.3

@@ -62,7 +62,57 @@ can sign in. Then `blocked` / `approved` as needed. Lens users have no roles; th
 - Lens stopped → Hyperplane fine;
 - the Admin-tab split.
 
-## Next: Phase 3, Fyers Data Lab (in Hyperplane's ⚙ Admin → Lens admin)
-- The owner's brief is in the conversation of 2026-11-21.
-- The owner is on the **Standard (free)** plan: only 10 expired-contract intraday calls a day. The full download needs Prime.
-- Fyers' written consent (Terms §12) is required before building a stored copy of the data.
+## Phase 3: Fyers Data Lab (2026-11-21)
+**Screen:** Hyperplane ⚙ Admin → 🔭 Lens admin → 📊 Fyers Data Lab (`frontend/src/fyerslab.jsx`). The admin server passes
+`/api/admin/lens/fyers/*` to `lens-api /internal/admin/fyers/*`. Sub-tabs: Connection, Usage & limits, Tests, Bulk download, Data checks,
+Depth & coverage, Compliance.
+
+**Fyers calls (`backend/app/fyers.py`):** plain HTTPS. The addresses come from fyers-apiv3 3.3.0; there is no SDK.
+- Sign-in: `api/v3/generate-authcode` → `/api/fyers/callback` → `validate-authcode` with appIdHash = sha256(app_id:secret).
+- Data: `/data/history`; `/data/history/fno/expired/{expiry-dates, underlying-symbols, historical-data}`.
+- Authorization header: `APPID:TOKEN`.
+
+**The sign-in:**
+- The admin clicks Connect → `login_url` stores a one-time `state` (10 min).
+- Fyers redirects to `https://lens.quantfriday.in/api/fyers/callback` (public Lens route) → `finish_login` checks the state (single
+  use), exchanges the code and stores the token.
+- `token_valid`: the token works until 06:00 IST the next morning, or until Fyers refuses it (`token_bad`).
+- The app secret and the token are sealed with AES-256-GCM (HKDF from LENS_SECRET). They are never returned to the screen.
+
+**Limits:**
+- 80% of the plan (`PLANS`): Standard 4/s, 40/min, 4000/day and 8 expired-contract minute requests/day; Prime 8/s, 400/min.
+- Sliding windows of 1.05 s and 61 s. -429 → wait, doubling up to 120 s.
+- Every call is logged in `fyers_calls`, and the day's counts come from there (`usage`).
+- Day allowance used up → `QuotaWait` → the job is `waiting` until 00:05 IST.
+
+**Worker (`lens-worker`, `app/worker.py`, 768 MB, 1 CPU):**
+- Runs one job at a time from `fyers_jobs`: queued / running / waiting / paused / cancelled / done / failed.
+- A restart re-queues the job, and the manifest rows that were `running` go back to `pending`.
+- Kinds: depth (P2), coverage (P3), speed (P4, Prime only), bulk, quality (P5), nightly (18:45 IST weekdays, the index top-up).
+
+**Consent gate:** bulk, speed and nightly need `consent_on` (Compliance: date + reference). This is checked both in the route and in the
+worker.
+
+**Storage (`app/lab.py`):** market candles are never stored in Postgres.
+- Parquet, zstd: ts INT32 epoch seconds, prices FLOAT, volume/oi BIGINT, Greeks FLOAT.
+- Written as a CSV in /tmp → DuckDB COPY (memory_limit 256MB, 1 thread, named columns c0…). `DISTINCT ON ts` drops duplicate minutes.
+- Layout:
+  - `data/market/spot/{IDX}/{from}_{to}.parquet` (100-day pieces);
+  - `futures/{IDX}/{CONTRACT}.parquet`;
+  - `options/{IDX}/{EXPIRY}.parquet`: one per expiry, packed from `{EXPIRY}/_parts` once all of its contracts are finished.
+- About 14 bytes a candle on the stand-in's data.
+
+**Manifest (`fyers_manifest`):** one row per (symbol, range).
+- The plan runs first: daily index levels → expiry lists → contract lists. Options: ATM ±N around the index's last-7-day range, from the
+  previous expiry until this one. Futures: the last 95 days of each contract. Index: 100-day pieces.
+- Then the download: index, then futures, then options newest → oldest.
+- Status per row: pending / running / done / no_data / failed (up to 4 tries). It never fetches a finished row again.
+
+**`parse_strike`:** the trailing digits before CE/PE that are a multiple of the step and within ±30% of the index level.
+
+**Tests (Hyperplane scratchpad):**
+- `fyers_mock/fyers_mock.py`: a stand-in Fyers, test only. It answers -429 every 9th request and puts in impossible candles.
+- `lab_test.py`: the end-to-end test. It covers the sign-in, sealed secrets, the consent gate, depth, the limits, a bulk download with
+  pause / resume / worker restart, packing, RSS < 500 MB, the data checks, Standard's day allowance, an expired sign-in, and the screens.
+- `lab_test.py` points Lens at the stand-in through `FYERS_API_BASE` in `lens/.env` and removes that line afterwards.
+- **Real Fyers is never called by the tests.**
