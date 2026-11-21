@@ -1163,7 +1163,7 @@ def run_reminders(conn, now=None, push_queue=None):
         nid = conn.execute("INSERT INTO customer_notifications (customer_id, kind, title, body, app, type, ref_id) "
                            "VALUES (%s, 'planner_soon', %s, %s, 'planner', 'info', %s) RETURNING id",
                            (r["customer_id"], f"In {mins} min · {when}: {r['title'][:100]}", json.dumps(body), r["id"])).fetchone()["id"]
-        send(conn, r["customer_id"], r["title"][:100], f"{when} · in {mins} min" + (f"\n{note}" if note else ""), url=f"/app/inbox?n={nid}", tag=f"pl-t{r['id']}")
+        send(conn, r["customer_id"], r["title"][:100], f"{when} · in {mins} min" + (f"\n{note}" if note else ""), url=f"/app/inbox?n={nid}", tag=f"pl-t{r['id']}", cat="planner")
         soon_n += 1
     # ── day-only: 8 am, then 12 · 4 pm · 7 pm while something is left (the latest slot reached; earlier missed ones are not sent late) ──
     slot = max([h for h in SLOTS if now.hour >= h], default=None)
@@ -1201,7 +1201,7 @@ def run_reminders(conn, now=None, push_queue=None):
                 nid = conn.execute("INSERT INTO customer_notifications (customer_id, kind, title, body, app, type) "
                                    "VALUES (%s, 'planner_due', %s, %s, 'planner', 'info') RETURNING id", (cid, title, json.dumps(body))).fetchone()["id"]
             first = ", ".join(r["title"][:40] for r in (now_ + late)[:3])
-            send(conn, cid, f"{head} · {SLOT_NAME[slot]}", " · ".join(parts) + (f"\n{first}" if first else ""), url=f"/app/inbox?n={nid}", tag="pl-day")
+            send(conn, cid, f"{head} · {SLOT_NAME[slot]}", " · ".join(parts) + (f"\n{first}" if first else ""), url=f"/app/inbox?n={nid}", tag="pl-day", cat="planner")
             day_n += 1
     return soon_n, day_n
 

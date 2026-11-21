@@ -1,0 +1,60 @@
+
+    // round 29: before the site opens — Android's own "Allow notifications?" once (Android 13+), then the app's notification address —
+    // handed to the page in the address fragment, which never reaches the server's logs. The address is asked for at once (while the
+    // Allow dialog is up); the very first open waits for it at most 8 s, later opens use the saved one straight away.
+    private boolean hpLaunched, hpAsking, hpHaveToken;
+
+    @Override
+    protected boolean shouldLaunchImmediately() {
+        return false;
+    }
+
+    private void hpStart() {
+        if (isFinishing()) return;
+        android.content.SharedPreferences p = HpMessaging.prefs(this);
+        hpHaveToken = p.getString("token", null) != null;
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().getToken().addOnCompleteListener(t -> {
+                if (t.isSuccessful() && t.getResult() != null) {
+                    HpMessaging.prefs(this).edit().putString("token", t.getResult()).apply();
+                    hpHaveToken = true;
+                }
+                if (!hpAsking) hpGo();
+            });
+        } catch (Exception e) {
+            hpHaveToken = true;                                        // no Google services: open without notifications
+        }
+        if (Build.VERSION.SDK_INT >= 33 && !p.getBoolean("asked", false)
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            p.edit().putBoolean("asked", true).apply();
+            hpAsking = true;
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 29);
+            return;                                                    // continues in onRequestPermissionsResult
+        }
+        hpWait();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
+        super.onRequestPermissionsResult(code, perms, res);
+        if (code != 29) return;
+        hpAsking = false;
+        hpWait();
+    }
+
+    private void hpWait() {
+        if (hpHaveToken) hpGo();
+        else new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(this::hpGo, 8000);
+    }
+
+    private void hpGo() {
+        if (hpLaunched || hpAsking || isFinishing()) return;
+        hpLaunched = true;
+        launchTwa();
+    }
+
+    private Uri hpWithHandOver(Uri uri) {
+        String token = HpMessaging.prefs(this).getString("token", "");
+        String allowed = androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled() ? "1" : "0";
+        return uri.buildUpon().encodedFragment("hpn=" + token + "." + HpMessaging.key(this) + "." + allowed + ".__VERSION__").build();
+    }

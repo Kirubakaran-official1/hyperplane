@@ -518,9 +518,13 @@ const ALL_SECTIONS = [
         <b>Add to Home screen</b> → <b>Install</b>.</li>
       <li><b>iPhone:</b> open Hyperplane in <b>Safari</b>, press the <b>Share</b> button → <b>Add to Home Screen</b> → <b>Add</b>.</li>
       <li>Open <b>Hyperplane</b> from your app list or home screen. You stay signed in, just as in the browser.</li>
-      <li><b>Phone notifications</b> for your Planner reminders: your name → <b>Account</b> → <b>Phone notifications</b> → <b>Turn on</b>,
-        then <b>Allow</b>. A to-do or plan with a time reminds you 15 minutes before; day-only ones at 8 am, then at 12, 4 pm and 7 pm
-        while something is still left. Notes never remind. Switch it all off in the Planner (<b>Reminders in the Inbox</b>).</li>
+      <li><b>Phone notifications</b>: every new Inbox item (stocks to change, a SIP instalment due, a Community mention, news from
+        Hyperplane) and your Planner reminders arrive on your phone like any other app's messages. Tap one to open it in the Inbox.
+        In the <b>Android app</b>, tap <b>Allow</b> the first time you open it; that's all. Choose which kinds in Android
+        <b>Settings → Apps → Hyperplane → Notifications</b>. On <b>iPhone</b> or in Chrome: your name → <b>Account</b> →
+        <b>Phone notifications</b> → <b>Turn on</b>, then <b>Allow</b>.</li>
+      <li><b>Planner reminders:</b> a to-do or plan with a time reminds you 15 minutes before; day-only ones at 8 am, then at 12, 4 pm and
+        7 pm while something is still left. Notes never remind. Switch them off in the Planner (<b>Reminders in the Inbox</b>).</li>
     </ol>
   </> },
 

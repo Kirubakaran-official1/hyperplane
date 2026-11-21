@@ -80,6 +80,11 @@ services:
   worker:
     <<: *app
     command: ["python", "-m", "app.worker"]
+    # round 29: secrets/firebase/service-account.json = the sign-in for the Android app's notifications (FCM) — this service only
+    volumes:
+      - ./config.ini:/config/config.ini:ro
+      - ./data/files:/data
+      - ./secrets/firebase:/run/hp-firebase:ro
     shm_size: "1gb"            # Chromium needs shared memory
     mem_limit: 2g
 

@@ -2,7 +2,7 @@
 # Round 27: builds the Hyperplane Android app (APK) on this computer with Docker, from the hyperplane folder:
 #     bash deploy/android/build-apk.sh
 # The APK only opens https://hyperplane.quantfriday.in/app/ full screen — every screen and all data come live from the website,
-# so it needs rebuilding only for a new name, icon or version (raise appVersionCode and appVersion in twa-manifest.json first).
+# so it needs rebuilding only for a new name, icon, the notification receiver (round 29) or version (raise appVersionCode and appVersion in twa-manifest.json first).
 # Output: frontend/app/public/download/hyperplane.apk + frontend/public/.well-known/assetlinks.json → commit both, push, deploy.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -31,6 +31,9 @@ if [ ! -f "$KEYS/hyperplane.keystore" ]; then
   echo ""
 fi
 
+# round 29: the app's own notifications need the Firebase project's file (Firebase console → Project settings → Your apps → Android)
+[ -f "$KEYS/google-services.json" ] || { echo "✗ secrets/android/google-services.json is missing — download it from the Firebase console first"; exit 1; }
+
 echo "▶ Building the app (a few minutes the first time)..."
 cp deploy/android/twa-manifest.json "$WORK/twa-manifest.json"
 # The icons are read over the web. ICON_HOST=http://host.docker.internal takes them from this laptop's own stack (a new icon not deployed yet)
@@ -46,8 +49,8 @@ docker run --rm -v "$(H "$WORK"):/work" -v "$(H "$ROOT/deploy/android"):/src:ro"
   F="/root/.gradle/dl/$(basename "$U")"
   [ -s "$F" ] || { mkdir -p /root/.gradle/dl && curl -fsSL --retry 3 -o "$F.part" "$U" && mv "$F.part" "$F"; }
   sed -i "s|^distributionUrl=.*|distributionUrl=file\\\\://$F|" $P
-  node /src/patch-launcher.js | grep -q "in place" || { echo "camera strip override missing"; exit 1; }
-  bubblewrap build --skipPwaValidation --manifest=/work/twa-manifest.json --directory=/work > /tmp/build.log 2>&1 || { tail -40 /tmp/build.log; exit 1; }
+  node /src/patch-app.js > /tmp/patch.log; cat /tmp/patch.log; ! grep -q MISSING /tmp/patch.log || { echo "a part of the app is missing"; exit 1; }
+  bubblewrap build --skipPwaValidation --manifest=/work/twa-manifest.json --directory=/work > /tmp/build.log 2>&1 || { grep -E "error:|ERROR:|What went wrong" -A4 /tmp/build.log | head -40; tail -8 /tmp/build.log; exit 1; }
   keytool -list -v -keystore /keys/hyperplane.keystore -storepass "$BUBBLEWRAP_KEYSTORE_PASSWORD" -alias hyperplane 2>/dev/null \
     | sed -n "s/^[[:space:]]*SHA256: //p" > /work/fingerprint.txt'
 
@@ -64,3 +67,4 @@ EOF
 echo "✓ App built: frontend/app/public/download/hyperplane.apk ($(du -k frontend/app/public/download/hyperplane.apk | cut -f1) KB)"
 echo "✓ Site link written: frontend/public/.well-known/assetlinks.json"
 echo "  Next: commit both files, push, then deploy on the server (bash deploy/deploy.sh)."
+echo "  New version code? Raise APP_LATEST in frontend/app/src/push.jsx too, so older apps are asked to update."

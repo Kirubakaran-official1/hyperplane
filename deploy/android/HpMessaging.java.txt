@@ -1,0 +1,142 @@
+package __PKG__;
+
+// Round 29 (owner 2026-11-18: "not like a random notification from Chrome … like WhatsApp"): the app receives its own messages through
+// Firebase Cloud Messaging and draws them itself — Hyperplane's icon and name, the full text, one Android channel per kind, a tap opens
+// that item in the Inbox. The server encrypts each message with this phone's own key (AES-256-GCM), so Google carries it but cannot read it.
+// Copied into the generated project by patch-app.js (Bubblewrap regenerates the project at every build).
+
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.net.Uri;
+import android.os.Build;
+import android.util.Base64;
+
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
+
+import com.google.firebase.messaging.FirebaseMessagingService;
+import com.google.firebase.messaging.RemoteMessage;
+
+import org.json.JSONObject;
+
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+public class HpMessaging extends FirebaseMessagingService {
+    static final String HOST = "https://__HOST__";
+    static final int B64 = Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP;
+    // the server's kinds (backend/app/push.py CHANNELS) → the name shown in Android Settings and on the notification
+    static final String[][] CHANNELS = {
+        {"planner", "Planner reminders", "Planner", "15 minutes before a to-do or plan with a time, and the day's list"},
+        {"portfolio", "Portfolio changes", "Portfolio", "Stocks to change in your saved portfolios"},
+        {"sip", "SIP instalments", "SIP", "When a SIP instalment is due"},
+        {"community", "Community", "Community", "When someone mentions you"},
+        {"announce", "Announcements", "Hyperplane", "News from Hyperplane"},
+        {"general", "Other updates", "Inbox", "Everything else in your Inbox"},
+    };
+
+    static SharedPreferences prefs(Context c) {
+        return c.getSharedPreferences("hp_push", MODE_PRIVATE);
+    }
+
+    // the phone's own key, made once and kept only on the phone (and given to the server for this sign-in)
+    static String key(Context c) {
+        String k = prefs(c).getString("key", null);
+        if (k == null) {
+            byte[] b = new byte[32];
+            new SecureRandom().nextBytes(b);
+            k = Base64.encodeToString(b, B64);
+            prefs(c).edit().putString("key", k).apply();
+        }
+        return k;
+    }
+
+    static void channels(Context c) {
+        if (Build.VERSION.SDK_INT < 26) return;
+        NotificationManager nm = c.getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        for (String[] ch : CHANNELS) {
+            NotificationChannel n = new NotificationChannel("hp_" + ch[0], ch[1], NotificationManager.IMPORTANCE_HIGH);
+            n.setDescription(ch[3]);
+            n.setShowBadge(true);
+            nm.createNotificationChannel(n);
+        }
+    }
+
+    @Override
+    public void onNewToken(String token) {
+        prefs(this).edit().putString("token", token).apply();           // handed to the page at the next open (LauncherActivity)
+    }
+
+    @Override
+    public void onMessageReceived(RemoteMessage m) {
+        String e = m.getData().get("e");
+        if (e == null) return;
+        try {
+            byte[] raw = Base64.decode(e, B64);
+            Cipher ci = Cipher.getInstance("AES/GCM/NoPadding");
+            ci.init(Cipher.DECRYPT_MODE, new SecretKeySpec(Base64.decode(key(this), B64), "AES"), new GCMParameterSpec(128, raw, 0, 12));
+            show(this, new JSONObject(new String(ci.doFinal(raw, 12, raw.length - 12), StandardCharsets.UTF_8)));
+        } catch (Exception ignored) {
+            // not for this key (an older sign-in): nothing is shown
+        }
+    }
+
+    static void show(Context c, JSONObject j) {
+        String cat = j.optString("cat", "general"), label = "Inbox";
+        boolean known = false;
+        for (String[] ch : CHANNELS) if (ch[0].equals(cat)) { label = ch[2]; known = true; }
+        if (!known) cat = "general";
+        String title = j.optString("title", "Hyperplane"), body = j.optString("body", "");
+        String url = j.optString("url", "/app/inbox");
+        if (!url.startsWith("/app/")) url = "/app/inbox";                // only ever this site's own pages
+        String tag = j.optString("tag", "");
+        if (tag.isEmpty()) tag = "hp" + System.currentTimeMillis();
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
+        PendingIntent open = PendingIntent.getActivity(c, tag.hashCode(), openIntent(c, url), flags);
+        NotificationCompat.Builder b = new NotificationCompat.Builder(c, "hp_" + cat)
+            .setSmallIcon(R.drawable.ic_hp_notify)
+            .setColor(0xFF0891B2)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setSubText(label)
+            .setWhen(System.currentTimeMillis())
+            .setShowWhen(true)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory("planner".equals(cat) ? NotificationCompat.CATEGORY_REMINDER : NotificationCompat.CATEGORY_MESSAGE)
+            .setGroup("hp")
+            .setContentIntent(open);
+        NotificationCompat.Builder sum = new NotificationCompat.Builder(c, "hp_" + cat)
+            .setSmallIcon(R.drawable.ic_hp_notify)
+            .setColor(0xFF0891B2)
+            .setContentTitle("Hyperplane")
+            .setGroup("hp")
+            .setGroupSummary(true)
+            .setAutoCancel(true)
+            .setContentIntent(PendingIntent.getActivity(c, 1, openIntent(c, "/app/inbox"), flags));
+        try {
+            NotificationManagerCompat nm = NotificationManagerCompat.from(c);
+            nm.notify(tag, 1, b.build());                               // the same item again (e.g. the day's list) replaces its old one
+            nm.notify("hp-group", 0, sum.build());
+        } catch (SecurityException ignored) {
+            // notifications switched off for the app
+        }
+    }
+
+    // a tap: the app opens (again) on that page — a running app starts over there, so the item opens at once
+    static Intent openIntent(Context c, String url) {
+        return new Intent(Intent.ACTION_VIEW, Uri.parse(HOST + url))
+            .setClass(c, LauncherActivity.class)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+    }
+}

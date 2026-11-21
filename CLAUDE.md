@@ -3047,3 +3047,83 @@ the last completed candle CLOSED beyond the zone; strict ladder; back-test on pr
   - **End to end on the Android 14 emulator** (scratchpad `push_e2e.py` + `emu/push_e2e.sh` + `emu/cdp.js`): Chrome at
     http://localhost:8080 (a `node` TCP relay to the laptop + `adb reverse`) signs in over Chrome remote debugging, a real tap on
     Turn on → Allow, FCM endpoint saved → worker "1 of 1 phone(s)" → **the notification arrived on the phone**.
+
+### Round 29 (owner 2026-11-18/21): real app notifications on Android ("not a random notification from Chrome … like WhatsApp", every Inbox item, a tap opens it in the Inbox)
+- **Why:** round 28's phone messages were Web Push. Chrome received them and on the owner's phone showed them as its own ("Chrome", no
+  content). Round 28's emulator test only ran in Chrome, never inside the APK.
+- **Now:** the Android app **receives and draws its own notifications** through Firebase Cloud Messaging (FCM, free). iPhone and Chrome
+  without the app keep Web Push.
+- **Rule for the owner:** screens, the Inbox, the notification wording and which items notify all update with the website. Only the
+  app's own built-in parts (name, icon, full screen, the notification receiver) need an APK update. Raise `APP_LATEST` in `push.jsx`
+  with each new version code, so older apps see the update line.
+- **Firebase (secrets, never committed or printed):**
+  - `secrets/android/google-services.json`: used only at build time. `patch-app.js` writes its four public values into
+    `res/values/firebase.xml`; there is no Google Gradle plugin.
+  - `secrets/firebase/service-account.json`: mounted **into the worker only** (`/run/hp-firebase`, `FCM_CREDENTIALS`). Copy it to the
+    server by hand.
+- **Android app 1.0.5 (code 6), `deploy/android/`:**
+  - `patch-app.js` replaces `patch-launcher.js`. It runs after `bubblewrap update` and prints one "… in place" line per part;
+    `build-apk.sh` stops on MISSING. It adds:
+    - the camera strip (`cutout.java.txt`);
+    - `launcher-notify.java.txt`;
+    - `HpMessaging.java.txt`;
+    - the channels in `Application`;
+    - `firebase-messaging:24.1.0`;
+    - the service + `POST_NOTIFICATIONS` in the manifest;
+    - the white icon `notify-icon/drawable-*/ic_hp_notify.png`, from `badge-96`. Bubblewrap makes `ic_notification_icon` only when
+      `enableNotifications` is true.
+  - `twa-manifest.json`: `enableNotifications: false` (Chrome's hand-over route is off), plus `monochromeIconUrl`.
+  - **LauncherActivity:**
+    1. `shouldLaunchImmediately()` returns false;
+    2. Android 13+ shows its "Allow" dialog once;
+    3. the app fetches the FCM token (cached; waits at most 3 s the first time);
+    4. `getLaunchingUrl()` adds the fragment `#hpn=<token>.<key>.<allowed 1/0>.<versionCode>`. A fragment never reaches the server's
+       logs. `<key>` is a 32-byte AES key made once on the phone.
+  - **HpMessaging:**
+    - data-only message `{e: base64url(nonce‖AES-GCM)}`, decrypted with the phone's key, so Google can't read it;
+    - shown with NotificationCompat: the white logo, colour #0891B2, bold title, BigText body, subText = the kind, the time,
+      `notify(tag)` (the same tag replaces), group "hp" + a summary;
+    - six channels, `hp_planner|portfolio|sip|community|announce|general`, each IMPORTANCE_HIGH;
+    - a tap: `ACTION_VIEW https://<host>/app/inbox?n=<id>` → LauncherActivity with NEW_TASK|CLEAR_TASK. Only `/app/…` paths are
+      accepted.
+- **Server:**
+  - `push.py`:
+    - `push_native` table (own rows by RLS; the portal can't read `key`; `push_native_subscribe()` moves a phone between sign-ins,
+      max 10);
+    - `token_ok`, `seal`;
+    - `fcm_creds` / `fcm_jwt` (RS256 service-account sign-in, token cached for 55 min) / `fcm_send` (HTTP v1, HIGH, TTL 1 h;
+      UNREGISTERED or 404 → removed);
+    - `drain()` sends to both web phones and app phones (`_settle`).
+  - **Every Inbox item to the phone:**
+    - `customer_notifications.pushed_at`: added once, with existing rows marked sent;
+    - `push.from_inbox()` runs in every worker loop. Unread, open, ≤ 30 min old, not Planner (Planner reminders queue their own,
+      `cat="planner"`), and the customer has a phone → one message `/app/inbox?n=<id>`, tag `n<id>`. Everything else is only marked;
+    - `inbox.sync_changes` sets `pushed_at = NULL` with `read_at = NULL` when new stocks are merged in (new again → sent again);
+    - `phone_text(kind, title, body)`:
+      - stocks to change → "Change: A → B · review C";
+      - SIP due → "Amount ₹… · Tap to see the order";
+      - mention → "<name> mentioned you" + snippet;
+      - announcement → its text.
+  - **Routes:**
+    - `POST /app/api/push/native {token, key, device}` (422 if malformed);
+    - `POST …/push/native/off {token}`;
+    - `…/push/status` also takes `token` and returns `native`;
+    - `…/push/test` reaches app phones (409 without any phone).
+- **Web:**
+  - `push.jsx` reads `#hpn` at module load, clears it at once, keeps `hp-app` in localStorage and the key in sessionStorage.
+  - `appInfo()` counts only in full-screen display mode, so Chrome tabs on the same phone keep Web Push.
+  - `appPushSync()` (shell, once signed in):
+    - signs the phone in automatically when Android allowed it, unless it was turned off on this phone (`hp-app-off`);
+    - removes this phone's old Chrome subscription (no doubles).
+  - `PhonePush` states: `app-on` (Android Settings hint · Send a test · Turn off) / `app-off` / `app-blocked` / `app-reopen` / `app-old`
+    (Update the app).
+  - `AppUpdateBar` (#hp-appupd, under the top bar): an app older than `APP_LATEST` → "A new version … Update" + ✕ (3 days). An app
+    without `#hpn`: referrer `android-app://in.quantfriday.hyperplane` → v0.
+- **Tests (scratchpad):**
+  - `r29_logic.py` (worker container, one transaction, rolled back): the seal round trip, the RS256 sign-in note, phone text per kind,
+    `from_inbox` rules, drain to app phones, the text dropped after sending, a 404 removing the phone. 16 checks.
+  - `r29_web_test.py` (Selenium, full screen faked through matchMedia): 19 checks covering the hand-over, auto sign-in, the Account
+    states, Turn off/on, 422 and 401, Android-said-no, the old app's update line and ✕, and a browser tab unchanged.
+  - `r29_emu.py` + `emu/app29.sh`: APK 1.0.5 on the Android 14 emulator → Allow → hand-over read over Chrome remote debugging →
+    registered on the **local** stack → real FCM from the laptop's worker → notifications drawn by `in.quantfriday.hyperplane` → tap →
+    the Inbox item → also with the app's process killed.

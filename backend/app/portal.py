@@ -2540,7 +2540,14 @@ class PushSubIn(SafeModel):
 
 
 class PushEndIn(SafeModel):
-    endpoint: str = Field(max_length=1000)
+    endpoint: str = Field("", max_length=1000)
+    token: str = Field("", max_length=4096)                 # round 29: the Android app's own address (FCM)
+
+
+class PushNativeIn(SafeModel):
+    token: str = Field(max_length=4096)
+    key: str = Field(max_length=64)
+    device: str = Field("", max_length=80)
 
 
 @app.get("/app/api/push/key")
@@ -2570,21 +2577,44 @@ def push_unsubscribe(body: PushEndIn, c=Depends(customer)):
     return {"ok": True, "removed": n}
 
 
+# round 29: the Android app (APK 1.0.5) hands the page its own address + a key it made; the page sends them here (Android's "Allow")
+@app.post("/app/api/push/native")
+def push_native_on(body: PushNativeIn, c=Depends(customer)):
+    _rate("push", str(c["id"]), 20, 3600)
+    if not push.token_ok(body.token, body.key):
+        raise HTTPException(422, "This app's notification address is not supported — please update the app")
+    with _own(c) as conn:
+        conn.execute("SELECT push_native_subscribe(%s, %s, %s, %s)", (c["id"], body.token, body.key, body.device))
+    return {"ok": True}
+
+
+@app.post("/app/api/push/native/off")
+def push_native_off(body: PushEndIn, c=Depends(customer)):
+    _rate("push", str(c["id"]), 20, 3600)
+    with _own(c) as conn:
+        n = conn.execute("DELETE FROM push_native WHERE customer_id = %s AND token = %s", (c["id"], body.token)).rowcount
+    return {"ok": True, "removed": n}
+
+
 @app.post("/app/api/push/status")
 def push_status(body: PushEndIn, c=Depends(customer)):
     with _own(c) as conn:
-        on = conn.execute("SELECT 1 FROM push_subs WHERE customer_id = %s AND endpoint = %s", (c["id"], body.endpoint)).fetchone()
-        n = conn.execute("SELECT count(*) AS n FROM push_subs WHERE customer_id = %s", (c["id"],)).fetchone()["n"]
-    return {"on": bool(on), "phones": n}
+        on = body.endpoint and conn.execute("SELECT 1 FROM push_subs WHERE customer_id = %s AND endpoint = %s", (c["id"], body.endpoint)).fetchone()
+        app_on = body.token and conn.execute("SELECT 1 FROM push_native WHERE customer_id = %s AND token = %s", (c["id"], body.token)).fetchone()
+        n = conn.execute("SELECT (SELECT count(*) FROM push_subs WHERE customer_id = %s) + (SELECT count(*) FROM push_native WHERE customer_id = %s) AS n",
+                         (c["id"], c["id"])).fetchone()["n"]
+    return {"on": bool(on), "native": bool(app_on), "phones": n}
 
 
 @app.post("/app/api/push/test")
 def push_test(c=Depends(customer)):
     _rate("push-test", str(c["id"]), 5, 600)
     with _own(c) as conn:
-        if not conn.execute("SELECT 1 FROM push_subs WHERE customer_id = %s", (c["id"],)).fetchone():
+        if not conn.execute("SELECT 1 FROM push_subs WHERE customer_id = %s UNION ALL SELECT 1 FROM push_native WHERE customer_id = %s LIMIT 1",
+                            (c["id"], c["id"])).fetchone():
             raise HTTPException(409, "Turn on notifications on this phone first")
-        push.queue(conn, c["id"], "Hyperplane notifications are on", "Your Planner reminders will appear here.", url="/app/planner", tag="hp-test")
+        push.queue(conn, c["id"], "Hyperplane notifications are on",
+                   "New Inbox items and Planner reminders will appear here. Tap one to open it.", url="/app/inbox", tag="hp-test")
     return {"ok": True}
 
 

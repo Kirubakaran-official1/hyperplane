@@ -102,7 +102,7 @@ def sync_changes(conn, cid, kind, ref, base, current, fresh, what="portfolio"):
         return 0
     changed = bool(added) or len(keep) != len(items) or body["items"] != items
     conn.execute("UPDATE customer_notifications SET body = %s, items_done = %s, title = %s" + (", updated_at = now()" if changed else "")
-                 + (", read_at = NULL" if added else "") + " WHERE id = %s", (json.dumps(body), json.dumps(done), _title(base, len(left)), row["id"]))
+                 + (", read_at = NULL, pushed_at = NULL" if added else "") + " WHERE id = %s", (json.dumps(body), json.dumps(done), _title(base, len(left)), row["id"]))
     return 0
 
 

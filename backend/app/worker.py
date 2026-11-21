@@ -389,9 +389,11 @@ def main():
             try:                                         # round 28: Planner reminders (15 min before a time · 8 am, then 12 · 4 · 7 while something is left)
                 with pool.connection() as c:             # — they replace round 22's one summary at 07:00 — and the phone notifications waiting
                     soon, days = planner.run_reminders(c)
+                    items = push.from_inbox(c)           # round 29: every new Inbox item to the customer's phones (Android app · browser)
                     sent, phones = push.drain(c)
-                if soon or days or sent:
-                    print(f"🔔 Planner reminders: {soon} timed · {days} day list(s) · phone messages {sent} → {phones} phone(s)", flush=True)
+                if soon or days or items or sent:
+                    print(f"🔔 Planner reminders: {soon} timed · {days} day list(s) · Inbox items {items} · phone messages {sent} → {phones} phone(s)",
+                          flush=True)
             except Exception:                            # noqa: BLE001
                 traceback.print_exc()
             try:                                         # round 22: the Planner's clean-up, once a day after 07:00 IST

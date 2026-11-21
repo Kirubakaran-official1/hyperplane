@@ -1,7 +1,7 @@
 // Hyperplane customer app — SHELL: sign-in, side menu, top bar, past-days picker, data loading and the lazily loaded
 // applications (micro-frontends in ./apps). It must never import the dashboard code.
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PhonePush } from "./push.jsx";
+import { PhonePush, AppUpdateBar, appPushSync } from "./push.jsx";
 import { Helpdesk, HelpdeskIcon, useHelpdeskUnread } from "../../shared/helpdesk.jsx";
 import { Community, CommunityButton, CommunityIcon, useCommunityUnread } from "../../shared/community.jsx";
 import { NotifyCenter, useNotifications } from "./notify.jsx";
@@ -694,6 +694,7 @@ function Home({ me, onOut, reloadMe }) {
     if (nq && /^\d{1,12}$/.test(nq)) setIbReq({ id: `n${nq}`, n: Date.now() });
     if (window.location.search) try { window.history.replaceState(null, "", window.location.pathname); } catch { /* ignore */ }   // ?signup used up
   }, []);
+  useEffect(() => { appPushSync(); }, []);                         // round 29: inside the Android app, its notifications follow this sign-in
   // Activity log: which application is open (once per visit) and a minute heartbeat while the page is visible
   const track = useCallback((module, kind) => module && api("/app/api/activity", { method: "POST", json: { module, kind } })
     .catch(e => { if (e.noAccess) reloadMe(); else if (e.status === 401) onOut(e.message); }), []);
@@ -812,6 +813,7 @@ function Home({ me, onOut, reloadMe }) {
         <AccountMenu me={me} unread={unread.total} onHelpdesk={() => openHelpdesk(null)} onDocs={() => goView("guide")}
           onSignOut={async () => { try { sessionStorage.removeItem("qf_face"); } catch { /* storage blocked */ } await api("/app/api/logout", { method:"POST" }).catch(() => {}); goPath("/app/", true); onOut(); }}/>
       </header>
+      <AppUpdateBar/>
 
       {view === "tower" && !hasApps && (
         <div className="card no-apps" id="no-apps">

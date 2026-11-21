@@ -1178,6 +1178,12 @@ def _setup_portal_role(c):
     c.execute(sql.SQL("CREATE POLICY portal_own ON push_outbox FOR INSERT TO {} WITH CHECK (customer_id::text = current_setting('hp.cid', true))").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION push_public_key() TO {}").format(role))
     c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION push_subscribe(BIGINT, TEXT, TEXT, TEXT, TEXT) TO {}").format(role))
+    # round 29: the Android app's own phones — own rows; never the key column (only the worker encrypts with it)
+    c.execute(sql.SQL("GRANT SELECT (id, customer_id, token, device, created_at, last_ok), DELETE ON push_native TO {}").format(role))
+    c.execute("ALTER TABLE push_native ENABLE ROW LEVEL SECURITY")
+    c.execute("DROP POLICY IF EXISTS portal_own ON push_native")
+    c.execute(sql.SQL("CREATE POLICY portal_own ON push_native TO {} USING (customer_id::text = current_setting('hp.cid', true))").format(role))
+    c.execute(sql.SQL("GRANT EXECUTE ON FUNCTION push_native_subscribe(BIGINT, TEXT, TEXT, TEXT) TO {}").format(role))
     own = "(owner_kind = 'customer' AND owner_id = current_setting('hp.cid', true))"
     in_own ="EXISTS (SELECT 1 FROM hd_tickets t WHERE t.id = ticket_id)"        # hd_tickets' own policy applies here
     policies = {
