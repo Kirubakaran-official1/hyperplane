@@ -28,6 +28,9 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # Fyers' own sign-in landing page (the default Redirect URL of a Fyers app): it only shows the address with the code, so the admin
 # copies that address from the browser bar and pastes it into the Data Lab (owner 2026-11-21: "this is my redirect URL … it works")
 FYERS_PAGE = "https://trade.fyers.in/api-login/redirect-uri/index.html"
+# Fyers sits behind Cloudflare, which refuses Python's default "Python-urllib" identity (error 1010, HTTP 403 — owner 2026-11-21:
+# "Fyers did not accept the sign-in: 403"); every request names itself
+UA = "Mozilla/5.0 (X11; Linux x86_64) HyperplaneLens/1.0"
 API = os.environ.get("FYERS_API_BASE", "https://api-t1.fyers.in")
 # published plan limits (FYERS, Nov 2026) — the limiter uses 80% of them
 PLANS = {
@@ -140,7 +143,8 @@ def finish_login(c, state, auth_code):
     log_call(c, "validate-authcode", "", {}, st, j, ms)
     tok = j.get("access_token") if isinstance(j, dict) else None
     if not tok:
-        raise ValueError(f"Fyers did not accept the sign-in: {(j or {}).get('message', st)}")
+        why = (j or {}).get("message") or (j or {}).get("title") or f"HTTP {st}"
+        raise ValueError(f"Fyers did not accept the sign-in: {why}")
     c.execute("UPDATE fyers_settings SET token_enc = %s, token_at = now(), token_bad = NULL, updated_at = now() WHERE id = 1", (seal(tok),))
     prof = Fyers(c).call("profile", "/api/v3/profile")
     name = ((prof or {}).get("data") or {}).get("name") or ""
@@ -170,7 +174,8 @@ def finish_from_link(c, link):
 # ── HTTP ──
 def _http(method, url, headers=None, body=None, timeout=30):
     t = time.perf_counter()
-    req = urllib.request.Request(url, method=method, headers={"Content-Type": "application/json", "Accept": "application/json", **(headers or {})},
+    req = urllib.request.Request(url, method=method, headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": UA,
+                                                              **(headers or {})},
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
